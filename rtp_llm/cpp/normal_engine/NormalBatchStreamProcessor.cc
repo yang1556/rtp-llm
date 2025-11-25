@@ -40,6 +40,7 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
 
     const bool has_multimodal_input = is_multimodal_ && stream_groups.has_multimodal_input();
     const bool need_cal_position_id = (mm_position_ids_style_ != PositionIdsStyle::DEFAULT) || has_positional_encoding_;
+    const bool has_mm_deepstack_embed = is_multimodal_ && stream_groups.hasMMDeepstackEmbed();
 
     size_t num_layers = 0;
     if (model_input.kv_cache_layer_to_group.defined()) {
@@ -188,6 +189,7 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
     }
 
     std::vector<torch::Tensor> gathered_mm_features;
+    std::vector<torch::Tensor> gathered_mm_deepstack_embeds;
     int                        token_idx          = batch_idx;
     int                        cum_output_seq_len = batch_idx;
     int                        mm_feature_index   = 0;
@@ -257,6 +259,16 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
                        context_pos_ids.data_ptr<int>() + reuse_offset,
                        (context_pos_ids.numel() - reuse_offset) * sizeof(int));
             }
+
+            if (has_mm_deepstack_embed) {
+                auto mm_deepstack_embeds = stream->multimodalDeepstackEmbeds();
+                if (mm_deepstack_embeds.size() != 0) {
+                    for (auto& mm_deepstack_embed : mm_deepstack_embeds) {
+                        gathered_mm_deepstack_embeds.emplace_back(mm_deepstack_embed.to(torch::kCUDA));
+                    }
+                }
+            }
+
             if (max_blocks_num) {
                 RTP_LLM_CHECK_WITH_INFO(model_input.kv_cache_kernel_block_id.dim() == 3,
                                         "hybrid kv_cache_kernel_block_id must be 3-D");
@@ -301,6 +313,9 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
 
     if (is_multimodal_ && gathered_mm_features.size() > 0) {
         model_input.multimodal_features = std::move(gathered_mm_features);
+    }
+    if (has_mm_deepstack_embed && gathered_mm_deepstack_embeds.size() > 0) {
+        model_input.mm_deepstack_embeds = std::move(gathered_mm_deepstack_embeds);
     }
     return model_input;
 }

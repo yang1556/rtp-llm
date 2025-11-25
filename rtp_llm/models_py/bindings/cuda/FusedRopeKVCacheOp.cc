@@ -47,17 +47,18 @@ void invokeFusedQKVBiasTransposeHelper(const torch::Tensor&                   qk
         }
     }
 
-    int* padding_offset = nullptr;
+    int* padding_offset = nullptr, *position_ids = nullptr;
     if (params->padding_offset.defined()) {
         padding_offset = params->padding_offset.data_ptr<int>();
     }
     auto       rope_cache = getRopeCacheOnce(attn_configs.rope_config, attn_configs.max_seq_len);
     StreamType stream     = GET_CURRENT_STREAM();
 
-    int* position_ids = nullptr;
-    if (params->cp_position_ids.defined()) {
-        position_ids = params->cp_position_ids.data_ptr<int>();
-        store_cache  = false;
+    if (params->position_ids.defined()) {
+        position_ids = params->position_ids.data_ptr<int>();
+        if (params->context_parallel) {
+            store_cache = false;
+        }
     }
 
     DISPATCH_CUDA_FUNCTION_DATA_TYPE(
@@ -127,7 +128,10 @@ TRTAttnPtr FusedRopeKVCachePrefillOpBase::prepare(torch_ext::PyAttentionInputs a
 
     if (attn_inputs.context_parallel_info.has_value()
         && attn_inputs.context_parallel_info->prefill_shuffle_indices.defined()) {
-        attn_params->cp_position_ids = attn_inputs.context_parallel_info->prefill_shuffle_indices;
+        attn_params->position_ids     = attn_inputs.context_parallel_info->prefill_shuffle_indices;
+        attn_params->context_parallel = true;
+    } else {
+        attn_params->position_ids = attn_inputs.combo_position_ids;
     }
     return attn_params;
 }
@@ -231,7 +235,6 @@ TRTAttnPtr FusedRopeKVCacheDecodeOp::prepare(torch_ext::PyAttentionInputs attn_i
     attn_params->cu_seqlens                = attn_inputs.cu_seqlens;
     attn_params->cu_kv_seqlens             = attn_inputs.cu_kv_seqlens;
     attn_params->sequence_lengths          = attn_inputs.sequence_lengths;
-    attn_params->cp_position_ids           = attn_inputs.position_ids;
     attn_params->kv_block_array.cache_type = attn_configs_.kv_cache_dtype;
     return attn_params;
 }
@@ -256,6 +259,13 @@ torch::Tensor FusedRopeKVCacheDecodeOp::forward(const torch::Tensor&            
 
     auto rope_cache = getRopeCacheOnce(attn_configs_.rope_config, attn_configs_.max_seq_len);
 
+    int* position_ids_ptr = nullptr;
+    if (params->position_ids.defined()) {
+        position_ids_ptr = params->position_ids.data_ptr<int>();
+    } else {
+        position_ids_ptr = params->sequence_lengths.data_ptr<int>();
+    }
+
     RTP_LLM_CHECK_WITH_INFO(params->sequence_lengths.is_pinned(), "sequence_lengths is not pinned memory");
     StreamType stream = GET_CURRENT_STREAM();
     DISPATCH_CUDA_FUNCTION_DATA_TYPE(
@@ -266,7 +276,7 @@ torch::Tensor FusedRopeKVCacheDecodeOp::forward(const torch::Tensor&            
         nullptr,  // v_buf
         kv_block_array,
         qkv.data_ptr(),
-        params->sequence_lengths.data_ptr<int>(),
+        position_ids_ptr,
         nullptr,  // params.configs.fuse_qkv_add_bias && params.weights.qkv_weight->bias ?
                   // params.weights.qkv_weight->bias->data() : nullptr,
         rope_cache.used,

@@ -113,6 +113,8 @@ class ModelFactory:
         Returns:
             ProposeModel instance or None if no propose model needed
         """
+        from rtp_llm.models.propose_model.propose_model import ProposeModel
+
         sp_type = engine_config.sp_config.type  # Get SpeculativeType enum value
         if sp_type == SpeculativeType.NONE:
             return None
