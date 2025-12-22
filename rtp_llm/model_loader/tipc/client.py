@@ -57,6 +57,11 @@ def preprocess(nt: NamedTensor) -> NamedTensor:
         "self_attn.q_norm.weight": "self_attention_weights.q_layernorm.gamma",
         "self_attn.k_norm.bias": "self_attention_weights.k_layernorm.beta",
         "self_attn.q_norm.bias": "self_attention_weights.q_layernorm.beta",
+        # mtp
+        "e_norm.weight": "multi_tokens_predict_enorm.weight",
+        "eh_proj.weight": "multi_tokens_predict_eh_proj.weight",
+        "h_norm.weight": "multi_tokens_predict_hnorm.weight",
+        "final_head.norm.weight": "multi_tokens_predict_final_layernorm.gamma",
     }
     for k, v in REPLACEMENT.items():
         if k in nt.name:
@@ -488,7 +493,7 @@ class TensorTransportClient:
         )
         return m
 
-    def _send(self, encoded_metas: list[TensorIPCMeta]) -> None:
+    def _send(self, encoded_metas: list[TensorIPCMeta], target_model_type: str) -> None:
         """
         Internal method to send the IPC metadata to the server via an HTTP POST request.
 
@@ -516,6 +521,7 @@ class TensorTransportClient:
                     "method": self.method,
                     "storage": self.storage,
                     "device": self.cuda_device_pcie,
+                    "target_model_type": target_model_type,
                 },
             )
 
@@ -538,7 +544,7 @@ class TensorTransportClient:
         except Exception as e:
             raise e
 
-    def write(self, name: str, t: torch.Tensor):
+    def write(self, name: str, t: torch.Tensor, target_model_type: str):
         """
         Processes a tensor, potentially combining it with others, writes the combined
         tensors' data into the pre-allocated shared memory block, and then sends
@@ -571,9 +577,13 @@ class TensorTransportClient:
         named_tensors = self.tensor_bucket.combine_layer_tensor(name, t)
 
         if len(named_tensors) > 0:
-            self.flush(named_tensors)
+            self.flush(named_tensors, target_model_type)
 
-    def flush(self, named_tensors: list[NamedTensor] | None = None):
+    def flush(
+        self,
+        named_tensors: list[NamedTensor] | None = None,
+        target_model_type: str = None,
+    ):
         """
         Forces the TensorBucketBuilder to process and send any remaining
         tensors in its buffers, regardless of layer ID changes.
@@ -599,5 +609,5 @@ class TensorTransportClient:
 
             # necessary synchronize here.
             torch.cuda.synchronize()
-            self._send(encoded_metas=encoded_metas)
+            self._send(encoded_metas=encoded_metas, target_model_type=target_model_type)
             self.writer.reset()

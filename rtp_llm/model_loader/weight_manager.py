@@ -42,6 +42,20 @@ class WeightManager:
         self._weights_loader: ModelLoader = engine.model.model_weights_loader
         self._weight_module = self._weights_loader._model_weights_info
 
+        if engine.propose_model is not None:
+            self._propose_weights: ModelWeights = engine.propose_model.model.weight
+            self._propose_weights_loader: ModelLoader = (
+                engine.propose_model.model.model_weights_loader
+            )
+            self._propose_weights_module = (
+                self._propose_weights_loader._model_weights_info
+            )
+            for layer in self._propose_weights_module.layer_weights:
+                for receptor in layer:
+                    print(f"layer weights:{receptor.name}")
+            for weight in self._propose_weights_module.weights:
+                print(f"model weigths: {weight.name}")
+
     def extract_layer_number(self, s: str) -> int | None:
         """
         Extracts the layer number (an integer) from a string that follows
@@ -63,10 +77,26 @@ class WeightManager:
         else:
             return None
 
-    def mount(self, name: str, tensor: torch.Tensor) -> None:
+    def mount(self, name: str, tensor: torch.Tensor, is_propose: bool) -> None:
 
-        tensor = tensor.to(self._device, non_blocking=True)
-        config = self._weights_loader.get_load_config()
+        if is_propose:
+            if (
+                self._propose_weights is None
+                or self._propose_weights_loader is None
+                or self._propose_weights_module is None
+            ):
+                raise RuntimeError(
+                    "Propose model components are not initialized for weight update."
+                )
+            target_weights = self._propose_weights
+            target_loader = self._propose_weights_loader
+            target_module = self._propose_weights_module
+        else:
+            target_weights = self._weights
+            target_loader = self._weights_loader
+            target_module = self._weight_module
+        tensor = tensor.to(self._device)
+        config = target_loader.get_load_config()
 
         if "layers" in name:
             # This is a layer-specific weight
@@ -76,11 +106,11 @@ class WeightManager:
                     f"Invalid layer weight name format: '{name}'. "
                     "Could not extract layer number. Expected format like 'model.layers.<id>...'"
                 )
-            if layer_id > len(self._weight_module.layer_weights):
+            if layer_id > len(target_module.layer_weights):
                 raise IndexError("layer index out of range.")
 
             fail: bool = True
-            for receptor in self._weight_module.layer_weights[layer_id]:
+            for receptor in target_module.layer_weights[layer_id]:
                 if name.startswith(f"model.layers.{layer_id}.{receptor.name}"):
                     # 这里需要使用 start with 判断, 因为可以出现 ffn_weights, moe_weights 这样的组合权重
                     # 这些权重在 rtp 里面的名字是 model.layers.0.__ffn_weights__
@@ -105,7 +135,7 @@ class WeightManager:
                         # 这里需要按照一定规则更换输入的权重名字
                         name = name.replace("__ffn_weights__", "ffn_weights")
                         name = name[name.find("ffn_weights") :]
-                        self._weights.update_layer_weight(
+                        target_weights.update_layer_weight(
                             layer_id=layer_id,
                             name=name,
                             data=shard,
@@ -115,7 +145,7 @@ class WeightManager:
                         # 这里需要按照一定规则更换输入的权重名字
                         name = name.replace("__moe_weights__", "partial_moe_weights")
                         name = name[name.find("partial_moe_weights") :]
-                        self._weights.update_layer_weight(
+                        target_weights.update_layer_weight(
                             layer_id=layer_id,
                             name=name,
                             data=shard,
@@ -123,7 +153,7 @@ class WeightManager:
                         )
                     else:
                         # update tensor weight
-                        self._weights.update_layer_weight(
+                        target_weights.update_layer_weight(
                             layer_id=layer_id,
                             name=receptor.name,
                             data=shard,
@@ -133,22 +163,22 @@ class WeightManager:
 
             if fail:
                 raise KeyError(
-                    f"{name} not found. wanted name list is {[f'model.layers.{layer_id}.{w.name}' for w in self._weight_module.layer_weights[layer_id]]}"
+                    f"{name} not found. wanted name list is {[f'model.layers.{layer_id}.{w.name}' for w in target_module.layer_weights[layer_id]]}"
                 )
 
         else:
             # weight is global weight
             fail: bool = True
-            for weight in self._weight_module.weights:
+            for weight in target_module.weights:
                 if f"model.{weight.name}" == name:
                     shard: dict = weight.update(
                         tensor,
                         self._device,
-                        load_config=self._weights_loader.get_load_config(),
+                        load_config=target_loader.get_load_config(),
                     )
                     if isinstance(shard, dict):
                         shard = next(iter(shard.values()))
-                    self._weights.update_global_weight(
+                    target_weights.update_global_weight(
                         name=weight.name,
                         data=shard,
                         is_master=(config.dp_rank == 0 and config.tp_rank == 0),
@@ -157,7 +187,7 @@ class WeightManager:
 
             if fail:
                 raise KeyError(
-                    f"{name} not found. wanted name list is {[f'model.{w.name}' for w in self._weight_module.weights]}"
+                    f"{name} not found. wanted name list is {[f'model.{w.name}' for w in target_module.weights]}"
                 )
 
         torch.cuda.synchronize()
@@ -204,6 +234,14 @@ class WeightManager:
         storage: str = str(req["storage"])
         desc: list[str] = req["desc"]
         device: str = req["device"]
+        target_type: str = req["target_model_type"]
+
+        if target_type == "propose":
+            is_propose = True
+        elif target_type == "main":
+            is_propose = False
+        else:
+            raise KeyError("target_model_type must be main or propose. ")
 
         reader = TensorTransportServer(method=method, storage=storage)
         metas = [TensorIPCMeta.decode(content) for content in desc]
@@ -211,4 +249,4 @@ class WeightManager:
 
         for m, t in zip(metas, tensors):
             logging.info(f"Ipc received tensor: {m.name}, {t.shape}, {t.dtype}")
-            self.mount(m.name, t)
+            self.mount(m.name, t, is_propose)
