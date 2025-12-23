@@ -636,8 +636,14 @@ class ModelWeights:
         self.check_data(
             ori_tensor, data
         )  # This will raise errors if shape, device, or dtype mismatch
+        pre_tensor = ori_tensor.detach().cpu().clone()
         with torch.inference_mode():
             ori_tensor.copy_(data)
+        same = torch.allclose(
+            pre_tensor, ori_tensor.detach().cpu(), rtol=1e-5, atol=1e-8
+        )
+        if same:
+            print(f"{name} tensor unchanged after copy_()")
 
     def set_global_weight(self, name: str, tensor: torch.Tensor):
         self.global_weights[name] = tensor
@@ -663,8 +669,14 @@ class ModelWeights:
         ori_tensor = self.global_weights[name]
         # Use the check_data method to validate shape, device, and dtype
         self.check_data(ori_tensor, data)
+        pre_tensor = ori_tensor.detach().cpu().clone()
         with torch.inference_mode():
             ori_tensor.copy_(data)
+        same = torch.allclose(
+            pre_tensor, ori_tensor.detach().cpu(), rtol=1e-5, atol=1e-8
+        )
+        if same:
+            print(f"{name} tensor unchanged after copy_()")
 
     def steal_global_weight(self, name: str):
         if name not in self.global_weights:

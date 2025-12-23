@@ -7,15 +7,18 @@ from time import time
 from typing import Any, Dict
 
 import httpx
+import torch
 from safetensors.torch import load_file
 from tqdm import tqdm
 
 from tipc import TensorTransportClient
 
 # PATH = "/root/hf/Qwen3-30B-A3B"
-PATH = "/root/hf/Qwen2505"
+PATH = "/home/admin/workspace/models/mtp/target_model"
+PROPOSEPATH = "/home/admin/workspace/models/mtp/draft_model"
+
 # PATH = "/mnt/nas1/hf/Qwen3-8B"
-Device: int = 5
+Device: int = 0
 METHOD = "cuipc"
 
 
@@ -78,7 +81,7 @@ class RtpLLMHttpClient(TensorTransportClient):
         self._handle_response(response)
         print(f"attach server memory: {response}")
 
-    async def update_model_weight(self, path: str, method: str = "shm"):
+    async def update_model_weight(self, path: str, target_model: str):
         files = sorted(glob.glob(os.path.join(path, "model*.safetensors")))
         if not files:
             files = sorted(glob.glob(os.path.join(path, "*.safetensors")))
@@ -91,8 +94,13 @@ class RtpLLMHttpClient(TensorTransportClient):
         # sort weight is necessary
         weights = [(name, tensor) for name, tensor in tqdm(weights.items())]
         for name, tensor in tqdm(sorted(weights), "updating weights"):
-            self.write(name, tensor.to(f"cuda:{Device}"))
-        self.flush(named_tensors=None)
+            if target_model == "propose" and name == "model.norm.weight":
+                continue
+            if tensor.dtype != torch.bfloat16:
+                tensor = tensor.to(torch.bfloat16)
+
+            self.write(name, tensor.to(f"cuda:{Device}"), target_model)
+        self.flush(named_tensors=None, target_model_type=target_model)
 
     async def pause(self) -> None:
         response = await self.client2.post("/pause")
@@ -106,7 +114,8 @@ class RtpLLMHttpClient(TensorTransportClient):
 class TestRtpClient(unittest.IsolatedAsyncioTestCase):
     async def test_full_flow(self):
         async with RtpLLMHttpClient("localhost", 26000, 26006) as client:
-            await client.attach()
+            # await client.attach()
+
             await client.restart()
             await client.chat_completion("chat_1", "hello qwen.")
             await client.pause()
@@ -128,7 +137,8 @@ class TestRtpClient(unittest.IsolatedAsyncioTestCase):
             await client.pause()
             await client.detach()
             await client.attach()
-            await client.update_model_weight(path=PATH, method="shm")
+            await client.update_model_weight(path=PATH, target_model="main")
+            await client.update_model_weight(path=PROPOSEPATH, target_model="propose")
             await client.restart()
 
             await client.chat_completion(

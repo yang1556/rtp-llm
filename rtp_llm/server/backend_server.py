@@ -380,7 +380,11 @@ class BackendServer(object):
         """
         try:
             if g_parallel_info.is_master and g_parallel_info.world_size > 1:
-                self._gang_server.request_workers(req, "internal_update_weight", True)
+                response = self._gang_server.request_workers(
+                    req, "internal_update_weight", True
+                )
+                for resp in response:
+                    print(resp.json())
             self._weight_manager.update(req)
             return {"status": "ok"}
         except Exception as e:
