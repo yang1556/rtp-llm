@@ -161,6 +161,8 @@ void GptInitParameter::showDebugInfo() const {
         << batch_decode_scheduler_config.to_string() << "\n"
         << "========== FIFOSchedulerConfig ==========\n"
         << fifo_scheduler_config.to_string() << "\n"
+        << "========== SmartSchedulerConfig ==========\n"
+        << smart_scheduler_config.to_string() << "\n"
         << "========== MiscellaneousConfig ==========\n"
         << misc_config.to_string() << "\n"
         << "========== ArpcConfig ==========\n"

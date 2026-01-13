@@ -134,6 +134,7 @@ try:
         SamplerConfig,
         SchedulerConfig,
         ServiceDiscoveryConfig,
+        SmartSchedulerConfig,
         SpecialTokens,
         SpeculativeExecutionConfig,
     )

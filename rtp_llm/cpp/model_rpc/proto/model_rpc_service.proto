@@ -133,6 +133,7 @@ message GenerateInputPB {
     GenerateConfigPB generate_config = 4;
     string client_id = 5;
     int64 start_time = 6;
+    int64 parent_id = 7;
 }
 
 message AuxInfoPB {

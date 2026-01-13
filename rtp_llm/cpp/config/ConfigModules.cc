@@ -365,11 +365,13 @@ std::string CacheStoreConfig::to_string() const {
 // SchedulerConfig
 void SchedulerConfig::update_from_env_for_test() {
     use_batch_decode_scheduler = bool_from_env_for_test("USE_BATCH_DECODE_SCHEDULER", false);
+    use_smart_scheduler        = bool_from_env_for_test("USE_SMART_SCHEDULER", false);
 }
 
 std::string SchedulerConfig::to_string() const {
     std::ostringstream oss;
-    oss << "use_batch_decode_scheduler: " << use_batch_decode_scheduler << "\n";
+    oss << "use_batch_decode_scheduler: " << use_batch_decode_scheduler << "\n"
+        << "use_smart_scheduler: " << use_smart_scheduler;
     return oss.str();
 }
 
@@ -381,6 +383,25 @@ void BatchDecodeSchedulerConfig::update_from_env_for_test() {
 std::string BatchDecodeSchedulerConfig::to_string() const {
     std::ostringstream oss;
     oss << "batch_decode_scheduler_batch_size: " << batch_decode_scheduler_batch_size << "\n";
+    return oss.str();
+}
+
+// SmartSchedulerConfig
+void SmartSchedulerConfig::update_from_env_for_test() {
+    max_context_batch_size           = autil::EnvUtil::getEnv("MAX_CONTEXT_BATCH_SIZE", 1);
+    scheduler_reserve_resource_ratio = autil::EnvUtil::getEnv("SCHEDULER_RESERVE_RESOURCE_RATIO", 5);
+    enable_fast_gen                  = bool_from_env_for_test("ENABLE_FAST_GEN", false);
+    enable_partial_fallback          = bool_from_env_for_test("ENABLE_PARTIAL_FALLBACK", false);
+    fast_gen_context_budget          = autil::EnvUtil::getEnv("FAST_GEN_MAX_CONTEXT_LEN", -1);
+}
+
+std::string SmartSchedulerConfig::to_string() const {
+    std::ostringstream oss;
+    oss << "max_context_batch_size: " << max_context_batch_size << "\n"
+        << "scheduler_reserve_resource_ratio: " << scheduler_reserve_resource_ratio << "\n"
+        << "enable_fast_gen: " << enable_fast_gen << "\n"
+        << "enable_partial_fallback: " << enable_partial_fallback << "\n"
+        << "fast_gen_context_budget: " << fast_gen_context_budget;
     return oss.str();
 }
 

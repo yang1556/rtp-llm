@@ -399,13 +399,15 @@ void register_cache_store_config(pybind11::module& m) {
 // SchedulerConfig
 void register_scheduler_config(pybind11::module& m) {
     pybind11::class_<SchedulerConfig>(m, "SchedulerConfig")
-        .def(pybind11::init<bool, bool>(),
+        .def(pybind11::init<bool, bool, bool>(),
              pybind11::arg("use_batch_decode_scheduler") = false,
-             pybind11::arg("use_gather_batch_scheduler") = false)
+             pybind11::arg("use_gather_batch_scheduler") = false,
+             pybind11::arg("use_smart_scheduler")        = false)
         .def("to_string", &SchedulerConfig::to_string)
         .def("update_from_env", &SchedulerConfig::update_from_env_for_test)
         .def_readwrite("use_batch_decode_scheduler", &SchedulerConfig::use_batch_decode_scheduler)
-        .def_readwrite("use_gather_batch_scheduler", &SchedulerConfig::use_gather_batch_scheduler);
+        .def_readwrite("use_gather_batch_scheduler", &SchedulerConfig::use_gather_batch_scheduler)
+        .def_readwrite("use_smart_scheduler", &SchedulerConfig::use_smart_scheduler);
 }
 
 // BatchDecodeSchedulerConfig
@@ -418,6 +420,24 @@ void register_batch_decode_scheduler_config(pybind11::module& m) {
         .def("update_from_env", &BatchDecodeSchedulerConfig::update_from_env_for_test)
         .def_readwrite("batch_decode_scheduler_batch_size",
                        &BatchDecodeSchedulerConfig::batch_decode_scheduler_batch_size);
+}
+
+// SmartSchedulerConfig
+void register_smart_scheduler_config(pybind11::module& m) {
+    pybind11::class_<SmartSchedulerConfig>(m, "SmartSchedulerConfig")
+        .def(pybind11::init<int64_t, int, bool, bool, int64_t>(),
+             pybind11::arg("max_context_batch_size")           = 1,
+             pybind11::arg("scheduler_reserve_resource_ratio") = 5,
+             pybind11::arg("enable_fast_gen")                  = false,
+             pybind11::arg("enable_partial_fallback")          = false,
+             pybind11::arg("fast_gen_context_budget")          = -1)
+        .def("to_string", &SmartSchedulerConfig::to_string)
+        .def("update_from_env", &SmartSchedulerConfig::update_from_env_for_test)
+        .def_readwrite("max_context_batch_size", &SmartSchedulerConfig::max_context_batch_size)
+        .def_readwrite("scheduler_reserve_resource_ratio", &SmartSchedulerConfig::scheduler_reserve_resource_ratio)
+        .def_readwrite("enable_fast_gen", &SmartSchedulerConfig::enable_fast_gen)
+        .def_readwrite("enable_partial_fallback", &SmartSchedulerConfig::enable_partial_fallback)
+        .def_readwrite("fast_gen_context_budget", &SmartSchedulerConfig::fast_gen_context_budget);
 }
 
 // FIFOSchedulerConfig
@@ -752,6 +772,7 @@ void registerGptInitParameter(py::module m) {
         .def_readwrite("cache_store_config", &GptInitParameter::cache_store_config)
         .def_readwrite("scheduler_config", &GptInitParameter::scheduler_config)
         .def_readwrite("batch_decode_scheduler_config", &GptInitParameter::batch_decode_scheduler_config)
+        .def_readwrite("smart_scheduler_config", &GptInitParameter::smart_scheduler_config)
         .def_readwrite("fifo_scheduler_config", &GptInitParameter::fifo_scheduler_config)
         .def_readwrite("misc_config", &GptInitParameter::misc_config)
         .def_readwrite("arpc_config", &GptInitParameter::arpc_config)
@@ -774,6 +795,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
     register_cache_store_config(m);
     register_scheduler_config(m);
     register_batch_decode_scheduler_config(m);
+    register_smart_scheduler_config(m);
     register_fifo_scheduler_config(m);
     register_misc_config(m);
     register_arpc_config(m);

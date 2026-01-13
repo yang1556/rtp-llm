@@ -707,6 +707,9 @@ class ServerArgsSetTest(TestCase):
             # 32 jit
             "--remote_jit_dir",
             "/home/admin/jit_dir",
+            # 33 SmartScheduler
+            "--use_smart_scheduler",
+            "True",
         ]
 
         # 重新加载 server_args 并执行 setup_args
@@ -946,8 +949,10 @@ class ServerArgsSetTest(TestCase):
         self.assertEqual(env["DASHSCOPE_HTTP_URL"], "http://test.url")
         self.assertEqual(env["DASHSCOPE_WEBSOCKET_URL"], "ws://test.url")
         self.assertEqual(env["OPENAI_API_KEY"], "test_openai_key")
-        self.assertEqual(env["JSON_MODEL_OVERRIDE_ARGS"],
-                         '{"rope_scaling":{"type":"yarn","factor":2.0,"original_max_position_embeddings":32768,"beta_slow":1.0,"beta_fast":1.0,"mscale":1.0,"extrapolation_factor":1.0}}')
+        self.assertEqual(
+            env["JSON_MODEL_OVERRIDE_ARGS"],
+            '{"rope_scaling":{"type":"yarn","factor":2.0,"original_max_position_embeddings":32768,"beta_slow":1.0,"beta_fast":1.0,"mscale":1.0,"extrapolation_factor":1.0}}',
+        )
 
         # 27. Lora Configuration
         self.assertEqual(env["LORA_INFO"], '{"lora1": "/path/to/lora1"}')
@@ -967,9 +972,7 @@ class ServerArgsSetTest(TestCase):
 
         # 30. Miscellaneous Configuration
         self.assertEqual(env["DISABLE_PDL"], "1")
-        self.assertEqual(
-            env["AUX_STRING"], ""
-        )
+        self.assertEqual(env["AUX_STRING"], "")
 
         # 31. PD-Separation Configuration
         self.assertEqual(env["PREFILL_RETRY_TIMES"], "2")

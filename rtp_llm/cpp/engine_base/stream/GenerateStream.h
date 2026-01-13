@@ -405,6 +405,10 @@ public:
         return generate_input_->generate_config->inter_request_id;
     }
 
+    int64_t ParentRequestId() const {
+        return generate_input_->parent_id;
+    }
+
     std::string traceId() const {
         return generate_input_->generate_config->trace_id;
     }

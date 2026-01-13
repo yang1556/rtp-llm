@@ -78,7 +78,6 @@ class WeightManager:
             return None
 
     def mount(self, name: str, tensor: torch.Tensor, is_propose: bool) -> None:
-        print(f"mount: {self._device}")
         if is_propose:
             if (
                 self._propose_weights is None

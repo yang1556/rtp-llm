@@ -43,6 +43,7 @@ public:
 
 public:
     int64_t                         request_id = 0;
+    int64_t                         parent_id  = -1;
     std::shared_ptr<GenerateConfig> generate_config;
     rtp_llm::BufferPtr              input_ids;
     int                             lora_id               = -1;

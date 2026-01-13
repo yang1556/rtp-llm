@@ -290,6 +290,7 @@ public:
     SchedulerConfig              scheduler_config;
     BatchDecodeSchedulerConfig   batch_decode_scheduler_config;
     FIFOSchedulerConfig          fifo_scheduler_config;
+    SmartSchedulerConfig         smart_scheduler_config;
     MiscellaneousConfig          misc_config;
     ArpcConfig                   arpc_config;
     FfnDisAggregateConfig        ffn_disaggregate_config;
@@ -319,6 +320,7 @@ public:
         cache_store_config.update_from_env_for_test();
         scheduler_config.update_from_env_for_test();
         batch_decode_scheduler_config.update_from_env_for_test();
+        smart_scheduler_config.update_from_env_for_test();
         fifo_scheduler_config.update_from_env_for_test();
         misc_config.update_from_env_for_test();
     }

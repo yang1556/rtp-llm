@@ -185,6 +185,7 @@ struct CacheStoreConfig {
 struct SchedulerConfig {
     bool        use_batch_decode_scheduler = false;
     bool        use_gather_batch_scheduler = false;
+    bool        use_smart_scheduler        = false;
     std::string to_string() const;
     void        update_from_env_for_test();
 };
@@ -198,6 +199,17 @@ struct BatchDecodeSchedulerConfig {
 };
 
 struct FIFOSchedulerConfig {
+    int64_t max_context_batch_size           = 1;
+    int     scheduler_reserve_resource_ratio = 5;
+    bool    enable_fast_gen                  = false;
+    bool    enable_partial_fallback          = false;
+    int64_t fast_gen_context_budget          = -1;
+
+    std::string to_string() const;
+    void        update_from_env_for_test();
+};
+
+struct SmartSchedulerConfig {
     int64_t max_context_batch_size           = 1;
     int     scheduler_reserve_resource_ratio = 5;
     bool    enable_fast_gen                  = false;

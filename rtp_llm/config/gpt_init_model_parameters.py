@@ -58,6 +58,7 @@ from rtp_llm.ops import (
     SamplerConfig,
     SchedulerConfig,
     ServiceDiscoveryConfig,
+    SmartSchedulerConfig,
     SpecialTokens,
     SpeculativeExecutionConfig,
 )
@@ -400,6 +401,7 @@ class GptInitModelParameters:
     sampler_config: SamplerConfig
     scheduler_config: SchedulerConfig
     service_discovery_config: ServiceDiscoveryConfig
+    smart_scheduler_config: SmartSchedulerConfig
     speculative_decoding_config: SpeculativeExecutionConfig
     py_env_configs: PyEnvConfigs
 
@@ -723,6 +725,11 @@ class GptInitModelParameters:
         self.gpt_init_params.scheduler_config = SchedulerConfig(
             use_batch_decode_scheduler=get_env_bool("USE_BATCH_DECODE_SCHEDULER"),
             use_gather_batch_scheduler=get_env_bool("USE_GATHER_BATCH_SCHEDULER"),
+            use_smart_scheduler=get_env_bool("USE_SMART_SCHEDULER"),
+        )
+        print(
+            "python use_smart_scheduler:",
+            self.gpt_init_params.scheduler_config.use_smart_scheduler,
         )
         if (
             self.gpt_init_params.scheduler_config.use_gather_batch_scheduler
@@ -740,6 +747,17 @@ class GptInitModelParameters:
             batch_decode_scheduler_warmup_type=get_env_int(
                 "BATCH_DECODE_SCHEDULER_WARMUP_TYPE", 0
             ),
+        )
+
+        # SmartSchedulerConfig
+        self.gpt_init_params.smart_scheduler_config = SmartSchedulerConfig(
+            max_context_batch_size=get_env_int("MAX_CONTEXT_BATCH_SIZE", 1),
+            scheduler_reserve_resource_ratio=get_env_int(
+                "SCHEDULER_RESERVE_RESOURCE_RATIO", 5
+            ),
+            enable_fast_gen=get_env_bool("ENABLE_FAST_GEN", False),
+            enable_partial_fallback=get_env_bool("ENABLE_PARTIAL_FALLBACK", False),
+            fast_gen_context_budget=get_env_int("FAST_GEN_MAX_CONTEXT_LEN", 0),
         )
 
         # FIFOSchedulerConfig

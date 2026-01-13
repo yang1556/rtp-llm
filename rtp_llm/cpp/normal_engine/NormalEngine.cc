@@ -8,6 +8,7 @@
 #include "rtp_llm/cpp/engine_base/schedulers/FIFOScheduler.h"
 #include "rtp_llm/cpp/engine_base/schedulers/BatchDecodeScheduler.h"
 #include "rtp_llm/cpp/engine_base/schedulers/GatherBatchScheduler.h"
+#include "rtp_llm/cpp/engine_base/schedulers/SmartScheduler.h"
 #include "rtp_llm/cpp/cache/CacheConfigCreator.h"
 #include "rtp_llm/cpp/engine_base/system_prompt/SystemPromptConstructor.h"
 #include "rtp_llm/cpp/utils/Logger.h"
@@ -60,6 +61,9 @@ void NormalEngine::initScheduler() {
     } else if (params_.scheduler_config.use_gather_batch_scheduler) {
         scheduler_.reset(new GatherBatchScheduler(params_, resource_context_.cache_manager, metrics_reporter_));
         RTP_LLM_LOG_INFO("create gather batch scheduler done");
+    } else if (params_.scheduler_config.use_smart_scheduler) {
+        scheduler_.reset(new SmartScheduler(params_, resource_context_.cache_manager, metrics_reporter_));
+        RTP_LLM_LOG_INFO("create smart scheduler done");
     } else {
         scheduler_.reset(new FIFOScheduler(params_, resource_context_.cache_manager, metrics_reporter_));
         RTP_LLM_LOG_INFO("create fifo scheduler done");
