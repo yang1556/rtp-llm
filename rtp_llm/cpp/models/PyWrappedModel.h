@@ -49,7 +49,8 @@ private:
     GptModelOutputs                callForwardPostLayers(BufferPtr             hidden_states,
                                                          const GptModelInputs& inputs,
                                                          bool                  skip_final_layernorm,
-                                                         size_t                num_valid_tokens = -1);
+                                                         size_t                num_valid_tokens = -1,
+                                                         rtp_llm::BufferPtr    lm_output_indexes = nullptr);
     torch::Tensor                  tensorHoldHostAndToCuda(const torch::Tensor& tensor);
 
     GraphBase* graph_runner_{nullptr};

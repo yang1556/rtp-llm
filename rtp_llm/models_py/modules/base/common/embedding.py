@@ -36,6 +36,7 @@ class Embedding(nn.Module):
         output = torch.empty(
             (tokens, hidden_size), dtype=self.weight.dtype, device=input.device
         )
+
         rtp_llm_ops.embedding(output, input, self.weight.data)
         if self.tp_size > 1:
             m, n = output.shape
@@ -46,6 +47,7 @@ class Embedding(nn.Module):
                 .contiguous()
                 .reshape(m, -1)
             )
+
         return output
 
 
