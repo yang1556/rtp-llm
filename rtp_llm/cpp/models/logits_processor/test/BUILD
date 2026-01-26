@@ -39,6 +39,7 @@ cc_test(
     ],
     data = [
         "gir_prefix_dict.json",
+        "gir_prefix_sparse_dict.json",
         "gir_prefix_with_weight_dict.json",
     ],
     copts = test_copts,
