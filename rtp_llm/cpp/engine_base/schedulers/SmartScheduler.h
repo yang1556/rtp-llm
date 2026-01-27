@@ -42,7 +42,9 @@ protected:
     /**
      * @brief 对等待队列进行重排，将已知“短任务”的副本置顶
      */
-    void reorderWaitingQueue();
+    void reorderWaitingQueueByLJF();
+
+    void reorderWaitingQueueBySJF();
 
 private:
     // 存储已经完成过至少一个副本生成的 parent_id

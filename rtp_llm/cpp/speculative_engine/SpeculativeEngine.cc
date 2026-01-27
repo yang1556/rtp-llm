@@ -10,6 +10,7 @@
 #include "rtp_llm/cpp/cache/CacheConfigCreator.h"
 #include "rtp_llm/cpp/speculative_engine/SpeculativeScheduler.h"
 #include "rtp_llm/cpp/speculative_engine/SpeculativeGatherBatchScheduler.h"
+#include "rtp_llm/cpp/speculative_engine/SpeculativeSmartScheduler.h"
 #include "rtp_llm/cpp/speculative_engine/propose_executor/VanillaExecutor.h"
 #include "rtp_llm/cpp/speculative_engine/propose_executor/MTPExecutor.h"
 #include "rtp_llm/cpp/speculative_engine/score_executor/ScoreExecutor.h"
@@ -139,6 +140,12 @@ absl::Status SpeculativeEngine::init() {
                                                              resource_context_.cache_manager,
                                                              metrics_reporter_,
                                                              propose_model_params_->genNumPerCircle() + 1));
+    } else if (score_model_params_.gpt_init_parameter.scheduler_config.use_smart_scheduler) {
+        RTP_LLM_LOG_INFO("create speculative smart scheduler");
+        scheduler_.reset(new SpeculativeSmartScheduler(score_model_params_.gpt_init_parameter,
+                                                       resource_context_.cache_manager,
+                                                       metrics_reporter_,
+                                                       propose_model_params_->genNumPerCircle() + 1));
     } else {
         RTP_LLM_LOG_INFO("create speculative scheduler");
         scheduler_.reset(new SpeculativeScheduler(score_model_params_.gpt_init_parameter,
@@ -587,6 +594,7 @@ absl::Status SpeculativeEngine::prefillMtpStep(std::list<GenerateStreamPtr>& str
 
 absl::Status SpeculativeEngine::mtpStep(std::list<GenerateStreamPtr>& streams) {
     if (score_model_params_.gpt_init_parameter.role_type_ == RoleType::PREFILL) {
+        // printf("it is RoleType prefill\n");
         return prefillMtpStep(streams);
     }
 
@@ -597,14 +605,22 @@ absl::Status SpeculativeEngine::mtpStep(std::list<GenerateStreamPtr>& streams) {
     std::list<GenerateStreamPtr> propose_streams;
     std::list<GenerateStreamPtr> prefill_streams;
     std::list<GenerateStreamPtr> pre_propose_streams;
+    std::list<GenerateStreamPtr> pre_set_propose_streams;
     if (device_->getDeviceProperties().tp_rank == 0) {
         for (auto& stream : streams) {
             if (stream->getContainProposeToken()) {
                 pre_propose_streams.emplace_back(stream);
+                // printf("pre_propose_stream id %ld \n", stream->streamId());
+            } else if (stream->needConvertPropose()) {
+                pre_set_propose_streams.emplace_back(stream);
+                // printf("norm_stream id %ld \n", stream->streamId());
             } else if (stream->getLastHiddenStates() != nullptr) {
                 propose_streams.emplace_back(stream);
+                // printf("propose_stream id %ld \n", stream->streamId());
+
             } else {
                 prefill_streams.emplace_back(stream);
+                // printf("prefill_stream id %ld \n", stream->streamId());
             }
         }
 
@@ -618,6 +634,12 @@ absl::Status SpeculativeEngine::mtpStep(std::list<GenerateStreamPtr>& streams) {
 
         for (auto& stream : pre_propose_streams) {
             RTP_LLM_LOG_DEBUG("begin pre propose stream [%ld]: %s", stream->streamId(), stream->debugString().c_str());
+        }
+
+        for (auto& stream : pre_set_propose_streams) {
+            RTP_LLM_LOG_DEBUG(
+                "begin pre set propose stream [%ld]: %s", stream->streamId(), stream->debugString().c_str());
+            // printf("begin pre set propose stream [%ld]: %s\n", stream->streamId(), stream->debugString().c_str());
         }
     }
 
@@ -643,6 +665,24 @@ absl::Status SpeculativeEngine::mtpStep(std::list<GenerateStreamPtr>& streams) {
             stream->setProposeStream(propose_stream);
         }
 
+        for (const GenerateStreamPtr& stream : pre_set_propose_streams) {
+            // printf("stream ID %ld", stream->streamId());
+            // printf(" stream set token index: %d \n", stream->seqLength()-2);
+            stream->setMtpTokenIndex(stream->seqLength() - 2);
+            stream->setNeedConvertPropose(false);
+            size_t            propose_step   = 0;
+            GenerateStreamPtr propose_stream = makeMTPStream(stream, propose_step);
+
+            SpeculativeExecutorStreamOutputPtr sp_output_buffer_ = propose_stream->getSPOutputBuffer();
+            sp_output_buffer_->propose_step                      = 0;
+            sp_output_buffer_->tokens                            = nullptr;
+
+            stream->setProposeStream(propose_stream);
+        }
+        if (!pre_propose_streams.empty()) {
+            THROW_IF_STATUS_ERROR(propose_executor_->propose(pre_set_propose_streams));
+        }
+
         for (const GenerateStreamPtr& stream : pre_propose_streams) {
             size_t            propose_step   = 1;
             GenerateStreamPtr propose_stream = makeMTPStream(stream, propose_step);
@@ -664,6 +704,7 @@ absl::Status SpeculativeEngine::mtpStep(std::list<GenerateStreamPtr>& streams) {
     // base model score propose new tokens.
     {
         RTP_LLM_LOG_DEBUG("score step");
+        // printf("score step\n");
         score_begin_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
         THROW_IF_STATUS_ERROR(score_executor_->score(streams));
 

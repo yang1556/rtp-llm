@@ -42,7 +42,7 @@ absl::StatusOr<std::list<GenerateStreamPtr>> SmartScheduler::schedule(size_t res
     evaluateRunningRemote();
     if (finished_parents_.size() <= max_generate_batch_size_) {
         updateParentStatus(running_streams_);
-        reorderWaitingQueue();
+        reorderWaitingQueueByLJF();
     }
 
     evictDoneStreams(waiting_streams_);
@@ -80,7 +80,7 @@ void SmartScheduler::updateParentStatus(const std::list<GenerateStreamPtr>& stre
     }
 }
 
-void SmartScheduler::reorderWaitingQueue() {
+void SmartScheduler::reorderWaitingQueueByLJF() {
     if (waiting_streams_.size() < 2)
         return;
 
@@ -93,7 +93,7 @@ void SmartScheduler::reorderWaitingQueue() {
         bool b_finished = (it_b != finished_parents_.end());
 
         if (a_finished != b_finished) {
-            return !a_finished;  // 如果 a 没完成，则 a 排在前面
+            return a_finished;  // 如果 a 没完成，则 a 排在前面
         }
 
         // 优先级 2: 如果都完成过，按照 token 数从多到少排序（长作业优先）
@@ -103,6 +103,30 @@ void SmartScheduler::reorderWaitingQueue() {
             }
         }
         // 优先级 3: 兜底逻辑，按流本身的 ID 顺序（FIFO）
+        return a->streamId() < b->streamId();
+    });
+}
+
+void SmartScheduler::reorderWaitingQueueBySJF() {
+    if (waiting_streams_.size() < 2)
+        return;
+
+    // SJF: Shortest Job First (短作业优先)
+    waiting_streams_.sort([this](const GenerateStreamPtr& a, const GenerateStreamPtr& b) {
+        auto it_a = finished_parents_.find(a->ParentRequestId());
+        auto it_b = finished_parents_.find(b->ParentRequestId());
+
+        bool a_has_history = (it_a != finished_parents_.end());
+        bool b_has_history = (it_b != finished_parents_.end());
+
+        if (a_has_history != b_has_history)
+            return !a_has_history;
+
+        if (a_has_history && b_has_history) {
+            if (it_a->second != it_b->second) {
+                return it_a->second < it_b->second;  // Token 数少的排在前面
+            }
+        }
         return a->streamId() < b->streamId();
     });
 }

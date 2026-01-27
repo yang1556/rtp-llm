@@ -307,6 +307,18 @@ public:
         return hasNumBeams() || forceDisableSpRun();
     }
 
+    void setForceDisableSpRun(bool flag) {
+        generate_input_->generate_config->force_disable_sp_run = flag;
+    }
+
+    bool needConvertPropose() const {
+        return need_convert_propose_;
+    }
+
+    void setNeedConvertPropose(bool flag) {
+        need_convert_propose_ = flag;
+    }
+
     bool needReturnHiddenStates() {
         return return_all_hidden_states_;
     }
@@ -539,6 +551,8 @@ protected:
 
     bool          last_block_aligned_   = false;
     volatile bool need_remote_generate_ = false;
+
+    bool need_convert_propose_ = false;
 
     bool gen_timeline_ = false;
 
