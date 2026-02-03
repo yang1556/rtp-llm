@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <sstream>
+#include <string>
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "rtp_llm/cpp/engine_base/stream/ResourceContext.h"
@@ -102,16 +104,9 @@ public:
     bool enableDeviceCache() const;
     bool enableTieredMemoryCache() const;
 
-    std::string debugString() const {
-        std::stringstream debug_string;
-        debug_string << "StreamCacheResource {"
-                     << "need_release_resource: " << need_release_resource_ << ", batch_resource: ";
+    void insertIntoCache();
 
-        debug_string << batch_kv_cache_resource_->debugString();
-
-        debug_string << "}";
-        return debug_string.str();
-    }
+    std::string debugString() const;
 
 private:
     void                          loadCacheSync();
