@@ -77,6 +77,9 @@ public:
         return config_.total_size_bytes;
     }
 
+    // Print current block pool state for debugging
+    void debugString() const;
+
 private:
     void initFreeBlocks();
     void tryFreeBlocks(const BlockIndicesType& block_indices);
