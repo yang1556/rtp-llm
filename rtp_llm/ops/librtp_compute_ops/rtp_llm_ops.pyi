@@ -170,7 +170,7 @@ class FusedMoEOp:
 class FusedRopeKVCacheDecodeOp:
     def __init__(self, attn_configs: libth_transformer_config.AttentionConfigs) -> None:
         ...
-    def forward(self, qkv: torch.Tensor, position_ids: torch.Tensor | None = None, fmha_type: libth_transformer_config.FMHAType, kv_cache: librtp_compute_ops.KVCache | None, params: TRTAttn) -> torch.Tensor:
+    def forward(self, qkv: torch.Tensor, kv_cache: librtp_compute_ops.KVCache | None, params: TRTAttn) -> torch.Tensor:
         ...
 
     def prepare(self, attn_inputs: librtp_compute_ops.PyAttentionInputs) -> TRTAttn:
