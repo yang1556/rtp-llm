@@ -47,7 +47,7 @@ void invokeFusedQKVBiasTransposeHelper(const torch::Tensor&                   qk
         }
     }
 
-    int* padding_offset = nullptr, *position_ids = nullptr;
+    int *padding_offset = nullptr, *position_ids = nullptr;
     if (params->padding_offset.defined()) {
         padding_offset = params->padding_offset.data_ptr<int>();
     }
@@ -236,6 +236,7 @@ TRTAttnPtr FusedRopeKVCacheDecodeOp::prepare(torch_ext::PyAttentionInputs attn_i
     attn_params->cu_kv_seqlens             = attn_inputs.cu_kv_seqlens;
     attn_params->sequence_lengths          = attn_inputs.sequence_lengths;
     attn_params->kv_block_array.cache_type = attn_configs_.kv_cache_dtype;
+    attn_params->position_ids              = attn_inputs.combo_position_ids;
     return attn_params;
 }
 
