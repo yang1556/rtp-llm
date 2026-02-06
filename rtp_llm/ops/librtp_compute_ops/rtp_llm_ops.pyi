@@ -170,7 +170,6 @@ class FusedMoEOp:
 class FusedRopeKVCacheDecodeOp:
     def __init__(self, attn_configs: libth_transformer_config.AttentionConfigs) -> None:
         ...
-
     def forward(self, qkv: torch.Tensor, kv_cache: librtp_compute_ops.KVCache | None, params: TRTAttn) -> torch.Tensor:
         ...
 
@@ -366,7 +365,6 @@ def debug_kernel(data: torch.Tensor, start_row: int, start_col: int, m: int, n: 
     """
     Debug kernel to print 2D data blocks from GPU tensor
     """
-
 def dispose_communicator(comm_ptr: int) -> None:
     """
     Dispose UbCommunicator with python address and release resources
