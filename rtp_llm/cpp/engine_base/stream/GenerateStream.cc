@@ -21,6 +21,7 @@ using namespace std;
 
 namespace rtp_llm {
 
+
 GenerateStream::GenerateStream(const shared_ptr<GenerateInput>& input,
                                const ModelConfig&               model_config,
                                const RuntimeConfig&             runtime_config,
@@ -168,12 +169,15 @@ bool GenerateStream::isStreaming() const {
     }
     return generate_input_->generate_config->is_streaming;
 }
+
 int64_t GenerateStream::streamId() const {
     if (generate_input_->generate_config->inter_request_id != -1) {
         return generate_input_->generate_config->inter_request_id;
     }
     return generate_input_->request_id;
 }
+
+
 int GenerateStream::loraId() const {
     return generate_input_->lora_id;
 }
