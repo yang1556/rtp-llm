@@ -337,8 +337,20 @@ cc_library(
     deps = [
         ":rocm_basic",
         ":rocm_mla",
+        ":rocm_atrex_pa",
         "//rtp_llm/cpp/kernels/rocm/sampling:sampling",
     ],
+    visibility = ["//visibility:public"],
+)
+
+# PA kernel：dot kernel 头文件；includes = ["."] 使依赖方可用 #include "rocm/pa_decode_dot_kernel.h"
+cc_library(
+    name = "rocm_atrex_pa_hdrs",
+    hdrs = [
+        "rocm/pa_decode_dot_kernel.h",
+        "rocm/pa_decode_reduce_kernel.h",
+    ],
+    includes = ["."],
     visibility = ["//visibility:public"],
 )
 
@@ -350,8 +362,9 @@ cc_library(
     ],
     hdrs = [
         "rocm/pa_decode_dot_kernel.h",
-        "rocm/pa_decode_reduce_kernel.h"
+        "rocm/pa_decode_reduce_kernel.h",
     ],
+    includes = ["."],
     deps = rocm_deps,
     copts = rocm_copts(),
     visibility = ["//visibility:public"],

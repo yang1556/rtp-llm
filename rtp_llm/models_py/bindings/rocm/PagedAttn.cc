@@ -177,7 +177,7 @@ void registerPagedAttnDecodeOp(py::module& m) {
         .def_readwrite("max_seq_len", &forward_param::max_seq_len)
         .def_readwrite("partition_size", &forward_param::partition_size);
 
-    // Add atrex paged_attention_atrex binding
+    // atrexPA paged attention binding
     m.def("paged_attention_atrex",
           &paged_attention_atrex,
           py::arg("out"),

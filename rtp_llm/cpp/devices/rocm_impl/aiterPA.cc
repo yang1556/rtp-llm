@@ -436,14 +436,16 @@ void AiterWrapper::runHipPA(const AttentionModuleParams& params,
 
     bool    v_shuffle = use_asm_pa_;
     int64_t x         = 16 / key_cache.element_size();
-    auto    kv_sizes  = value_cache.sizes();
-    key_cache         = key_cache.view({kv_sizes[0], kv_sizes[1], kv_sizes[3] / x, kv_sizes[2], x});
+    auto    key_sizes = key_cache.sizes();
+    auto    val_sizes = value_cache.sizes();
+    // k_cache [num_blocks, num_kv_heads, head_size // x, kv_block_size, x]
+    key_cache = key_cache.view({key_sizes[0], key_sizes[1], key_sizes[3] / x, key_sizes[2], x});
     if (use_asm_pa_) {
         // v_cache [num_blocks, num_kv_heads, kv_block_size // x, head_size, x]
-        value_cache = value_cache.view({kv_sizes[0], kv_sizes[1], kv_sizes[2] / x, kv_sizes[3], x});
+        value_cache = value_cache.view({val_sizes[0], val_sizes[1], val_sizes[2] / x, val_sizes[3], x});
     } else {
         // v_cache [num_blocks, num_kv_heads, head_size, kv_block_size]
-        value_cache = value_cache.view({kv_sizes[0], kv_sizes[1], kv_sizes[3], kv_sizes[2]});
+        value_cache = value_cache.view({val_sizes[0], val_sizes[1], val_sizes[3], val_sizes[2]});
     }
 
     torch::Tensor q_quant, q_scale;
@@ -606,8 +608,14 @@ void runAiterPA(const AttentionModuleParams& params, rtp_llm::DeviceBase* device
         {datatype, {num_seqs, num_heads, max_num_partitions, head_size}, AllocationType::DEVICE}, {"tmp_out"});
     auto tmp_out = Buffer2torchTensor(tmp_out_buffer, false);
 
-    auto key_cache   = Buffer2torchTensor(params.common.kv_cache->kv_cache_buffer, false).select(1, 0);
-    auto value_cache = Buffer2torchTensor(params.common.kv_cache->kv_cache_buffer, false).select(1, 1);
+    auto          kv_cache_tensor = Buffer2torchTensor(params.common.kv_cache->kv_cache_buffer, false);
+    torch::Tensor paged_kv_cache  = reshape_paged_kv_cache(kv_cache_tensor,
+                                                          /*local_kv_head_num=*/params.configs.kv_head_num,
+                                                          /*tokens_per_block=*/params.configs.kernel_tokens_per_block,
+                                                          /*head_dim=*/params.configs.size_per_head);
+
+    auto key_cache   = paged_kv_cache.select(1, 0);
+    auto value_cache = paged_kv_cache.select(1, 1);
     /*size_t v_cache_offset = params.common.kv_cache->kv_cache_buffer->sizeBytes();
     auto value_cache = Buffer2torchTensorCustom(*params.common.kv_cache->kv_cache_buffer,
                                                {(int64_t)params.common.kv_cache->kv_cache_buffer->shape()[0],
@@ -643,16 +651,19 @@ void runAiterPA(const AttentionModuleParams& params, rtp_llm::DeviceBase* device
 
     auto context_lens = aiter_attn->sequence_lengths_t;
     if (max_seq_len <= 16384) {
-        int64_t x        = 16 / key_cache.element_size();
-        auto    kv_sizes = value_cache.sizes();
-        out              = out.view({int64_t(num_seqs), int64_t(num_heads), int64_t(head_size)});
+        int64_t x         = 16 / key_cache.element_size();
+        auto    key_sizes = key_cache.sizes();
+        auto    val_sizes = value_cache.sizes();
+        out               = out.view({int64_t(num_seqs), int64_t(num_heads), int64_t(head_size)});
         exp_sums   = exp_sums.view({int64_t(num_seqs), int64_t(num_kv_heads), int64_t(max_num_partitions), grp_size});
         max_logits = max_logits.view({int64_t(num_seqs), int64_t(num_kv_heads), int64_t(max_num_partitions), grp_size});
         tmp_out    = tmp_out.view(
             {int64_t(num_seqs), int64_t(num_kv_heads), int64_t(max_num_partitions), grp_size, int64_t(head_size)});
-        query       = query.view({int64_t(num_seqs), int64_t(num_heads), int64_t(head_size)});
-        key_cache   = key_cache.view({kv_sizes[0], kv_sizes[1], kv_sizes[3] / x, kv_sizes[2], x});
-        value_cache = value_cache.view({kv_sizes[0], kv_sizes[1], kv_sizes[3], kv_sizes[2]});
+        query = query.view({int64_t(num_seqs), int64_t(num_heads), int64_t(head_size)});
+        // k_cache [num_blocks, num_kv_heads, head_size // x, kv_block_size, x]
+        key_cache = key_cache.view({key_sizes[0], key_sizes[1], key_sizes[3] / x, key_sizes[2], x});
+        // v_cache [num_blocks, num_kv_heads, head_size, kv_block_size]
+        value_cache = value_cache.view({val_sizes[0], val_sizes[1], val_sizes[3], val_sizes[2]});
         paged_attention_atrex(out,
                               exp_sums,
                               max_logits,
