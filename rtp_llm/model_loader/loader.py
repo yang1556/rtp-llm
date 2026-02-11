@@ -246,7 +246,8 @@ class ModelLoader:
         )
 
         if load_method.lower() == LoadMethod.FASTSAFETENSORS:
-            return self._load_from_fastsafetensor(device)
+            return self._load_from_scratch(device)
+            #return self._load_from_fastsafetensor(device)
         elif load_method.lower() == LoadMethod.SCRATCH:
             return self._load_from_scratch(device)
         else:

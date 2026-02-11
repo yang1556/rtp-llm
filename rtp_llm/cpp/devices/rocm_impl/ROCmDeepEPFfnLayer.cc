@@ -18,6 +18,7 @@ namespace rtp_llm {
 #ifdef ENABLE_DEEP_EP
 
 bool ROCmDevice::initDeepEPBuffer() {
+    RTP_LLM_LOG_INFO("start to initialize deep ep buffer");
     auto   nccl_param  = getNcclParam(ParallelMode::DP_AND_TP);
     size_t world_rank  = nccl_param.rank_;
     size_t world_size  = nccl_param.world_size_;
@@ -39,7 +40,6 @@ bool ROCmDevice::initDeepEPBuffer() {
         num_rdma_bytes   = 0;  // normal-kernel intranode
         num_qps_per_rank = 1;
     }
-
     try {
         RTP_LLM_LOG_INFO("deep ep init with num_rdma_bytes %ld, world_rank %ld, world_size %ld",
                          num_rdma_bytes,
@@ -61,7 +61,7 @@ bool ROCmDevice::initDeepEPBuffer() {
                                               world_size,
                                               num_nvl_bytes,
                                               num_rdma_bytes,
-                                              init_params_.use_deepep_low_latency || init_params_.use_deepep_internode,
+                                              init_params_.use_deepep_low_latency,
                                               num_qps_per_rank));
 #endif
         bool success = deepep_buffer_->init();
@@ -269,7 +269,6 @@ MoeCombineOutput ROCmDevice::deepEpCombine(const MoeCombineParams& params) {
                                                   compute_event,
                                                   true /*async_finish*/,
                                                   false /*allocate_on_comm_stream*/);
-    syncAndCheck();
     RUNTIME_ASSERT_OP_ARG(combine_output.event_overlap, "combine overlap should always exist.");
 
     BufferPtr  all_output;

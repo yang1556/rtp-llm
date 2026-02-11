@@ -27,8 +27,6 @@ MoeDispatchOutput ROCmDevice::epDispatch(const MoeDispatchParams& params) {
             return deepEpDispatch(params);
         }
     }
-#else
-    RTP_LLM_LOG_INFO("[ROCm epDispatch]: deep_ep is not enabled");
 #endif
     const auto& moe_conf = params.moe_configs;
 
@@ -164,8 +162,6 @@ MoeCombineOutput ROCmDevice::epCombine(const MoeCombineParams& params) {
             return deepEpCombine(params);
         }
     }
-#else
-    RTP_LLM_LOG_INFO("[ROCm epCombine]: deep_ep is not enabled");
 #endif
     // 当前卡接受计算完moe的token
     bool overlapped = false;
@@ -355,8 +351,6 @@ FfnLayerOutput ROCmDevice::moeFfn(const FfnLayerParams& params, const MoeGateSel
     if (init_params_.ep_size > 1 && init_params_.use_deepep_moe && init_params_.use_deepep_low_latency) {
         return deepEpLLMoeFfn(params, gate_outputs);
     }
-#else
-    RTP_LLM_LOG_INFO("[ROCm moeFfn]: deep_ep is not enabled");
 #endif
     const MoeConfigs& moe_conf = params.configs.moe_configs.value();
 
