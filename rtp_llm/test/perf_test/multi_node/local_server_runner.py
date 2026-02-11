@@ -1,7 +1,7 @@
 import os
 
-for key, value in os.environ.items():
-    print(f"start env {key}={value}")
+# for key, value in os.environ.items():
+#     print(f"start env {key}={value}")
 
 import json
 import logging
@@ -16,12 +16,12 @@ current_file_path = pathlib.Path(__file__).parent.absolute()
 sys.path.append(str(current_file_path.parent.parent.parent.absolute()))
 from rtp_llm.utils.import_util import has_internal_source
 
-if has_internal_source():
-    from internal_source.rtp_llm.test.util.set_internal_env import (
-        configure_optional_env,
-    )
+# if has_internal_source():
+#     from internal_source.rtp_llm.test.util.set_internal_env import (
+#         configure_optional_env,
+#     )
 
-    configure_optional_env()
+#     configure_optional_env()
 
 from rtp_llm.config.py_config_modules import PyEnvConfigs
 from rtp_llm.config.server_config_setup import setup_and_configure_server
