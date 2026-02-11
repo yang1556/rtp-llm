@@ -516,8 +516,7 @@ protected:
     int                                  max_seq_len_;
     int64_t                              vocab_size_;
     std::shared_ptr<CompleteTokenIds>    complete_token_ids_;
-    const int64_t                        stream_id_;
-    int64_t                              batch_epoch_ = 0;  // Batch Epoch ID: 0 = not assigned, >0 = batch-specific
+    int64_t                              batch_epoch_ = 0;
     int64_t                              begin_time_us_;
     int64_t                              last_pause_us_ = 0;
     int64_t                              pause_time_us_ = 0;
