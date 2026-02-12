@@ -25,6 +25,8 @@ def init_logger(logger_name: str, filename: str,log_path: str, backup_count: int
 
 
 class AccessLogger:
+    private_request_default = None
+    
     def __init__(self, log_path: str, backup_count: int, rank_id: Optional[int] = None, server_id: Optional[int] = None, async_mode: bool = True) -> None:
         init_logger(ACCESS_LOGGER_NAME, "access.log", log_path, backup_count, rank_id, server_id, async_mode)
         init_logger(QUERY_ACCESS_LOGGER_NAME, "query_access.log", log_path, backup_count, rank_id, server_id, async_mode)
@@ -35,9 +37,17 @@ class AccessLogger:
         self.server_id = server_id
         logging.info(f"AccessLogger created: async_mode={async_mode}, rank_id={rank_id}, server_id={server_id}")
 
-    @staticmethod
-    def is_private_request(request: Dict[str, Any]):
-        return request.get("private_request", False)
+    @classmethod
+    def is_private_request(cls, request: Dict[str, Any]):
+        if cls.private_request_default is None:
+            import os
+
+            from rtp_llm.server.server_args.util import str2bool
+
+            cls.private_request_default = str2bool(
+                os.environ.get("DISABLE_ACCESS_LOG", "0")
+            )
+        return request.get("private_request", cls.private_request_default)
 
     def log_access(self, request: Dict[str, Any], response: ResponseLog) -> None:
         request_log = RequestLog.from_request(request)
