@@ -414,7 +414,12 @@ std::vector<torch::Tensor> GenerateStream::multimodalDeepstackEmbeds() const {
 }
 
 int GenerateStream::multimodalFeaturesLength() const {
-    return multimodalFeatures().size() * currentBatchSize();
+    if (generate_input_->multimodal_features) {
+        auto& features = generate_input_->multimodal_features.value();
+        return (features.size() - reuse_mm_length_) * currentBatchSize();
+    } else {
+        return 0;
+    }
 }
 
 rtp_llm::BufferPtr GenerateStream::multimodalLocations() const {
@@ -426,7 +431,7 @@ rtp_llm::BufferPtr GenerateStream::multimodalLocations() const {
 }
 
 vector<vector<int>> GenerateStream::multimodalIntervals() const {
-    if (!generate_input_->mm_locs && !generate_input_->multimodal_features) {
+    if (!generate_input_->mm_locs || !generate_input_->multimodal_features) {
         return {};
     }
     vector<vector<int>> res;
