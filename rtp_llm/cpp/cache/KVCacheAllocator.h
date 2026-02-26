@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -68,13 +69,14 @@ public:
         return reserve_block_num_;
     }
 
-    void    regUserMr(size_t model_id);
-    int64_t getMrCostTimeMs() const;
-    size_t  freeBlocksNum() const;
-    size_t  availableBlocksNum() const;
-    size_t  availableTokensNum() const;
-    size_t  totalBlocksNum() const;
-    size_t  maxAvailableTokensNum() const;
+    void     regUserMr(size_t model_id);
+    int64_t  getMrCostTimeMs() const;
+    size_t   freeBlocksNum() const;
+    size_t   availableBlocksNum() const;
+    size_t   availableTokensNum() const;
+    size_t   totalBlocksNum() const;
+    size_t   maxAvailableTokensNum() const;
+    uint32_t convertToGlobalLayerId(size_t model_id, int local_layer_id) const;
 
 protected:
     virtual bool         doInit() = 0;
