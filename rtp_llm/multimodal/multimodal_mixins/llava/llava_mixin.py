@@ -496,10 +496,11 @@ class LlavaMixin(BaseMultiModalMixin):
 
     @classmethod
     def _get_mm_module(cls, mm_related_params: VitParameters, vit_config: VitConfig):
+        mm_part = LlavaImageEmbedding(mm_related_params, vit_config)
         return torch.nn.ModuleList(
             [
-                LlavaImageEmbedding(mm_related_params, vit_config).vision_tower,
-                LlavaImageEmbedding(mm_related_params, vit_config).mm_projector,
+                mm_part.vision_tower,
+                mm_part.mm_projector,
             ]
         )
 
