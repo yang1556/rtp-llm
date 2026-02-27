@@ -15,7 +15,13 @@ from rtp_llm.config.engine_config import EngineConfig
 from rtp_llm.config.py_config_modules import PyEnvConfigs
 from rtp_llm.model_factory import ModelFactory
 from rtp_llm.models_py.model_desc.module_base import GptModelBase
-from rtp_llm.ops.compute_ops import KVCache, PyModelInputs, get_scalar_type, init_device
+from rtp_llm.ops.compute_ops import (
+    CacheGroupType,
+    KVCache,
+    PyModelInputs,
+    get_scalar_type,
+    init_device,
+)
 from rtp_llm.tools.api.hf_model_helper import get_model_info_from_hf
 
 
@@ -26,6 +32,7 @@ class ModelBuildConfig:
     model_path: str
     max_seq_len: int = 4096
     tokens_per_block: int = 64
+    kernel_tokens_per_block: int = 64
     max_total_tokens: int = 4096
     hack_layer_num: int = 1
     device_reserve_memory_bytes: int = -536870912
@@ -46,6 +53,7 @@ class ModelBuildResult:
     kv_head_num: int = 0
     size_per_head: int = 0
     tokens_per_block: int = 0
+    kernel_tokens_per_block: int = 0
     engine_config: Optional[EngineConfig] = None
     hidden_size: int = 0  # from model_config (engine build path), for CUDA graph etc.
 
@@ -72,6 +80,9 @@ class CudaGraphTestModelBuilder:
         self.py_env_configs.model_args.max_seq_len = self.config.max_seq_len
         self.py_env_configs.kv_cache_config.seq_size_per_block = (
             self.config.tokens_per_block
+        )
+        self.py_env_configs.kv_cache_config.kernel_seq_size_per_block = (
+            self.config.kernel_tokens_per_block
         )
         self.py_env_configs.profiling_debug_logging_config.hack_layer_num = (
             self.config.hack_layer_num
@@ -189,9 +200,17 @@ class CudaGraphTestModelBuilder:
         result.kv_head_num = model_config.attn_config.kv_head_num
         result.size_per_head = model_config.attn_config.size_per_head
         result.tokens_per_block = model_config.attn_config.tokens_per_block
+        result.kernel_tokens_per_block = (
+            model_config.attn_config.kernel_tokens_per_block
+        )
+
+        result.kv_cache.seq_size_per_block = result.tokens_per_block
+        result.kv_cache.kernel_seq_size_per_block = result.kernel_tokens_per_block
+        result.kv_cache.num_kv_heads = result.kv_head_num
+        result.kv_cache.head_dim = result.size_per_head
 
         result.block_nums = math.ceil(
-            self.config.max_total_tokens / result.tokens_per_block
+            self.config.max_total_tokens / result.kernel_tokens_per_block
         )
         # since block_id start from 1, so we should add 1 in the corner case
         result.block_nums += 1
@@ -201,7 +220,7 @@ class CudaGraphTestModelBuilder:
             result.block_nums,
             2,
             result.kv_head_num,
-            result.tokens_per_block,
+            result.kernel_tokens_per_block,
             result.size_per_head,
         ]
 
@@ -211,8 +230,13 @@ class CudaGraphTestModelBuilder:
         kv_cache_total = torch.randn(
             kv_shape, dtype=result.compute_dtype, device=self.config.device
         )
-        # KVCache uses single kv_cache_base tensor with shape [..., 2, ...] for k and v
-        result.kv_cache.kv_cache_base = kv_cache_total
+
+        result.kv_cache.layer_attn_types = [
+            CacheGroupType.FULL for _ in range(result.layer_num)
+        ]
+        result.kv_cache.kv_cache_base_by_layer = [
+            kv_cache_total[i] for i in range(result.layer_num)
+        ]
 
 
 def profile_normal_forward(
