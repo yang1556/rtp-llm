@@ -121,6 +121,7 @@ class MLATest(TestCase):
         self.config.attn_config.v_head_dim = 128
         self.config.attn_config.q_lora_rank = 0
         self.config.attn_config.tokens_per_block = 64
+        self.config.attn_config.kernel_tokens_per_block = 64
         self.config.attn_config.softmax_extra_scale = 1.0
         self.config.attn_config.use_mla = True
         self.config.quant_config = None
@@ -148,6 +149,8 @@ class MLATest(TestCase):
         attn_inputs.input_lengths = sequence_lengths_t
         attn_inputs.kv_cache_block_id_host = kvcache_block_id
         attn_inputs.kv_cache_block_id_device = kvcache_block_id.to(device)
+        attn_inputs.kv_cache_kernel_block_id_host = kvcache_block_id
+        attn_inputs.kv_cache_kernel_block_id_device = kvcache_block_id.to(device)
 
         weights = {}
         weights[W.mla_fusedqkrope_no_lora_w] = torch.randn(

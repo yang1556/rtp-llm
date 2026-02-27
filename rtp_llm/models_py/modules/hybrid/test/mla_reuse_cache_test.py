@@ -23,7 +23,7 @@ from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashinfer_mla_wr
 )
 from rtp_llm.models_py.modules.hybrid.test.mla_attention_ref import attention_ref
 from rtp_llm.ops import ParallelismConfig, compute_ops
-from rtp_llm.ops.compute_ops import KVCache, PyAttentionInputs
+from rtp_llm.ops.compute_ops import LayerKVCache, PyAttentionInputs
 from rtp_llm.utils.model_weight import W
 
 
@@ -112,6 +112,7 @@ class MLATest(TestCase):
         self.config.attn_config.v_head_dim = 128
         self.config.attn_config.q_lora_rank = 0
         self.config.attn_config.tokens_per_block = 64
+        self.config.attn_config.kernel_tokens_per_block = 64
         self.config.attn_config.softmax_extra_scale = 1.0
         self.config.attn_config.use_mla = True
         self.config.attn_config.size_per_head = 192
@@ -143,6 +144,8 @@ class MLATest(TestCase):
         attn_inputs.input_lengths = input_lengths_t
         attn_inputs.kv_cache_block_id_host = kvcache_block_id
         attn_inputs.kv_cache_block_id_device = kvcache_block_id.to(device)
+        attn_inputs.kv_cache_kernel_block_id_host = kvcache_block_id
+        attn_inputs.kv_cache_kernel_block_id_device = kvcache_block_id.to(device)
 
         weights = self._create_weights(self.config, hidden_size)
         layer_weights: List[Dict[str, torch.Tensor]] = [weights]
@@ -191,7 +194,7 @@ class MLATest(TestCase):
             device=device,
         )
 
-        kv_cache: Optional[KVCache] = KVCache()
+        kv_cache: Optional[LayerKVCache] = LayerKVCache()
         kv_cache.kv_cache_base = cache
 
         k_cache, v_cache = torch.split(

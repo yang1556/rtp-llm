@@ -30,16 +30,16 @@ bool PagedAttnDecodeOp::support(torch_ext::PyAttentionInputs attn_inputs) {
 CKAttnPtr PagedAttnDecodeOp::prepare(torch_ext::PyAttentionInputs attn_inputs) {
     int batch_size = attn_inputs.sequence_lengths.size(0);
 
-    BufferPtr kv_cache_block_id_host, kv_cache_block_id_device;
-    if (attn_inputs.kv_cache_block_id_host.size(0)) {
-        kv_cache_block_id_host   = torchTensor2Buffer(attn_inputs.kv_cache_block_id_host);
-        kv_cache_block_id_device = torchTensor2Buffer(attn_inputs.kv_cache_block_id_device);
+    BufferPtr kv_cache_kernel_block_id_host, kv_cache_kernel_block_id_device;
+    if (attn_inputs.kv_cache_kernel_block_id_host.size(0)) {
+        kv_cache_kernel_block_id_host   = torchTensor2Buffer(attn_inputs.kv_cache_kernel_block_id_host);
+        kv_cache_kernel_block_id_device = torchTensor2Buffer(attn_inputs.kv_cache_kernel_block_id_device);
     }
 
     CKAttnPtr attn_params;
     bool      use_fmha_fp8 = false;
     auto      params       = device_->PrepareCKAttn(
-        attn_configs_, kv_cache_block_id_device, attn_inputs.sequence_lengths.size(0), use_fmha_fp8);
+        attn_configs_, kv_cache_kernel_block_id_device, attn_inputs.sequence_lengths.size(0), use_fmha_fp8);
 
     attn_params              = CKAttnPtr(params, (CKAttn*)params.get());
     attn_params->decode_plan = true;
@@ -54,9 +54,9 @@ CKAttnPtr PagedAttnDecodeOp::prepare(torch_ext::PyAttentionInputs attn_inputs) {
     return attn_params;
 }
 
-forward_param PagedAttnDecodeOp::forward(const torch::Tensor&              qkv,
-                                         std::optional<torch_ext::KVCache> kv_cache,
-                                         const CKAttnPtr&                  params) {
+forward_param PagedAttnDecodeOp::forward(const torch::Tensor&                   qkv,
+                                         std::optional<torch_ext::LayerKVCache> kv_cache,
+                                         const CKAttnPtr&                       params) {
     auto kv_block_array            = params->kv_block_array;
     kv_block_array.mPrimaryPoolPtr = kv_cache.value().kv_cache_base.data_ptr();
     if (kv_cache.value().kv_scale_base.defined() && kv_cache.value().kv_scale_base.numel()) {
