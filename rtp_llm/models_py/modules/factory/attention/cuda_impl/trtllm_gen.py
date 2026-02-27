@@ -10,7 +10,7 @@ from rtp_llm.ops import AttentionConfigs, FMHAType, ParallelismConfig
 from rtp_llm.ops.compute_ops import (
     FusedRopeKVCacheDecodeOp,
     FusedRopeKVCachePrefillOpQOut,
-    KVCache,
+    LayerKVCache,
     PyAttentionInputs,
 )
 
@@ -94,7 +94,7 @@ class FlashInferTRTLLMPrefillOp(object):
         self.scaling = self.head_dim**-0.5
         self.local_head_num = attn_configs.head_num
         self.local_head_kv_num = attn_configs.kv_head_num
-        self.seq_size_per_block = attn_configs.tokens_per_block
+        self.seq_size_per_block = attn_configs.kernel_tokens_per_block
         self.workspace_buffer = get_trt_workspace_buffer()
 
     def __del__(self):
@@ -105,7 +105,7 @@ class FlashInferTRTLLMPrefillOp(object):
         return (
             is_sm_100()
             and attention_inputs.is_prefill
-            and attention_inputs.kv_cache_block_id_device is not None
+            and attention_inputs.kv_cache_kernel_block_id_device is not None
         )
 
     def prepare(self, attention_inputs: PyAttentionInputs) -> FlashInferTRTLLMParams:
@@ -140,7 +140,7 @@ class FlashInferTRTLLMPrefillOp(object):
             .item(),
             seq_lens=sequence_lengths,
             input_lens=attention_inputs.input_lengths,
-            block_tables=attention_inputs.kv_cache_block_id_device,
+            block_tables=attention_inputs.kv_cache_kernel_block_id_device,
             cu_seqlens=attention_inputs.cu_seqlens,
             cu_kv_seqlens=cu_kv_seqlens,
         )
@@ -148,7 +148,7 @@ class FlashInferTRTLLMPrefillOp(object):
     def forward(
         self,
         q: torch.Tensor,
-        kv_cache: Optional[KVCache],
+        kv_cache: Optional[LayerKVCache],
         fmha_params: FlashInferTRTLLMParams,
     ) -> torch.Tensor:
         dtype = kv_cache.kv_cache_base.dtype
@@ -200,7 +200,7 @@ class FlashInferTRTLLMDecodeOp(object):
         self.head_dim = attn_configs.size_per_head
         self.head_num = attn_configs.head_num
         self.scaling = self.head_dim**-0.5
-        self.seq_size_per_block = attn_configs.tokens_per_block
+        self.seq_size_per_block = attn_configs.kernel_tokens_per_block
         self.local_head_num = attn_configs.head_num
         self.local_head_kv_num = attn_configs.kv_head_num
         self.workspace_buffer = get_trt_workspace_buffer()
@@ -239,7 +239,7 @@ class FlashInferTRTLLMDecodeOp(object):
                 batch_size=attention_inputs.sequence_lengths.size(0),
                 max_seq_len=attention_inputs.sequence_lengths.max().item() + 1,
                 seq_lens=sequence_lengths,
-                block_tables=attention_inputs.kv_cache_block_id_device,
+                block_tables=attention_inputs.kv_cache_kernel_block_id_device,
             )
         else:
             q_len = attention_inputs.input_lengths[0].item()
@@ -255,13 +255,13 @@ class FlashInferTRTLLMDecodeOp(object):
                 batch_size=attention_inputs.prefix_lengths.size(0),
                 max_seq_len=attention_inputs.prefix_lengths.max().item() + q_len,
                 seq_lens=sequence_lengths,
-                block_tables=attention_inputs.kv_cache_block_id_device,
+                block_tables=attention_inputs.kv_cache_kernel_block_id_device,
             )
 
     def forward(
         self,
         q: torch.Tensor,
-        kv_cache: Optional[KVCache],
+        kv_cache: Optional[LayerKVCache],
         fmha_params: FlashInferTRTLLMParams,
     ) -> torch.Tensor:
         dtype = kv_cache.kv_cache_base.dtype
@@ -336,7 +336,7 @@ class FlashInferTRTLLMPrefillImpl(FMHAImplBase):
     def forward(
         self,
         qkv: torch.Tensor,
-        kv_cache: Optional[KVCache],
+        kv_cache: Optional[LayerKVCache],
     ) -> torch.Tensor:
         # Apply RoPE and KV Cache processing
         if self.need_rope_kv_cache:
@@ -401,7 +401,7 @@ class FlashInferTRTLLMSpecDecodeImpl(FMHAImplBase):
     def forward(
         self,
         qkv: torch.Tensor,
-        kv_cache: Optional[KVCache],
+        kv_cache: Optional[LayerKVCache],
     ) -> torch.Tensor:
         # Apply RoPE and KV Cache processing
         if self.need_rope_kv_cache:
@@ -463,7 +463,7 @@ class FlashInferTRTLLMDecodeImpl(FMHAImplBase):
     def forward(
         self,
         qkv: torch.Tensor,
-        kv_cache: Optional[KVCache],
+        kv_cache: Optional[LayerKVCache],
     ) -> torch.Tensor:
         # Apply RoPE and KV Cache processing
         if self.need_rope_kv_cache:
