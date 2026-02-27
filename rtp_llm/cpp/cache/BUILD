@@ -11,6 +11,15 @@ cc_library(
 )
 
 cc_library(
+    name = "block_info",
+    hdrs = [
+        "BlockInfo.h",
+    ],
+    copts = copts(),
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "cache_types",
     hdrs = [
         "BufferTypes.h",
@@ -18,6 +27,7 @@ cc_library(
         "CacheConfig.h",
     ],
     deps = [
+        ":block_info",
         ":cache_group_type",
         ":batch_kv_cache_resource",
         "//rtp_llm/cpp/core:buffer",
@@ -27,7 +37,6 @@ cc_library(
     copts = copts(),
     visibility = ["//visibility:public"],
 )
-
 
 cc_library(
     name = "batch_kv_cache_resource",
@@ -47,7 +56,7 @@ cc_library(
     name = "cache_core",
     hdrs = glob([
         "*.h",
-    ], exclude = ["Types.h", "CacheConfig.h", "KVCacheResource.h", "BatchKVCacheResource.h", "KVCacheManager.h"]),
+    ], exclude = ["BlockInfo.h", "Types.h", "CacheConfig.h", "KVCacheResource.h", "BatchKVCacheResource.h", "KVCacheManager.h"]),
     srcs = glob([
         "*.cc",
     ], exclude = ["KVCacheResource.cc", "KVCacheManager.cc"]),
