@@ -18,6 +18,7 @@ public:
                       int64_t          max_context_batch_size,
                       int64_t          max_seq_len,
                       int64_t          tokens_per_block,
+                      int64_t          kernel_tokens_per_block,
                       int64_t          max_prefill_cuda_graph_len,
                       std::vector<int> prefill_capture_seq_lens,
                       int64_t          hidden_size) {
@@ -27,6 +28,7 @@ public:
         params.is_prefill_cuda_graph_mode   = true;
         params.max_seq_len                  = static_cast<int>(max_seq_len);
         params.tokens_per_block             = static_cast<int>(tokens_per_block);
+        params.kernel_tokens_per_block      = static_cast<int>(kernel_tokens_per_block);
         params.num_tokens_per_bs            = static_cast<int>(max_seq_len);
         params.max_context_batch_size       = static_cast<size_t>(max_context_batch_size);
         params.hidden_size                  = static_cast<size_t>(hidden_size);
@@ -43,6 +45,7 @@ public:
                      int64_t          hidden_size,
                      int64_t          max_seq_len,
                      int64_t          tokens_per_block,
+                     int64_t          kernel_tokens_per_block,
                      std::vector<int> decode_capture_batch_sizes) {
         reset_runner();
         GraphParams params;
@@ -50,6 +53,7 @@ public:
         params.is_prefill_cuda_graph_mode   = false;
         params.max_seq_len                  = static_cast<int>(max_seq_len);
         params.tokens_per_block             = static_cast<int>(tokens_per_block);
+        params.kernel_tokens_per_block      = static_cast<int>(kernel_tokens_per_block);
         params.num_tokens_per_bs            = 1;
         params.hidden_size                  = static_cast<size_t>(hidden_size);
         params.model_data_type              = c10::ScalarType::Half;
@@ -101,6 +105,7 @@ PYBIND11_MODULE(libtest_cuda_graph_runner, m) {
              py::arg("max_context_batch_size"),
              py::arg("max_seq_len"),
              py::arg("tokens_per_block"),
+             py::arg("kernel_tokens_per_block"),
              py::arg("max_prefill_cuda_graph_len"),
              py::arg("prefill_capture_seq_lens"),
              py::arg("hidden_size"))
@@ -110,6 +115,7 @@ PYBIND11_MODULE(libtest_cuda_graph_runner, m) {
              py::arg("hidden_size"),
              py::arg("max_seq_len"),
              py::arg("tokens_per_block"),
+             py::arg("kernel_tokens_per_block"),
              py::arg("decode_capture_batch_sizes"))
         .def("canRun", &CudaGraphTestRunner::canRun)
         .def("forward", &CudaGraphTestRunner::forward)

@@ -19,7 +19,7 @@ from rtp_llm.models_py.modules.factory.attention.cuda_impl.kv_cache_write_op imp
 from rtp_llm.ops import AttentionConfigs, RopeStyle
 from rtp_llm.ops.compute_ops import (
     FusedRopeKVCachePrefillOpQOut,
-    KVCache,
+    LayerKVCache,
     PyAttentionInputs,
     get_typemeta,
     init_device,
@@ -107,6 +107,7 @@ def create_test_attn_config(
     config.kv_head_num = kv_head_num
     config.size_per_head = size_per_head
     config.tokens_per_block = tokens_per_block
+    config.kernel_tokens_per_block = tokens_per_block
     config.rope_config.style = RopeStyle.Base
     config.rope_config.dim = size_per_head
     config.rope_config.base = 10000
@@ -255,7 +256,8 @@ class TestMhaRotaryEmbeddingOp(unittest.TestCase):
             device=self.device,
             dtype=torch.float16,
         )
-        kv_cache = KVCache()
+
+        kv_cache = LayerKVCache()
         kv_cache.kv_cache_base = kv_cache_base
 
         # Create position IDs (crucial: both implementations should use the same positions)
@@ -358,12 +360,14 @@ class TestMhaRotaryEmbeddingOp(unittest.TestCase):
         kv_cache_block_id = kv_page_indices.unsqueeze(0).cpu()  # [1, num_pages]
         attn_inputs.kv_cache_block_id_host = kv_cache_block_id
         attn_inputs.kv_cache_block_id_device = kv_cache_block_id.to(self.device)
+        attn_inputs.kv_cache_kernel_block_id_host = kv_cache_block_id
+        attn_inputs.kv_cache_kernel_block_id_device = kv_cache_block_id.to(self.device)
 
         # Prepare params
         trt_params = fused_rope_op.prepare(attn_inputs)
 
         # Reset KV cache for fair comparison
-        kv_cache_cpp = KVCache()
+        kv_cache_cpp = LayerKVCache()
         kv_cache_cpp.kv_cache_base = torch.zeros_like(kv_cache_base)
 
         # Run C++ implementation
@@ -401,7 +405,7 @@ class TestMhaRotaryEmbeddingOp(unittest.TestCase):
         mha_rope_op.set_params(rope_params)
 
         # Reset KV cache for fair comparison
-        kv_cache = KVCache()
+        kv_cache = LayerKVCache()
         kv_cache.kv_cache_base = torch.zeros_like(kv_cache_base)
 
         # Create KV cache write op
