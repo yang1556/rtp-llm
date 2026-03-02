@@ -97,14 +97,16 @@ BeamSearchOutput CudaDevice::sampleBeamSearch(const BeamSearchParams& params) {
     // set BeamHypotheses
     tensorrt_llm::kernels::BeamHypotheses BH;
     // basic scalar
-    BH.bVBWS         = config.mVBWS;
-    BH.nMaxBatchSize = batch_size;
-    BH.nBatchSize    = batch_size;
-    BH.nBeamWidthIn  = beam_width_in;
-    BH.nBeamWidthOut = beam_width_out;
-    BH.nMaxSeqLen    = max_seq_len;
-    BH.nVocabSize    = vocab_size;
-    BH.nVPart        = config.mVPart;
+    BH.bVBWS          = config.mVBWS;
+    BH.nMaxBatchSize  = batch_size;
+    BH.nBatchSize     = batch_size;
+    BH.nBeamWidthIn   = beam_width_in;
+    BH.nBeamWidthOut  = beam_width_out;
+    BH.nMaxSeqLen     = max_seq_len;
+    BH.nVocabSize     = vocab_size;
+    BH.nTrueVocabSize = params.true_vocab_size;
+    BH.sparseIdx      = params.sparse_idx.data<int>();
+    BH.nVPart         = config.mVPart;
     // buffer size
     BH.nByteMaxSharedMemoryPerBlock = config.mByteMaxSharedMemoryPerBlock;
     BH.nByteSharedMemoryStage1      = config.mByteSharedMemoryStage1;
@@ -130,7 +132,6 @@ BeamSearchOutput CudaDevice::sampleBeamSearch(const BeamSearchParams& params) {
                 static_cast<T*>(log_softmax_logits_tsr.data_ptr()), nullptr, workspace->data(), BH, stream_);
         });
     });
-
     check_cuda_error();
 
     return BeamSearchOutput({std::move(token_ids_out),

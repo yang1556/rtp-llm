@@ -57,6 +57,7 @@ struct BeamHypotheses
     size_t nBeamWidthOut{0};                // Scalar value of current output beam width
     size_t nMaxSeqLen{0};                   //
     size_t nVocabSize{0};                   // Vocab Size Padded
+    size_t nTrueVocabSize{0};               // True Vocab Size Padded
     size_t nVPart{0};                       // Count of vocab_size_padded divided
     size_t nByteMaxSharedMemoryPerBlock{0}; // Device information
     size_t nByteSharedMemoryStage1{0};      // Dynamic shared memory size of stage 1
@@ -77,6 +78,7 @@ struct BeamHypotheses
     int const* endIds{nullptr};                     // [BS, BMI]         %% self.end_ids
     float const* cumLogProbsIn{nullptr};            // [BS, BMI]         %% self.cum_log_probs
     runtime::SizeType32 const* batchSlots{nullptr}; // [BS]
+    int const* sparseIdx{nullptr};                  // [BS, SparseVocabSize]
 
     // Pointers for output
     int* tokenIdsOut{nullptr};                      // [BS, BMO, MSL]    %%
@@ -147,6 +149,8 @@ __global__ void addCumLogProbs(T* __restrict pStage1Probs, float const* __restri
 
 __global__ void gatherId(int const* __restrict pStage1Id, int* __restrict pStage2Id, size_t const nBS,
     size_t const nBMIn, size_t const nBMOut, size_t const nV);
+
+__global__ void gatherSparseId(int const* __restrict vocabIdx, int* __restrict pStage2Id, size_t sparseVocabSize, size_t topSize, size_t nv);
 
 void invokePopulateTokenIds(int* tokenIdsOut, int const* tokenIdsIn, int const* sequenceLengthsOut, int const* parentIdsPtr, int const* outputIdsPtr, 
     size_t const batchSize, size_t const maxSeqLen, size_t const beamWidthOut, size_t const beamWidthIn, 

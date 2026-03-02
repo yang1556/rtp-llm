@@ -52,6 +52,16 @@ void TreeLogitsProcessor::process(const SamplerInputs& inputs, size_t start_idx,
         if (inputs.sampler_mask_params != nullptr) {
             inputs.sampler_mask_params->addWeightParam(weight_logits_params);
         }
+        if (inputs.sparse_index != nullptr) {
+            SparseLogitsParams sparse_logits_params;
+            sparse_logits_params.logits        = batch_logits;
+            sparse_logits_params.batch_indices = weight_logits_params.batch_indices;
+            sparse_logits_params.vocab_indices = weight_logits_params.vocab_indices;
+            sparse_logits_params.sparse_index  = inputs.sparse_index->slice(start_idx, batch_size);
+            sparse_logits_params.sparse_logits = inputs.sparse_logits->slice(start_idx, batch_size);
+            sparseLogits(sparse_logits_params);
+            inputs.is_sparse_logits = true;
+        }
     } else {
         if (is_sparse_mask) {
             auto sparse_mask_logits_params =

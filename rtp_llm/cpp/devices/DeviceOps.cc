@@ -320,6 +320,10 @@ void DeviceOps::finishedMaskLogits(const FinishedMaskParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
 
+void DeviceOps::sparseLogits(SparseLogitsParams& params) {
+    throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+}
+
 void DeviceOps::perfRangePush(const std::string& name) const {}
 
 void DeviceOps::perfRangePop() const {}

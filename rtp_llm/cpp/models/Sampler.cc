@@ -132,7 +132,6 @@ SamplerOutput Sampler::forward(const SamplerInputs& inputs) {
             RTP_LLM_LOG_DEBUG("current_beam_batch is %d", beam_batch_size);
             RTP_LLM_CHECK_WITH_INFO((batch_size_in % cur_num_beams_in == 0),
                                     "sample_batch_size[%d] must devide by current_num_beams_in[%d]");
-
             const size_t vocab_size  = inputs.logits->shape()[1];
             const size_t max_seq_len = inputs.token_ids->shape()[1];
 
@@ -152,12 +151,36 @@ SamplerOutput Sampler::forward(const SamplerInputs& inputs) {
             auto sequence_lengths_device = device_->clone({sequence_lengths, AllocationType::DEVICE});
             auto cum_log_probs_in_device = device_->clone({cum_log_probs_in, AllocationType::DEVICE});
 
-            auto output = device_->sampleBeamSearch({*logits_device,
-                                                     token_ids_in_device,
-                                                     input_lengths_device,
-                                                     sequence_lengths_device,
-                                                     cum_log_probs_in_device,
-                                                     cur_num_beams_out});
+            BeamSearchOutput output;
+            if (inputs.is_sparse_logits) {
+                auto         sparse_logits     = inputs.sparse_logits->view(from_batch_idx_in, batch_size_in);
+                const size_t sparse_vocab_size = inputs.sparse_logits->shape()[1];
+                SCOPED_UPDATE_BUFFER_SHAPE(sparse_logits,
+                                           {beam_batch_size, (size_t)cur_num_beams_in, sparse_vocab_size});
+                auto sparse_logits_device = device_->clone({sparse_logits, AllocationType::DEVICE});
+
+                auto sparse_index = inputs.sparse_index->view(from_batch_idx_in, batch_size_in);
+                SCOPED_UPDATE_BUFFER_SHAPE(sparse_index,
+                                           {beam_batch_size, (size_t)cur_num_beams_in, sparse_vocab_size});
+                auto sparse_index_device = device_->clone({sparse_index, AllocationType::DEVICE});
+                output                   = device_->sampleBeamSearch({*sparse_logits_device,
+                                                                      token_ids_in_device,
+                                                                      input_lengths_device,
+                                                                      sequence_lengths_device,
+                                                                      cum_log_probs_in_device,
+                                                                      cur_num_beams_out,
+                                                                      vocab_size,
+                                                                      *sparse_index_device});
+            } else {
+                output = device_->sampleBeamSearch({*logits_device,
+                                                    token_ids_in_device,
+                                                    input_lengths_device,
+                                                    sequence_lengths_device,
+                                                    cum_log_probs_in_device,
+                                                    cur_num_beams_out,
+                                                    vocab_size,
+                                                    *inputs.sparse_index});
+            }
 
             device_->copy({token_ids_out, *output.token_ids});
             device_->copy({cum_log_probs_out, *output.cum_log_probs});

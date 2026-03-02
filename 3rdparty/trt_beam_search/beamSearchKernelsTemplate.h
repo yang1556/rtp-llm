@@ -212,7 +212,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void beamStage3Kernel(
     size_t const nBMIn{bh.nBeamWidthIn};
     size_t const nBMOut{bh.nBeamWidthOut};
     size_t const nMSL{bh.nMaxSeqLen};
-    size_t const nV{bh.nVocabSize};
+    size_t const nV{bh.nTrueVocabSize};
     float const diversityRate{bh.diversityRates == nullptr ? kBeamSearchDiversity : bh.diversityRates[slot]};
     float const lengthPenalty{bh.lengthPenalties == nullptr ? kLengthPenalty : bh.lengthPenalties[slot]};
     int const earlyStopping{bh.earlyStoppings == nullptr ? kEarlyStopping : bh.earlyStoppings[slot]};
@@ -547,6 +547,31 @@ __launch_bounds__(BLOCK_SIZE) __global__ void beamStage3Kernel(
     }
 }
 
+template <typename T>
+inline void fuyu_print(const T* src, const std::string& name, size_t batch_size, size_t num) {
+    // 打印 pStage1LogProbs (前10个元素)
+    size_t print_size = batch_size * num;
+    if (src == nullptr) {
+        std::cout<<"FUYU "<<name<<" is nullptr"<<std::endl;
+        return;
+    }
+    T* dst = new T[print_size];
+    cudaMemcpy(dst, src, print_size * sizeof(T), cudaMemcpyDeviceToHost);
+    std::cout<<"FUYU "<<name<<" print "<<batch_size<<" * "<<num<<" = "<<print_size<<" elements: "<<std::endl;
+    for (size_t i = 0; i < print_size; ++i) {
+        if constexpr (std::is_same_v<T, __half>) {
+            std::cout<<__half2float(dst[i])<<" ";
+        } else {
+            std::cout<<dst[i]<<" ";
+        }
+        if (num > 1 && i != 0 && (i+1) % num == 0) {
+            std::cout<<std::endl;
+        }
+    }
+    delete [] dst;
+    std::cout<<std::endl;
+}
+
 template <typename T, int PBM, bool IS_V2>
 void beamSearchKernelLauncher(
     T const* logProbs, T const* bias, void* workspace, BeamHypotheses& bh, cudaStream_t stream)
@@ -672,20 +697,37 @@ void beamSearchKernelLauncher(
         // Stage 1
         invokeTopkLastDim<T>(nBS * nBMIn, nV, nBMOut * 2, true, logProbs, pStage1LogProbs, pStage1Ids, pTopK, stream);
         check_cuda_error();
+        
+        // fuyu_print(pStage1LogProbs, "pStage1LogProbs", nBS * nBMIn, nBMOut * 2);
+        // fuyu_print(pStage1Ids, "pStage1Ids", nBS * nBMIn,  nBMOut * 2);
+        // fuyu_print(bh.cumLogProbsIn, "bh.cumLogProbsIn", nBS * nBMIn, 1);
+        // // fuyu_print(bh.finished, "bh.finished", nBS * nBMOut);
+        // fuyu_print(bh.endIds, "bh.endIds", nBS * nBMIn, 1);
+        // fuyu_print(bh.diversityRates, "bh.diversityRates", nBS, 1);
+        // fuyu_print(bh.batchSlots, "bh.batchSlots", nBS, 1);
 
         int nThread = std::min(roundUp(nBMIn * nBMOut * 2, 32), MAX_BLOCK_SIZE);
         addCumLogProbs<<<nBS, nThread, 0, stream>>>(pStage1LogProbs, bh.cumLogProbsIn, bh.finished, bh.endIds,
             bh.diversityRates, bh.batchSlots, nBS, nBMIn, nBMOut);
         check_cuda_error();
+        // fuyu_print(pStage1LogProbs, "pStage1LogProbs after add", nBS * nBMIn, nBMOut * 2);
 
         // Stage 2
         invokeTopkLastDim<T>(
             nBS, nBMIn * nBMOut * 2, nBMOut * 2, true, pStage1LogProbs, pStage2LogProbs, pStage2Ids, pTopK, stream);
         check_cuda_error();
+        // fuyu_print(pStage2LogProbs, "pStage2LogProbs", nBS, nBMOut * 2);
+        // fuyu_print(pStage2Ids, "pStage2Ids", nBS,  nBMOut * 2);
 
         nThread = std::min(roundUp(nBMOut * 2, 32), MAX_BLOCK_SIZE);
         gatherId<<<nBS, nThread, 0, stream>>>(pStage1Ids, pStage2Ids, nBS, nBMIn, nBMOut, nV);
         check_cuda_error();
+        // fuyu_print(pStage2Ids, "pStage2Ids after gather", nBS,  nBMOut * 2);
+        if (bh.nTrueVocabSize > nV) {
+            // fuyu_print(bh.sparseIdx, "bh.sparseIdx ", nBS* nBMIn,  nV);
+            gatherSparseId<<<nBS, nThread, 0, stream>>>(bh.sparseIdx, pStage2Ids, nV, nBMOut * 2, bh.nTrueVocabSize);
+            // fuyu_print(pStage2Ids, "pStage2Ids after sparse gather", nBS,  nBMOut * 2);
+        }
     }
     else // V1
     {
@@ -780,7 +822,7 @@ void beamSearchKernelLauncher(
 
 #define INSTANTIATE_BEAM_SEARCH(T, PBM, IS_V2)                                                                         \
     template void beamSearchKernelLauncher<T, PBM, IS_V2>(                                                             \
-        T const* logProbs, T const* bias, void* workspace, BeamHypotheses& bh, cudaStream_t stream);
+        T const* logProbs, T const* bias, void* workspace, BeamHypotheses& bh, cudaStream_t stream);                   
 
 } // namespace kernels
 } // namespace tensorrt_llm

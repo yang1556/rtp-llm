@@ -211,6 +211,7 @@ public:
     void sparseMaskLogits(SparseMaskLogitsParams& params) override;
     void weightLogits(WeightMaskLogitsParams& params) override;
     void finishedMaskLogits(const FinishedMaskParams& params) override;
+    void sparseLogits(SparseLogitsParams& params) override;
 
     void perfRangePush(const std::string& name) const override;
     void perfRangePop() const override;

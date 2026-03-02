@@ -46,7 +46,12 @@ public:
     }
 
 public:
-    rtp_llm::BufferPtr         logits;         // shape: [batch_size, vocab_size]
+    rtp_llm::BufferPtr logits;  // shape: [batch_size, vocab_size]
+
+    rtp_llm::BufferPtr sparse_logits;  // shape: [batch_size, max_next_size] extract valid value from logits
+    rtp_llm::BufferPtr sparse_index;   // shape: [batch_size, max_next_size] record the index of valid value
+    mutable bool       is_sparse_logits = false;
+
     mutable rtp_llm::BufferPtr token_ids;      // shape: [batch_size, max_length]
     rtp_llm::BufferPtr         input_lengths;  // shape: [batch_size]
     // shape: [decoder_batch_size]
@@ -73,6 +78,8 @@ public:
     mutable rtp_llm::BufferPtr                 cum_log_probs;  // shape: [batch_size]
     mutable rtp_llm::BufferPtr                 all_probs;      // shape: [batch_size, vocab_size]
     mutable std::shared_ptr<SamplerMaskParams> sampler_mask_params;
+
+    static const size_t SPARSE_VOCAB_SIZE = 6400;
 
     std::vector<at::Generator> generator;
 };

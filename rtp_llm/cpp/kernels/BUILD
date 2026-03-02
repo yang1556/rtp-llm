@@ -331,6 +331,7 @@ cc_library(
         "mask_logits.cu",
         "sparse_mask_logits.cu",
         "weight_logits.cu",
+        "sparse_logits.cu",
         "finished_mask_logits.cu",
     ],
     hdrs = [
@@ -339,6 +340,7 @@ cc_library(
         "mask_logits.h",
         "sparse_mask_logits.h",
         "weight_logits.h",
+        "sparse_logits.h",
         "finished_mask_logits.h",
         "logits_util.h",
         "penalty_types.h",

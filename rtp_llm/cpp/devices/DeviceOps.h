@@ -45,6 +45,7 @@ public:
     virtual void              sparseMaskLogits(SparseMaskLogitsParams& params);
     virtual void              weightLogits(WeightMaskLogitsParams& params);
     virtual void              finishedMaskLogits(const FinishedMaskParams& params);
+    virtual void              sparseLogits(SparseLogitsParams& params);
 
     // QKV ops
     virtual BufferPtr mhaQKVGemm(const AttentionLayerParams& params);

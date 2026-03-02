@@ -16,6 +16,7 @@
 #include "rtp_llm/cpp/kernels/weight_logits.h"
 #include "rtp_llm/cpp/kernels/sparse_mask_logits.h"
 #include "rtp_llm/cpp/kernels/finished_mask_logits.h"
+#include "rtp_llm/cpp/kernels/sparse_logits.h"
 #include "rtp_llm/cpp/config/ConfigModules.h"
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
@@ -812,6 +813,54 @@ void CudaDevice::finishedMaskLogits(const FinishedMaskParams& params) {
                                                 vocab_size,
                                                 end_token_id,
                                                 stream_);
+    } else {
+        throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+    }
+}
+
+void CudaDevice::sparseLogits(SparseLogitsParams& params) {
+    Buffer& logits        = *params.logits;
+    Buffer& sparse_logits = *params.sparse_logits;
+    Buffer& sparse_index  = *params.sparse_index;
+    Buffer& vocab_index   = *params.vocab_indices;
+    Buffer& batch_index   = *params.batch_indices;
+    size_t  batch_size    = logits.shape()[0];
+    size_t  vocab_size    = logits.shape()[1];
+    size_t  weight_size   = vocab_index.shape()[0];
+    size_t  sparse_vs     = sparse_logits.shape()[1];
+    if (logits.type() == DataType::TYPE_FP32) {
+        invokeSparseLogits<float>((float*)(logits.data()),
+                                  (float*)(sparse_logits.data()),
+                                  (int*)sparse_index.data(),
+                                  (const int*)batch_index.data(),
+                                  (const int*)vocab_index.data(),
+                                  batch_size,
+                                  vocab_size,
+                                  weight_size,
+                                  sparse_vs,
+                                  stream_);
+    } else if (logits.type() == DataType::TYPE_FP16) {
+        invokeSparseLogits<half>((half*)(logits.data()),
+                                 (half*)(sparse_logits.data()),
+                                 (int*)sparse_index.data(),
+                                 (const int*)batch_index.data(),
+                                 (const int*)vocab_index.data(),
+                                 batch_size,
+                                 vocab_size,
+                                 weight_size,
+                                 sparse_vs,
+                                 stream_);
+    } else if (logits.type() == DataType::TYPE_BF16) {
+        invokeSparseLogits<__nv_bfloat16>((__nv_bfloat16*)(logits.data()),
+                                          (__nv_bfloat16*)(sparse_logits.data()),
+                                          (int*)sparse_index.data(),
+                                          (const int*)batch_index.data(),
+                                          (const int*)vocab_index.data(),
+                                          batch_size,
+                                          vocab_size,
+                                          weight_size,
+                                          sparse_vs,
+                                          stream_);
     } else {
         throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
     }

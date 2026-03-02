@@ -35,6 +35,7 @@ public:
                                                const std::vector<const TokenWeights*>& batch_candidate_token_weights,
                                                const rtp_llm::BufferPtr&               batch_logits);
     void                   finishedMaskLogits(const FinishedMaskParams& params);
+    void                   sparseLogits(SparseLogitsParams& params);
 
 protected:
     rtp_llm::DeviceBase*     device_;

@@ -57,6 +57,11 @@ public:
         sampler_inputs.logits_processor_states_ptr = state_ptr;
         sampler_inputs.logits                      = device_->allocateBuffer(
             {config.logits_type, {config.batch_size, config.vocab_size}, rtp_llm::AllocationType::DEVICE}, {});
+        size_t sparse_size           = std::min(SamplerInputs::SPARSE_VOCAB_SIZE, config.vocab_size);
+        sampler_inputs.sparse_logits = device_->allocateBuffer(
+            {config.logits_type, {config.batch_size, sparse_size}, rtp_llm::AllocationType::DEVICE}, {});
+        sampler_inputs.sparse_index = device_->allocateBuffer(
+            {rtp_llm::DataType::TYPE_INT32, {config.batch_size, sparse_size}, rtp_llm::AllocationType::DEVICE}, {});
         sampler_inputs.sequence_lengths = device_->allocateBuffer(
             {rtp_llm::DataType::TYPE_INT32, {config.batch_size}, rtp_llm::AllocationType::HOST}, {});
         sampler_inputs.input_lengths = device_->allocateBuffer(
@@ -419,6 +424,23 @@ TEST_F(TreeLogitsProcessorTest, testWeightProcess) {
     ASSERT_FLOAT_EQ(logits_hosts[64008], 0.2f);
     ASSERT_FLOAT_EQ(logits_hosts[64011], 0.3f);
     ASSERT_TRUE(logits_hosts[64001] == -INFINITY);
+
+    for (size_t i = 0; i < batch_size; i++) {
+        auto sparse_logits       = sampler_inputs.sparse_logits->index(i);
+        auto sparse_logits_hosts = getBufferValues<float>(*sparse_logits);
+
+        auto sparse_index       = sampler_inputs.sparse_index->index(i);
+        auto sparse_index_hosts = getBufferValues<int>(*sparse_index);
+        std::cout << "sparse_logits_hosts: " << i << std::endl;
+        int sparse_size = std::min(SamplerInputs::SPARSE_VOCAB_SIZE, vocab_size);
+        for (size_t j = 0; j < sparse_size; j++) {
+            if (sparse_logits_hosts[j] != -INFINITY) {
+                std::cout << sparse_index_hosts[j] << ":" << sparse_logits_hosts[j] << " ";
+            }
+        }
+    }
+
+    ASSERT_TRUE(logits_hosts[64001] != -INFINITY);
 }
 
 #undef EXPECT_SIMILAR

@@ -931,7 +931,9 @@ struct BeamSearchParams {
     BufferPtr     input_lengths;     // [batch_size, num_beams_in]
     BufferPtr     sequence_lengths;  // [batch_size, num_beams_in]
     BufferPtr     cum_log_probs;     // [batch_size, num_beams_in]
-    size_t        num_beams_out = 0;
+    size_t        num_beams_out   = 0;
+    size_t        true_vocab_size = 0;
+    const Buffer& sparse_idx;
 };
 
 struct BeamSearchOutput {
@@ -1287,6 +1289,14 @@ struct WeightMaskLogitsParams {
     std::vector<int>   h_batch_indices;  // batch id
     std::vector<int>   h_vocab_indices;  // vocab index
     std::vector<float> h_vocab_weight;   // weight value
+};
+
+struct SparseLogitsParams {
+    rtp_llm::BufferPtr logits;
+    rtp_llm::BufferPtr batch_indices;
+    rtp_llm::BufferPtr vocab_indices;
+    rtp_llm::BufferPtr sparse_logits;
+    rtp_llm::BufferPtr sparse_index;
 };
 
 struct SparseMaskLogitsParams {

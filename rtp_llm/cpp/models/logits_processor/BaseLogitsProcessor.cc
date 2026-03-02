@@ -160,4 +160,9 @@ void BaseLogitsProcessor::finishedMaskLogits(const FinishedMaskParams& params) {
     device_->finishedMaskLogits(params);
 }
 
+void BaseLogitsProcessor::sparseLogits(SparseLogitsParams& params) {
+    RTP_LLM_CHECK(params.sparse_logits->shape().size() == 2);
+    device_->sparseLogits(params);
+}
+
 }  // namespace rtp_llm

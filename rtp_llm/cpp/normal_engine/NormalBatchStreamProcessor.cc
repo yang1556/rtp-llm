@@ -359,6 +359,17 @@ absl::StatusOr<SamplerInputs> NormalBatchStreamProcessor::gatherSamplerInput(
         sampler_inputs.logits = model_output.logits;
     }
 
+    sampler_inputs.sparse_logits =
+        device_->allocateBuffer({sampler_inputs.logits->type(),
+                                 {sampler_inputs.logits->shape()[0], SamplerInputs::SPARSE_VOCAB_SIZE},
+                                 rtp_llm::AllocationType::DEVICE},
+                                {});
+    sampler_inputs.sparse_index =
+        device_->allocateBuffer({DataType::TYPE_INT32,
+                                 {sampler_inputs.logits->shape()[0], SamplerInputs::SPARSE_VOCAB_SIZE},
+                                 rtp_llm::AllocationType::DEVICE},
+                                {});
+
     RTP_LLM_LOG_DEBUG("sampler inputs logits [%s]",
                       device_->clone({*sampler_inputs.logits, rtp_llm::AllocationType::HOST})
                           ->debugStringWithData<float>(10)

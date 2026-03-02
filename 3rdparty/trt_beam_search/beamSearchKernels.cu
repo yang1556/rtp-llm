@@ -236,6 +236,22 @@ __global__ void gatherId(int const* __restrict pStage1Id, int* __restrict pStage
     return;
 }
 
+__global__ void gatherSparseId(int const* __restrict vocabIdx, int* __restrict pStage2Id, size_t sparseVocabSize, size_t topSize, size_t nv)
+{
+    int bid = blockIdx.x; // Index of request in batch
+    int j = threadIdx.x;
+    if (j < topSize) {
+        // vocabIdx
+        int index = bid * topSize + j;
+        int const vIdx = pStage2Id[index];
+        int origBid = vIdx/sparseVocabSize;
+        int origVocabIdx = vocabIdx[vIdx];
+        printf("gatherSparseId bid:%d,vIdx:%d, index:%d, origBid:%d, origVocabIdx:%d \n", bid, vIdx, index, origBid, origVocabIdx);
+        pStage2Id[index] = origVocabIdx + origBid * nv;
+    }
+    return;
+}
+
 __global__ void populateTokenIds(int* tokenIdsOut, int const* tokenIdsIn, int const* sequenceLengthsOut, int const* parentIdsPtr, int const* outputIdsPtr, 
                                  size_t const batchSize, size_t const maxSeqLen, size_t const beamWidthOut, size_t const beamWidthIn) {
     int const totalBeamNumOut = batchSize * beamWidthOut;
@@ -394,6 +410,40 @@ void BeamHypotheses::print()
 
 // template void printLogProbs<float>(float const* x, int const nBS, int const nBMIn, int const nBM, int const nV);
 // template void printLogProbs<half>(half const* x, int const nBS, int const nBMIn, int const nBM, int const nV);
+
+// Implementation of fuyu_print helper function
+template <typename T>
+void fuyu_print(const T* src, const std::string& name, size_t print_size) {
+    if (src == nullptr) {
+        std::cout<<"FUYU "<<name<<" is nullptr"<<std::endl;
+        return;
+    }
+    T* dst = new T[print_size];
+    cudaMemcpy(dst, src, print_size * sizeof(T), cudaMemcpyDeviceToHost);
+    std::cout<<"FUYU "<<name<<" print "<<print_size<<" elements: ";
+    for (size_t i = 0; i < print_size; ++i) {
+        std::cout<<dst[i]<<" ";
+    }
+    delete [] dst;
+    std::cout<<std::endl;
+}
+
+// Explicit specialization for __half
+template <>
+void fuyu_print(const __half* src, const std::string& name, size_t print_size) {
+    if (src == nullptr) {
+        std::cout<<"FUYU "<<name<<" is nullptr"<<std::endl;
+        return;
+    }
+    __half* dst = new __half[print_size];
+    cudaMemcpy(dst, src, print_size * 2, cudaMemcpyDeviceToHost);
+    std::cout<<"FUYU "<<name<<" print "<<print_size<<" elements: ";
+    for (size_t i = 0; i < print_size; ++i) {
+        std::cout<<__half2float(dst[i])<<" ";
+    }
+    delete [] dst;
+    std::cout<<std::endl;
+}
 
 } // namespace kernels
 } // namespace tensorrt_llm
