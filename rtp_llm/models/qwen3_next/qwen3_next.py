@@ -5,7 +5,11 @@ from typing import Any, Dict, List
 from rtp_llm.config.model_config import ModelConfig
 from rtp_llm.model_factory_register import register_model
 from rtp_llm.models.base_model import BaseModel
-from rtp_llm.models.qwen3_next.qwen3_next_weight import Qwen3NextWeight, Qwen35MoeWeight
+from rtp_llm.models.qwen3_next.qwen3_next_weight import (
+    Qwen3NextWeight,
+    Qwen35DenseWeight,
+    Qwen35MoeWeight,
+)
 from rtp_llm.ops import HybridAttentionType
 
 
@@ -181,5 +185,16 @@ class Qwen35Moe(Qwen3NextBase):
         # config.mm_model_config.mm_position_ids_style = 2
 
 
+class Qwen35Dense(Qwen35Moe):
+    @staticmethod
+    def get_weight_cls():
+        return Qwen35DenseWeight
+
+    @classmethod
+    def _parse_moe_config(cls, config_json: Dict[str, Any], config: ModelConfig):
+        config.inter_size = config_json["intermediate_size"]
+
+
 register_model("qwen3_next", Qwen3Next, ["Qwen3NextForCausalLM"])
 register_model("qwen35_moe", Qwen35Moe, ["Qwen3_5MoeForConditionalGeneration"])
+register_model("qwen35_dense", Qwen35Dense, ["Qwen3_5ForConditionalGeneration"])
