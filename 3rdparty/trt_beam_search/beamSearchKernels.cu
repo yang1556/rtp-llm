@@ -246,7 +246,7 @@ __global__ void gatherSparseId(int const* __restrict vocabIdx, int* __restrict p
         int const vIdx = pStage2Id[index];
         int origBid = vIdx/sparseVocabSize;
         int origVocabIdx = vocabIdx[vIdx];
-        printf("gatherSparseId bid:%d,vIdx:%d, index:%d, origBid:%d, origVocabIdx:%d \n", bid, vIdx, index, origBid, origVocabIdx);
+        //printf("gatherSparseId bid:%d,vIdx:%d, index:%d, origBid:%d, origVocabIdx:%d \n", bid, vIdx, index, origBid, origVocabIdx);
         pStage2Id[index] = origVocabIdx + origBid * nv;
     }
     return;
