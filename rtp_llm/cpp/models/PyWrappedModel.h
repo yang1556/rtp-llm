@@ -127,7 +127,9 @@ inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
         RTP_LLM_CHECK_WITH_INFO(graph_runner_ != nullptr, "graph_runner_ can't be null");
         auto py_initialize_method = py_instance.attr("initialize");
         py_init_result            = py_initialize_method(init_resources);
+        device_->setTraceMemory(true);
         graph_runner_->initCapture();
+        device_->setTraceMemory(false);
     }
 
     auto py_init_success = py_init_result.cast<bool>();
