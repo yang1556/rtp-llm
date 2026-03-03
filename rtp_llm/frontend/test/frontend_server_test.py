@@ -3,6 +3,7 @@ import json
 from typing import Any
 from unittest import TestCase, main
 
+from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
 
 from rtp_llm.config.py_config_modules import PyEnvConfigs
@@ -23,6 +24,13 @@ class FakeFrontendWorker(object):
         return CompleteResponseAsyncGenerator(
             response_generator, CompleteResponseAsyncGenerator.get_last_value
         )
+
+    async def handle_request(self, req: Any, raw_request: Any):
+        """Mimic BaseEndpoint.handle_request for FrontendServer.inference delegation."""
+        if isinstance(req, str):
+            req = json.loads(req)
+        prompt = req.get("prompt", "")
+        return ORJSONResponse(FakePipelinResponse(res=prompt).model_dump())
 
     def tokenizer_encode(self, prompt: str):
         return [1, 2, 3, 4], ["b", "c", "d", "e"]

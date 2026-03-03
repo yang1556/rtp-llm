@@ -4,6 +4,8 @@ from unittest import TestCase, main
 
 from transformers import AutoTokenizer
 
+from rtp_llm.access_logger.access_logger import AccessLogger
+from rtp_llm.config.log_config import get_log_path
 from rtp_llm.ops import SpecialTokens
 from rtp_llm.frontend.tokenizer_factory.tokenizers.tokenization_qwen import (
     QWenTokenizer,
@@ -18,6 +20,8 @@ from rtp_llm.config.py_config_modules import (
     VitConfig,
 )
 from rtp_llm.config.model_config import ModelConfig
+from rtp_llm.utils.concurrency_controller import ConcurrencyController
+
 
 class GenerateConfigTest(TestCase):
     def __init__(self, *args: Any, **kwargs: Any):
@@ -292,6 +296,8 @@ class OpenaiGenerateConfigTest(TestCase):
             vit_config=VitConfig(),
             tokenizer=self.tokenizer,
             backend_rpc_server_visitor=None,
+            global_controller=ConcurrencyController(max_concurrency=1024),
+            access_logger=AccessLogger(get_log_path(), backup_count=1),
         )
 
         request = ChatCompletionRequest(messages=[])
