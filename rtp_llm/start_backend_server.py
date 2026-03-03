@@ -331,9 +331,24 @@ def multi_rank_start(
         for proc in processes:
             if proc.is_alive():
                 proc.terminate()
+
+        # timeout join + kill to avoid terminate failed
         for proc in processes:
             proc.join(timeout=5)
-        raise
+            if proc.is_alive():
+                logging.warning(f"Force killing process {proc.name} (pid={proc.pid})")
+                proc.kill()
+                proc.join(timeout=2)
+
+        # os._exit to avoid atexit deadlock
+        alive_procs = [p for p in processes if p.is_alive()]
+        if alive_procs:
+            logging.error(
+                f"{len(alive_procs)} processes still alive after kill, using os._exit to avoid atexit deadlock"
+            )
+            os._exit(1)
+        else:
+            raise Exception("Multi-rank startup failed")
 
     # After successful startup, monitor processes
     manager = ProcessManager(
