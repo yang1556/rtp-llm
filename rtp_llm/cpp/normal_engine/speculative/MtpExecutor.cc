@@ -319,7 +319,7 @@ absl::Status MtpExecutor::prefillStep(const std::list<GenerateStreamPtr>& stream
             model_input.last_hidden_states = model_output.all_hidden_states;
         } else {
             CHECK_AND_RETURN_REF(sampler_input,
-                                 batch_stream_processor_->gatherSamplerInput(stream_groups, model_input, model_output));
+                                 batch_stream_processor_->gatherSamplerInput(stream_groups, model_output));
             sampler_output = std::move(sampler_->forward(sampler_input));
             batch_stream_processor_->updatePrefillPostDraftModelInput(model_input, model_output, sampler_output);
         }
