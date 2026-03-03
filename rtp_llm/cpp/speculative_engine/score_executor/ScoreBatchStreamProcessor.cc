@@ -47,7 +47,6 @@ absl::StatusOr<GptModelInputs> ScoreBatchStreamProcessor::gatherModelInput(const
 }
 
 absl::StatusOr<SamplerInputs> ScoreBatchStreamProcessor::gatherSamplerInput(const StreamGroups&    stream_groups,
-                                                                            const GptModelInputs&  model_inputs,
                                                                             const GptModelOutputs& model_output) const {
     RTP_LLM_CHECK(!stream_groups.empty());
     auto all_streams      = stream_groups.allStreams();
@@ -58,9 +57,8 @@ absl::StatusOr<SamplerInputs> ScoreBatchStreamProcessor::gatherSamplerInput(cons
     }
 
     size_t        total_batch_size = stream_groups.totalScoreBatchSize();
-    SamplerInputs sampler_inputs =
-        allocateSamplerInputs(stream_groups, total_batch_size, total_batch_size, model_inputs.sequence_lengths);
-    setCommonSamplerInputs(sampler_inputs, all_streams, true);
+    SamplerInputs sampler_inputs   = allocateSamplerInputs(stream_groups);
+    fillSamplerCommonInputs(sampler_inputs, all_streams, true);
 
     int batch_idx = 0;
     for (auto& stream : all_streams) {

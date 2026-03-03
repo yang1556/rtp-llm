@@ -74,9 +74,8 @@ absl::StatusOr<SamplerInputs> MtpBatchStreamProcessor::gatherSpecSamplerInput(
     size_t score_len        = propose_step_ + 1;
     size_t total_batch_size = stream_groups.size() * score_len;
 
-    SamplerInputs sampler_inputs = allocateSamplerInputs(
-        stream_groups, total_batch_size, total_batch_size, model_inputs.sequence_lengths, propose_step_);
-    setCommonSamplerInputs(sampler_inputs, all_streams, true, propose_step_);
+    SamplerInputs sampler_inputs = allocateSamplerInputs(stream_groups, propose_step_);
+    fillSamplerCommonInputs(sampler_inputs, all_streams, true, propose_step_);
 
     int batch_idx = 0;
     for (auto& stream : all_streams) {
