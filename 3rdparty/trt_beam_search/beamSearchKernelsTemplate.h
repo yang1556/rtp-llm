@@ -725,7 +725,7 @@ void beamSearchKernelLauncher(
         // fuyu_print(pStage2Ids, "pStage2Ids after gather", nBS,  nBMOut * 2);
         if (bh.nTrueVocabSize > nV) {
             // fuyu_print(bh.sparseIdx, "bh.sparseIdx ", nBS* nBMIn,  nV);
-            gatherSparseId<<<nBS, nThread, 0, stream>>>(bh.sparseIdx, pStage2Ids, nV, nBMOut * 2, bh.nTrueVocabSize);
+            gatherSparseId<<<nBS, nThread, 0, stream>>>(bh.sparseIdx, pStage2Ids, nV, nBMIn, nBMOut * 2, bh.nTrueVocabSize);
             // fuyu_print(pStage2Ids, "pStage2Ids after sparse gather", nBS,  nBMOut * 2);
         }
     }

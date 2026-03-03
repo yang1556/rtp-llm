@@ -236,7 +236,7 @@ __global__ void gatherId(int const* __restrict pStage1Id, int* __restrict pStage
     return;
 }
 
-__global__ void gatherSparseId(int const* __restrict vocabIdx, int* __restrict pStage2Id, size_t sparseVocabSize, size_t topSize, size_t nv)
+__global__ void gatherSparseId(int const* __restrict vocabIdx, int* __restrict pStage2Id, size_t sparseVocabSize, size_t nBMIn, size_t topSize, size_t nv)
 {
     int bid = blockIdx.x; // Index of request in batch
     int j = threadIdx.x;
@@ -245,7 +245,8 @@ __global__ void gatherSparseId(int const* __restrict vocabIdx, int* __restrict p
         int index = bid * topSize + j;
         int const vIdx = pStage2Id[index];
         int origBid = vIdx/sparseVocabSize;
-        int origVocabIdx = vocabIdx[vIdx];
+        int origOffset = bid * nBMIn * sparseVocabSize;
+        int origVocabIdx = vocabIdx[vIdx + origOffset];
         //printf("gatherSparseId bid:%d,vIdx:%d, index:%d, origBid:%d, origVocabIdx:%d \n", bid, vIdx, index, origBid, origVocabIdx);
         pStage2Id[index] = origVocabIdx + origBid * nv;
     }

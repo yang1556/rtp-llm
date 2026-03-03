@@ -150,7 +150,7 @@ __global__ void addCumLogProbs(T* __restrict pStage1Probs, float const* __restri
 __global__ void gatherId(int const* __restrict pStage1Id, int* __restrict pStage2Id, size_t const nBS,
     size_t const nBMIn, size_t const nBMOut, size_t const nV);
 
-__global__ void gatherSparseId(int const* __restrict vocabIdx, int* __restrict pStage2Id, size_t sparseVocabSize, size_t topSize, size_t nv);
+__global__ void gatherSparseId(int const* __restrict vocabIdx, int* __restrict pStage2Id, size_t sparseVocabSize, size_t nBMIn, size_t topSize, size_t nv);
 
 void invokePopulateTokenIds(int* tokenIdsOut, int const* tokenIdsIn, int const* sequenceLengthsOut, int const* parentIdsPtr, int const* outputIdsPtr, 
     size_t const batchSize, size_t const maxSeqLen, size_t const beamWidthOut, size_t const beamWidthIn, 
