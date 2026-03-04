@@ -34,11 +34,15 @@ public class EngineStatusConverter {
         response.setStatusVersion(workerStatusPB.getStatusVersion());
         response.setAlive(workerStatusPB.getAlive());
 
+        List<EngineRpcService.TaskInfoPB> srcRunningTaskInfoList = workerStatusPB.getRunningTaskInfoList();
+        List<EngineRpcService.TaskInfoPB> waitingTaskInfoList = srcRunningTaskInfoList.stream().filter(taskInfoPB -> taskInfoPB.getIsWaiting()).toList();
+        List<EngineRpcService.TaskInfoPB> runningTaskInfoList = srcRunningTaskInfoList.stream().filter(taskInfoPB -> !taskInfoPB.getIsWaiting()).toList();
+
         // Convert waiting task info
-        response.setWaitingTaskInfo(convertToTaskInfoList(workerStatusPB.getWaitingTaskInfoList()));
+        response.setWaitingTaskInfo(convertToTaskInfoList(waitingTaskInfoList));
 
         // Convert running task info
-        response.setRunningTaskInfo(convertToTaskInfoList(workerStatusPB.getRunningTaskInfoList()));
+        response.setRunningTaskInfo(convertToTaskInfoList(runningTaskInfoList));
 
         // Convert finished task list
         response.setFinishedTaskInfo(convertToTaskInfoList(workerStatusPB.getFinishedTaskListList()));
