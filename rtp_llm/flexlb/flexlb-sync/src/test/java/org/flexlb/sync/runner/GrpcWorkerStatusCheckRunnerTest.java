@@ -41,7 +41,6 @@ class GrpcWorkerStatusCheckRunnerTest {
                 .setIterateCount(20)
                 .setDpSize(2)
                 .setTpSize(4)
-                .setVersion(1)
                 .setStatusVersion(100)
                 .setAlive(true)
                 .build();
