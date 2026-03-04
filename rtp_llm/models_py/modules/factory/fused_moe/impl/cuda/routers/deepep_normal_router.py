@@ -133,6 +133,13 @@ class DeepepNormalRouterBase(FusedMoeDataRouter):
             tp_expert_ids, self.expert_num
         )
 
+        num_worst_tokens = 0
+        if (
+            self.config.enable_cuda_graph
+            and torch.cuda.is_current_stream_capturing()
+        ):
+            num_worst_tokens = self.config.ll_num_max_token * self.ep_size
+
         # dispatch
         (
             output,
@@ -151,6 +158,7 @@ class DeepepNormalRouterBase(FusedMoeDataRouter):
             tp_expert_ids,
             tp_expert_scales,
             expert_alignment=self.expert_alignment,
+            num_worst_tokens=num_worst_tokens,
         )
 
         expert_x_scale: Optional[torch.Tensor] = None
