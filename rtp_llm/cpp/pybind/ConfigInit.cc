@@ -541,6 +541,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                     c.disable_dpc_random           = t[13].cast<bool>();
                     c.rocm_disable_custom_ag       = t[14].cast<bool>();
                     c.deterministic_gemm           = t[15].cast<bool>();
+                    c.deterministic_attn           = t[16].cast<bool>();
                 } catch (const std::exception& e) {
                     throw std::runtime_error(std::string("HWKernelConfig unpickle error: ") + e.what());
                 }
