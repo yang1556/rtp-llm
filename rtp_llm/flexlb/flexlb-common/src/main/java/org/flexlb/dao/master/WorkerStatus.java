@@ -23,7 +23,6 @@ public class WorkerStatus {
     public final transient ReentrantLock lock = new ReentrantLock();
     private String role;
     private String group;
-    private String version;
     private String ip;
     private int port;
     private String site;
@@ -35,7 +34,7 @@ public class WorkerStatus {
     private AtomicLong runningQueueTime = new AtomicLong();
     private Map<String, TaskInfo> waitingTaskList;
     private Map<String, TaskInfo> runningTaskList;
-    private AtomicLong latestFinishedTaskVersion = new AtomicLong(-1);
+    private long latestFinishedTaskVersion = -1L;
 
     private ConcurrentHashMap<Long/*requestId*/, TaskInfo> localTaskMap = new ConcurrentHashMap<>();
     private double stepLatencyMs;
@@ -107,16 +106,6 @@ public class WorkerStatus {
      * Check for lost tasks, update running tasks, and clean up finished tasks
      */
     public void updateTaskStates(Map<String, TaskInfo> waitingTaskInfo, Map<String, TaskInfo> runningTaskInfo, Map<String, TaskInfo> finishedTaskInfo) {
-
-        // Update version of finished tasks
-        if (MapUtils.isNotEmpty(finishedTaskInfo)) {
-            long maxEndTime = finishedTaskInfo.values().stream()
-                .mapToLong(TaskInfo::getEndTimeMs)
-                .max().orElse(-1);
-            if (maxEndTime != -1) {
-                latestFinishedTaskVersion.accumulateAndGet(maxEndTime, Math::max);
-            }
-        }
 
         // Iterate through local tasks and update task states
         Iterator<Map.Entry<Long, TaskInfo>> iterator = localTaskMap.entrySet().iterator();
