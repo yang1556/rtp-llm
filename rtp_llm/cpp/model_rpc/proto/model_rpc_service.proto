@@ -374,6 +374,7 @@ message WorkerStatusPB {
     int64 status_version = 12;
     bool alive = 13;
     string precision = 14;
+    int64 latest_finished_version = 15;
 }
 
 message EmbeddingInputPB {
