@@ -119,7 +119,7 @@ int KVCacheManager::singleBatchNeedBlocks(const BatchKVCacheResourcePtr& batch_k
 
 // 块操作相关
 
-void KVCacheManager::blockCopy(int src_block_index, int dest_block_index) {
+void KVCacheManager::blockCopy(BlockIdxType src_block_index, BlockIdxType dest_block_index) {
     return allocator_->blockCopy(src_block_index, dest_block_index);
 }
 
@@ -217,16 +217,18 @@ bool KVCacheManager::setKVBlockValue(int block_index, rtp_llm::Buffer& k_buffer,
 
 // 地址转换和缓冲区访问
 
-BlockAddrInfo KVCacheManager::convertIndexToAddr(int block_index, int layer_id) const {
+BlockAddrInfo KVCacheManager::convertIndexToAddr(BlockIdxType block_index, int layer_id) const {
     return allocator_->convertIndexToAddr(layer_id, block_index);
 }
 
-std::vector<BlockInfo> KVCacheManager::convertIndexToBuffer(int block_index, int layer_id) const {
+std::vector<BlockInfo> KVCacheManager::convertIndexToBuffer(BlockIdxType block_index, int layer_id) const {
     return allocator_->convertIndexToBuffer(layer_id, block_index);
 }
 
-std::vector<BlockInfo>
-KVCacheManager::convertIndexToBuffer(int block_index, int layer_id, int partition_count, int partition_id) const {
+std::vector<BlockInfo> KVCacheManager::convertIndexToBuffer(BlockIdxType block_index,
+                                                            int          layer_id,
+                                                            int          partition_count,
+                                                            int          partition_id) const {
     return allocator_->convertIndexToBuffer(layer_id, block_index, partition_count, partition_id);
 }
 

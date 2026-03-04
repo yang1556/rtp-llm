@@ -394,20 +394,20 @@ std::pair<int, int> BlockPool::mapGlobalLayerIdToLocal(int global_layer_id) cons
     return global_layer_to_local_[static_cast<size_t>(global_layer_id)];
 }
 
-BlockAddrInfo BlockPool::convertIndexToAddr(int layer_id, int block_id) const {
+BlockAddrInfo BlockPool::convertIndexToAddr(int layer_id, BlockIdxType block_id) const {
     auto [layout_index, local_layer_id] = mapGlobalLayerIdToLocal(layer_id);
     checkLayoutValidity(layout_index);
     return layout_strategies_[static_cast<size_t>(layout_index)]->convertIndexToAddr(local_layer_id, block_id);
 }
 
-std::vector<BlockInfo> BlockPool::convertIndexToBuffer(int layer_id, int block_id) const {
+std::vector<BlockInfo> BlockPool::convertIndexToBuffer(int layer_id, BlockIdxType block_id) const {
     auto [layout_index, local_layer_id] = mapGlobalLayerIdToLocal(layer_id);
     checkLayoutValidity(layout_index);
     return layout_strategies_[static_cast<size_t>(layout_index)]->convertIndexToBuffer(local_layer_id, block_id);
 }
 
 std::vector<BlockInfo>
-BlockPool::convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const {
+BlockPool::convertIndexToBuffer(int layer_id, BlockIdxType block_id, int partition_count, int partition_id) const {
     auto [layout_index, local_layer_id] = mapGlobalLayerIdToLocal(layer_id);
     checkLayoutValidity(layout_index);
 

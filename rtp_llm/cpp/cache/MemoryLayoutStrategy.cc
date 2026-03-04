@@ -101,7 +101,7 @@ bool MemoryLayoutStrategy::processScaleTensor(torch::Tensor& kv_scale_tensor) {
 }
 
 // Address and buffer conversion functions
-BlockAddrInfo MemoryLayoutStrategy::convertIndexToAddr(int layer_id, int block_id) const {
+BlockAddrInfo MemoryLayoutStrategy::convertIndexToAddr(int layer_id, BlockIdxType block_id) const {
     auto  blocks        = convertIndexToBuffer(layer_id, block_id);
     void* kv_addr       = blocks[0].addr;
     void* kv_scale_addr = nullptr;
@@ -113,12 +113,14 @@ BlockAddrInfo MemoryLayoutStrategy::convertIndexToAddr(int layer_id, int block_i
     return {kv_addr, kv_scale_addr};
 }
 
-std::vector<BlockInfo> MemoryLayoutStrategy::convertIndexToBuffer(int layer_id, int block_id) const {
+std::vector<BlockInfo> MemoryLayoutStrategy::convertIndexToBuffer(int layer_id, BlockIdxType block_id) const {
     return createBasicBlockInfo(layer_id, block_id);
 }
 
-std::vector<BlockInfo>
-MemoryLayoutStrategy::convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const {
+std::vector<BlockInfo> MemoryLayoutStrategy::convertIndexToBuffer(int          layer_id,
+                                                                  BlockIdxType block_id,
+                                                                  int          partition_count,
+                                                                  int          partition_id) const {
     // Hybrid attention models are not support asymmetric TP, thus transfer the whole kvache blocks
     if (config_.is_mla || config_.enable_hybrid_attention) {
         // For MLA models and hybrid attention models, use the same logic as the simpler convertIndexToBuffer function
@@ -132,7 +134,7 @@ MemoryLayoutStrategy::convertIndexToBuffer(int layer_id, int block_id, int parti
 }
 
 // Helper functions for creating block info
-std::vector<BlockInfo> MemoryLayoutStrategy::createBasicBlockInfo(int layer_id, int block_id) const {
+std::vector<BlockInfo> MemoryLayoutStrategy::createBasicBlockInfo(int layer_id, BlockIdxType block_id) const {
     checkLayerIdValidity(layer_id);
     auto& layer_tensor = layer_kv_tensors_[layer_id];
     void* kv_addr      = layer_tensor[block_id].data_ptr();
@@ -149,10 +151,10 @@ std::vector<BlockInfo> MemoryLayoutStrategy::createBasicBlockInfo(int layer_id, 
     return {kv_info};
 }
 
-std::vector<BlockInfo> MemoryLayoutStrategy::createPartitionedBlockInfo(int layer_id,
-                                                                        int block_id,
-                                                                        int partition_count,
-                                                                        int partition_id) const {
+std::vector<BlockInfo> MemoryLayoutStrategy::createPartitionedBlockInfo(int          layer_id,
+                                                                        BlockIdxType block_id,
+                                                                        int          partition_count,
+                                                                        int          partition_id) const {
     checkLayerIdValidity(layer_id);
     auto& layer_tensor = layer_kv_tensors_[layer_id];
     void* kv_addr      = layer_tensor[block_id].data_ptr();

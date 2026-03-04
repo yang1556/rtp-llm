@@ -3,29 +3,13 @@
 #include <algorithm>
 #include <unordered_map>
 
-#include "rtp_llm/cpp/utils/Logger.h"
-#include "rtp_llm/cpp/cache/BlockPoolConfigHelper.h"
 #include "rtp_llm/cpp/cache/BatchKVCacheResource.h"
-#include "rtp_llm/cpp/engine_base/stream/CompleteTokenIds.h"
+#include "rtp_llm/cpp/cache/BlockPoolConfigHelper.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
+#include "rtp_llm/cpp/engine_base/stream/CompleteTokenIds.h"
+#include "rtp_llm/cpp/utils/Logger.h"
 
 namespace rtp_llm {
-
-int SingleTypeKVCacheAllocator::getNeedBlocks(const MallocInfo& malloc_info) const {
-    if (!malloc_info.batch_kv_cache_resource || !malloc_info.complete_token_ids) {
-        return 0;
-    }
-    const bool reuse_enabled    = malloc_info.enable_device_cache;
-    const int  reuse_blocks_len = reuse_enabled ? malloc_info.batch_kv_cache_resource->curBlocksNum() : 0;
-    const int  batch_size       = malloc_info.batch_kv_cache_resource->batchSize();
-    const int  seq_len          = malloc_info.complete_token_ids->seqLength();
-    const int  reserve_step     = malloc_info.complete_token_ids->getReserveStep();
-    const int  common_seq_len   = std::min(malloc_info.complete_token_ids->commonSeqLength(), seq_len);
-
-    const auto need =
-        full_kv_cache_group_->getNeedBlocks(common_seq_len, seq_len, reserve_step, reuse_blocks_len, reuse_enabled);
-    return (batch_size <= 0) ? 0 : (need.common_blocks + batch_size * need.extra_blocks);
-}
 
 SingleTypeKVCacheAllocator::SingleTypeKVCacheAllocator(const CacheConfig&                 config,
                                                        rtp_llm::DeviceBase*               device,
@@ -173,6 +157,32 @@ MallocResult SingleTypeKVCacheAllocator::incrMalloc(const MallocInfo& malloc_inf
     return {false, 0};
 }
 
+int SingleTypeKVCacheAllocator::getNeedBlocks(const MallocInfo& malloc_info) const {
+    if (!malloc_info.batch_kv_cache_resource || !malloc_info.complete_token_ids) {
+        return 0;
+    }
+    const bool reuse_enabled    = malloc_info.enable_device_cache;
+    const int  reuse_blocks_len = reuse_enabled ? malloc_info.batch_kv_cache_resource->curBlocksNum() : 0;
+    const int  batch_size       = malloc_info.batch_kv_cache_resource->batchSize();
+    const int  seq_len          = malloc_info.complete_token_ids->seqLength();
+    const int  reserve_step     = malloc_info.complete_token_ids->getReserveStep();
+    const int  common_seq_len   = std::min(malloc_info.complete_token_ids->commonSeqLength(), seq_len);
+
+    const auto need =
+        full_kv_cache_group_->getNeedBlocks(common_seq_len, seq_len, reserve_step, reuse_blocks_len, reuse_enabled);
+    return (batch_size <= 0) ? 0 : (need.common_blocks + batch_size * need.extra_blocks);
+}
+
+void SingleTypeKVCacheAllocator::decrKVCacheRef(const KVCacheResource& kvcache_resource) {
+    RTP_LLM_CHECK_WITH_INFO(
+        kvcache_resource.groupNums() == 1, "decrKVCacheRef expects groupNums==1, got %d", kvcache_resource.groupNums());
+
+    const auto& blocks_to_free = kvcache_resource.blocks(0);
+    if (!blocks_to_free.empty()) {
+        block_pool_->requestFree(blocks_to_free);
+    }
+}
+
 void SingleTypeKVCacheAllocator::free(const FreeInfo& free_info) {
     auto& kv_cache_resource = free_info.batch_kv_cache_resource;
 
@@ -210,42 +220,18 @@ void SingleTypeKVCacheAllocator::insertIntoCache(const InsertInfo& insert_info) 
     }
 }
 
-CacheLayerLayout SingleTypeKVCacheAllocator::allLayerCacheBase() const {
-    CacheLayerLayout layout;
-    auto             layer_tensors = full_kv_cache_group_->allLayerCacheBase();
-    auto             scale_tensors = full_kv_cache_group_->allLayerScaleCacheBase();
-
-    layout.layers_to_kv_buffer_ptrs.resize(config_.layer_all_num);
-    layout.layers_to_scale_buffer_ptrs.resize(config_.layer_all_num);
-
-    for (int layer_id = 0; layer_id < config_.layer_all_num; ++layer_id) {
-        if (layer_tensors[layer_id].defined() && layer_tensors[layer_id].numel() > 0) {
-            layout.layers_to_kv_buffer_ptrs[layer_id] = torchTensor2Buffer(layer_tensors[layer_id]);
-        } else {
-            layout.layers_to_kv_buffer_ptrs[layer_id] = nullptr;
-        }
-        if (scale_tensors[layer_id].defined() && scale_tensors[layer_id].numel() > 0) {
-            layout.layers_to_scale_buffer_ptrs[layer_id] = torchTensor2Buffer(scale_tensors[layer_id]);
-        } else {
-            layout.layers_to_scale_buffer_ptrs[layer_id] = nullptr;
-        }
-    }
-
-    return layout;
-}
-
-BlockAddrInfo SingleTypeKVCacheAllocator::convertIndexToAddr(int layer_id, int block_id) const {
+BlockAddrInfo SingleTypeKVCacheAllocator::convertIndexToAddr(int layer_id, BlockIdxType block_id) const {
     return full_kv_cache_group_->convertIndexToAddr(layer_id, block_id);
 }
 
-std::vector<BlockInfo> SingleTypeKVCacheAllocator::convertIndexToBuffer(int layer_id, int block_id) const {
+std::vector<BlockInfo> SingleTypeKVCacheAllocator::convertIndexToBuffer(int layer_id, BlockIdxType block_id) const {
     return full_kv_cache_group_->convertIndexToBuffer(layer_id, block_id);
 }
 
-std::vector<BlockInfo> SingleTypeKVCacheAllocator::convertIndexToBuffer(int layer_id,
-                                                                        int block_id,
-                                                                        int partition_count,
-                                                                        int partition_id) const {
+std::vector<BlockInfo> SingleTypeKVCacheAllocator::convertIndexToBuffer(int          layer_id,
+                                                                        BlockIdxType block_id,
+                                                                        int          partition_count,
+                                                                        int          partition_id) const {
     return full_kv_cache_group_->convertIndexToBuffer(layer_id, block_id, partition_count, partition_id);
 }
 
@@ -305,14 +291,27 @@ std::shared_ptr<KVCacheResource> SingleTypeKVCacheAllocator::incrKVCacheRef(cons
     return selected_resource;
 }
 
-void SingleTypeKVCacheAllocator::decrKVCacheRef(const KVCacheResource& kvcache_resource) {
-    RTP_LLM_CHECK_WITH_INFO(
-        kvcache_resource.groupNums() == 1, "decrKVCacheRef expects groupNums==1, got %d", kvcache_resource.groupNums());
+CacheLayerLayout SingleTypeKVCacheAllocator::allLayerCacheBase() const {
+    CacheLayerLayout layout;
+    auto             layer_tensors = full_kv_cache_group_->allLayerCacheBase();
+    auto             scale_tensors = full_kv_cache_group_->allLayerScaleCacheBase();
 
-    const auto& blocks_to_free = kvcache_resource.blocks(0);
-    if (!blocks_to_free.empty()) {
-        block_pool_->requestFree(blocks_to_free);
+    layout.layers_to_kv_buffer_ptrs.resize(config_.layer_all_num);
+    layout.layers_to_scale_buffer_ptrs.resize(config_.layer_all_num);
+
+    for (int layer_id = 0; layer_id < config_.layer_all_num; ++layer_id) {
+        RTP_LLM_CHECK_WITH_INFO(layer_tensors[layer_id].defined() && layer_tensors[layer_id].numel() > 0,
+                                "layer_tensors[%d] invalid",
+                                layer_id);
+        layout.layers_to_kv_buffer_ptrs[layer_id] = torchTensor2Buffer(layer_tensors[layer_id]);
+        if (scale_tensors[layer_id].defined() && scale_tensors[layer_id].numel() > 0) {
+            layout.layers_to_scale_buffer_ptrs[layer_id] = torchTensor2Buffer(scale_tensors[layer_id]);
+        } else {
+            layout.layers_to_scale_buffer_ptrs[layer_id] = nullptr;
+        }
     }
+
+    return layout;
 }
 
 // Update kv blocks for beam search or multi-return sequences.

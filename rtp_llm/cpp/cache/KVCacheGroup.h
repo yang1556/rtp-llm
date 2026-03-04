@@ -50,10 +50,10 @@ public:
     void                                   reference(const BlockIndicesType& new_block_indices);
     std::unordered_map<int, torch::Tensor> allLayerCacheBase() const;
     std::unordered_map<int, torch::Tensor> allLayerScaleCacheBase() const;
-    BlockAddrInfo                          convertIndexToAddr(int layer_id, int block_id) const;
-    std::vector<BlockInfo>                 convertIndexToBuffer(int layer_id, int block_id) const;
+    BlockAddrInfo                          convertIndexToAddr(int layer_id, BlockIdxType block_id) const;
+    std::vector<BlockInfo>                 convertIndexToBuffer(int layer_id, BlockIdxType block_id) const;
     std::vector<BlockInfo>
-    convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const;
+    convertIndexToBuffer(int layer_id, BlockIdxType block_id, int partition_count, int partition_id) const;
 
     size_t freeBlocksNum() const;
     bool   ensureFreeBlocks(int need_blocks);

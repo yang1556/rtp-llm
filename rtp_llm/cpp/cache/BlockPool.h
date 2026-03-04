@@ -54,10 +54,10 @@ public:
     int64_t getMrCostTimeMs() const {
         return mr_cost_time_ms_;
     }
-    BlockAddrInfo          convertIndexToAddr(int layer_id, int block_id) const;
-    std::vector<BlockInfo> convertIndexToBuffer(int layer_id, int block_id) const;
+    BlockAddrInfo          convertIndexToAddr(int layer_id, BlockIdxType block_id) const;
+    std::vector<BlockInfo> convertIndexToBuffer(int layer_id, BlockIdxType block_id) const;
     std::vector<BlockInfo>
-    convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const;
+    convertIndexToBuffer(int layer_id, BlockIdxType block_id, int partition_count, int partition_id) const;
 
 private:
     void initFreeBlocks();

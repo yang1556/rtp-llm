@@ -29,12 +29,12 @@ public:
     virtual ~KVCacheAllocator() = default;
 
     // --- Virtual interface ---
-    virtual void                   free(const FreeInfo& free_info)                        = 0;
-    virtual void                   insertIntoCache(const InsertInfo& insert_info)         = 0;
-    virtual BlockAddrInfo          convertIndexToAddr(int layer_id, int block_id) const   = 0;
-    virtual std::vector<BlockInfo> convertIndexToBuffer(int layer_id, int block_id) const = 0;
+    virtual void                   free(const FreeInfo& free_info)                                 = 0;
+    virtual void                   insertIntoCache(const InsertInfo& insert_info)                  = 0;
+    virtual BlockAddrInfo          convertIndexToAddr(int layer_id, BlockIdxType block_id) const   = 0;
+    virtual std::vector<BlockInfo> convertIndexToBuffer(int layer_id, BlockIdxType block_id) const = 0;
     virtual std::vector<BlockInfo>
-    convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const          = 0;
+    convertIndexToBuffer(int layer_id, BlockIdxType block_id, int partition_count, int partition_id) const = 0;
     virtual std::shared_ptr<KVCacheResource> incrKVCacheRef(const KVCacheResource& kvcache_resource,
                                                             const CacheKeysType&   cache_keys)               = 0;
     virtual CacheLayerLayout                 allLayerCacheBase() const                                     = 0;
@@ -53,7 +53,7 @@ public:
     MallocResult malloc(const MallocInfo& malloc_info);
 
     // --- Block copy ---
-    void blockCopy(int src_block_index, int dest_block_index);
+    void blockCopy(BlockIdxType src_block_index, BlockIdxType dest_block_index);
     void blockBatchCopy(const std::vector<BlockIdPair>& copy_mapping);
     void blockBatchCopy(const BlockIdPair* copy_mapping_begin, const BlockIdPair* copy_mapping_end);
     void blockBatchCopy(const rtp_llm::Buffer& copy_mapping);

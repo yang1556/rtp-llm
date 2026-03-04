@@ -78,7 +78,7 @@ MallocResult KVCacheAllocator::malloc(const MallocInfo& malloc_info) {
     }
 }
 
-void KVCacheAllocator::blockCopy(int src_block_index, int dest_block_index) {
+void KVCacheAllocator::blockCopy(BlockIdxType src_block_index, BlockIdxType dest_block_index) {
     BlockIdPair copy_mapping{src_block_index, dest_block_index};
     blockBatchCopy(&copy_mapping, &copy_mapping + 1);
 }

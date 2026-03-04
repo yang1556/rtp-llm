@@ -24,12 +24,12 @@ public:
     std::vector<torch::Tensor> getLayerCacheTensors() const;
     std::vector<torch::Tensor> getLayerScaleCacheTensors() const;
 
-    BlockAddrInfo convertIndexToAddr(int layer_id, int block_id) const;
+    BlockAddrInfo convertIndexToAddr(int layer_id, BlockIdxType block_id) const;
 
-    std::vector<BlockInfo> convertIndexToBuffer(int layer_id, int block_id) const;
+    std::vector<BlockInfo> convertIndexToBuffer(int layer_id, BlockIdxType block_id) const;
 
     std::vector<BlockInfo>
-    convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const;
+    convertIndexToBuffer(int layer_id, BlockIdxType block_id, int partition_count, int partition_id) const;
 
     const MemoryLayoutConfig& getConfig() const {
         return config_;
@@ -42,9 +42,9 @@ private:
     void                   clearKVTensor(torch::Tensor& kv_cache_tensor);
     void                   clearScaleTensor(torch::Tensor& kv_scale_tensor);
     BlockInfo              makeBlockInfo(const torch::Tensor& tensor, void* addr, size_t size_bytes) const;
-    std::vector<BlockInfo> createBasicBlockInfo(int layer_id, int block_id) const;
+    std::vector<BlockInfo> createBasicBlockInfo(int layer_id, BlockIdxType block_id) const;
     std::vector<BlockInfo>
-    createPartitionedBlockInfo(int layer_id, int block_id, int partition_count, int partition_id) const;
+    createPartitionedBlockInfo(int layer_id, BlockIdxType block_id, int partition_count, int partition_id) const;
     std::vector<BlockInfo>
     createPartitionedSubBlocks(const torch::Tensor& layer_tensor, void* base_addr, const KVPartitionBytes& parts) const;
 

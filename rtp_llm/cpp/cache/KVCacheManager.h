@@ -45,7 +45,7 @@ public:
     singleBatchNeedBlocks(const BatchKVCacheResourcePtr& batch_kv_cache_resource, int seq_len, int reserve_step) const;
 
     // 块操作相关
-    void blockCopy(int src_block_index, int dest_block_index);
+    void blockCopy(BlockIdxType src_block_index, BlockIdxType dest_block_index);
     void blockBatchCopy(const std::vector<BlockIdPair>& copy_mapping);
     void blockBatchCopy(const rtp_llm::Buffer& copy_mapping);
     void blockBatchCopy(const BlockIdPair* copy_mapping_begin, const BlockIdPair* copy_mapping_end);
@@ -60,10 +60,10 @@ public:
     virtual bool setKVBlockValue(int block_index, rtp_llm::Buffer& k_buffer, rtp_llm::Buffer& v_buffer);
 
     // 地址转换和缓冲区访问
-    BlockAddrInfo          convertIndexToAddr(int block_index, int layer_id) const;
-    std::vector<BlockInfo> convertIndexToBuffer(int block_index, int layer_id) const;
+    BlockAddrInfo          convertIndexToAddr(BlockIdxType block_index, int layer_id) const;
+    std::vector<BlockInfo> convertIndexToBuffer(BlockIdxType block_index, int layer_id) const;
     std::vector<BlockInfo>
-    convertIndexToBuffer(int block_index, int layer_id, int partition_count, int partition_id) const;
+    convertIndexToBuffer(BlockIdxType block_index, int layer_id, int partition_count, int partition_id) const;
 
     CacheLayerLayout allLayerCacheBase() const;
 
