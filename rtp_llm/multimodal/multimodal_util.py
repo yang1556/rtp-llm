@@ -163,7 +163,7 @@ def get_bytes_io_from_url(url: str, download_headers: str = ""):
         url_data_cache_.insert_cache(url, res)
         return res
     else:
-        return cached_res
+        return cached_res.seek(0)
 
 
 class MMDataCache(object):

@@ -1,0 +1,90 @@
+import json
+from typing import List
+
+from rtp_llm.openai.api_datatype import ChatCompletionRequest, ContentPartTypeEnum
+from rtp_llm.openai.renderer_factory_register import register_renderer
+from rtp_llm.openai.renderers.basic_renderer import PromptWithMMInput
+from rtp_llm.openai.renderers.custom_renderer import RenderedInputs
+from rtp_llm.openai.renderers.llava_renderer import get_preprocess_config
+from rtp_llm.openai.renderers.qwen3_code_renderer import Qwen3CoderRenderer
+from rtp_llm.ops import MMPreprocessConfig
+from rtp_llm.utils.base_model_datatypes import MMUrlType
+
+
+class Qwen35Renderer(Qwen3CoderRenderer):
+    def _render_messages(self, request: ChatCompletionRequest) -> PromptWithMMInput:
+        urls = []
+        types = []
+        preprocess_configs = []
+        final_messages = []
+        for message in request.messages:
+            if isinstance(message.content, str):
+                final_messages.append(
+                    {"role": message.role.value, "content": message.content}
+                )
+            elif isinstance(message.content, list):
+                now_message = {"role": message.role.value}
+                now_content = []
+                for content_part in message.content:
+                    if content_part.type == ContentPartTypeEnum.text:
+                        assert isinstance(content_part.text, str)
+                        now_content.append({"type": "text", "text": content_part.text})
+                    elif content_part.type == ContentPartTypeEnum.image_url:
+                        assert content_part.image_url != None
+                        urls.append(content_part.image_url.url)
+                        types.append(MMUrlType.IMAGE)
+                        if content_part.preprocess_config:
+                            preprocess_configs.append(
+                                get_preprocess_config(content_part.preprocess_config)
+                            )
+                        now_content.append(
+                            {"type": "image", "image": content_part.image_url.url}
+                        )
+                    elif content_part.type == ContentPartTypeEnum.video_url:
+                        assert content_part.video_url != None
+                        urls.append(content_part.video_url.url)
+                        types.append(MMUrlType.VIDEO)
+                        if content_part.preprocess_config:
+                            preprocess_configs.append(
+                                get_preprocess_config(content_part.preprocess_config)
+                            )
+                        now_content.append(
+                            {"type": "video", "video": content_part.video_url.url}
+                        )
+                now_message["content"] = now_content
+                final_messages.append(now_message)
+
+        prompt = self.tokenizer.apply_chat_template(
+            final_messages,
+            tools=(
+                [tool.model_dump_json(exclude_none=True) for tool in request.tools]
+                if request.tools
+                else None
+            ),
+            tokenize=False,
+            add_generation_prompt=True,
+            add_vision_id=(
+                request.extra_configs.add_vision_id if request.extra_configs else True
+            ),
+        )
+        return PromptWithMMInput(
+            prompt=prompt,
+            urls=urls,
+            mm_types=types,
+            preprocess_configs=preprocess_configs,
+        )
+
+    def render_chat(self, request: ChatCompletionRequest) -> RenderedInputs:
+        prompt_and_mm_input = self._render_messages(request)
+        input_ids = self.tokenizer.encode(prompt_and_mm_input.prompt)
+        return RenderedInputs(
+            input_ids=input_ids,
+            input_urls=prompt_and_mm_input.urls,
+            rendered_prompt=prompt_and_mm_input.prompt,
+            input_urls_type=prompt_and_mm_input.mm_types,
+            preprocess_configs=prompt_and_mm_input.preprocess_configs,
+        )
+
+
+register_renderer("qwen35_moe", Qwen35Renderer)
+register_renderer("qwen35_dense", Qwen35Renderer)

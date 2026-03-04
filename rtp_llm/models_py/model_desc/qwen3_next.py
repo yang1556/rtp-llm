@@ -9,7 +9,6 @@ import rtp_llm.ops.compute_ops as compute_ops
 from rtp_llm.config.model_config import ModelConfig
 from rtp_llm.model_loader.model_weight_info import ModelWeights
 from rtp_llm.models_py.distributed.collective_torch import Group, all_reduce
-from rtp_llm.models_py.model_desc.block_map import select_block_map_for_layer
 from rtp_llm.models_py.model_desc.generic_moe import GenericMoeLayer
 from rtp_llm.models_py.model_desc.module_base import GptModelBase
 from rtp_llm.models_py.modules import (
@@ -18,6 +17,7 @@ from rtp_llm.models_py.modules import (
     Embedding,
     FMHAImplBase,
     LinearFactory,
+    MultimodalEmbeddingInjector,
     RMSNorm,
 )
 from rtp_llm.models_py.triton_kernels.causal_conv1d import (
@@ -715,10 +715,126 @@ class Qwen3NextModel(GptModelBase):
             weights.get_global_weight(W.final_ln_gamma), eps=model_config.layernorm_eps
         )
 
-    def forward(self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
+    @staticmethod
+    def _select_block_map_for_layer(
+        attention_inputs: PyAttentionInputs, layer_idx: int
+    ) -> None:
+        if attention_inputs.kv_cache_block_id_device_by_group is None:
+            return
+
+        gid = 0
+        if attention_inputs.kv_cache_layer_to_group is not None:
+            gid = int(attention_inputs.kv_cache_layer_to_group[layer_idx].item())
+
+        if attention_inputs.kv_cache_block_id_device_by_group is not None and len(
+            attention_inputs.kv_cache_block_id_device_by_group
+        ):
+            attention_inputs.kv_cache_block_id_device = (
+                attention_inputs.kv_cache_block_id_device_by_group[gid]
+            )
+
+        if attention_inputs.kv_cache_block_id_host_by_group is not None and len(
+            attention_inputs.kv_cache_block_id_host_by_group
+        ):
+            attention_inputs.kv_cache_block_id_host = (
+                attention_inputs.kv_cache_block_id_host_by_group[gid]
+            )
+        return gid
+
+    def word_embedding(self, inputs: PyModelInputs) -> torch.Tensor:
         input_ids: torch.Tensor = inputs.input_ids
-        inputs_embeds = self.embed_tokens(input_ids)
-        hidden_states = inputs_embeds
+        return self.embed_tokens(input_ids)
+
+    def forward(self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
+        hidden_states = self.word_embedding(inputs)
+
+        attention_inputs: PyAttentionInputs = inputs.attention_inputs
+        prefill_conv1d_meta = None
+        if attention_inputs.is_prefill:
+            # cu_seqlen_without_padding = attention_inputs.cu_seqlens[
+            #     : attention_inputs.input_lengths.size(0) + 1
+            # ]
+            cu_seqlen_without_padding = attention_inputs.cu_seqlens
+            prefill_conv1d_meta = prepare_causal_conv1d_metadata(
+                query_start_loc=cu_seqlen_without_padding,
+                device=hidden_states.device,
+            )
+        # hack temp
+        is_target_verify = _is_target_verify(attention_inputs)
+        if is_target_verify:
+            attention_inputs.sequence_lengths_plus_1_d = (
+                attention_inputs.prefix_lengths + 1
+            ).to(hidden_states.device)
+        attn_meta = Qwen3NextMetadata(prefill_conv1d_meta, is_target_verify)
+
+        # qwen3_next model has only one full group (group 0): use fmha_impl from input param
+        # if there is a model with more than 1 full groups,
+        # we should prepare fmha_impl for each full group/ fix later
+
+        if fmha_impl is None:
+            fmha_impl = self.prepare_fmha_impl(inputs)
+
+        for i, decoder_layer in enumerate(self.layers):
+            # Switch to correct block_map for this layer in hybrid attention mode
+            gid = self._select_block_map_for_layer(attention_inputs, i)
+            hidden_states = decoder_layer(
+                hidden_states,
+                fmha_impl,
+                kv_cache=self.kv_cache.get_layer_cache(i) if self.kv_cache else None,
+                attention_inputs=attention_inputs,
+                attn_meta=attn_meta,
+            )
+
+        hidden_states = self.norm(hidden_states)
+        return PyModelOutputs(hidden_states, fmha_impl.fmha_params)
+
+
+class Qwen35Model(Qwen3NextModel):
+    def __init__(
+        self,
+        model_config: ModelConfig,
+        parallelism_config: ParallelismConfig,
+        weights: ModelWeights,
+        moe_config,
+        max_generate_batch_size: int,
+        fmha_config=None,
+        py_hw_kernel_config=None,
+        device_resource_config=None,
+    ):
+        super().__init__(
+            model_config,
+            parallelism_config,
+            weights,
+            moe_config,
+            max_generate_batch_size,
+            fmha_config,
+            py_hw_kernel_config,
+            device_resource_config,
+        )
+        self.multimodal_embedding_injector = MultimodalEmbeddingInjector()
+
+    def need_combo_position_ids(self) -> bool:
+        return True
+
+    def word_embedding(self, inputs: PyModelInputs) -> torch.Tensor:
+        input_ids: torch.Tensor = inputs.input_ids
+
+        position_ids = inputs.combo_position_ids
+        token_type_ids = inputs.embedding_inputs.combo_tokens_type_ids
+        text_tokens_mask = inputs.embedding_inputs.text_tokens_mask
+        mm_features = inputs.multimodal_inputs.multimodal_features
+        mm_feature_locs = inputs.multimodal_inputs.mm_features_locs
+
+        inputs_embeds = self.embed_tokens(
+            input_ids, position_ids, token_type_ids, text_tokens_mask
+        )
+        hidden_states = self.multimodal_embedding_injector(
+            inputs_embeds, mm_features, mm_feature_locs
+        )
+        return hidden_states
+
+    def forward(self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
+        hidden_states = self.word_embedding(inputs)
 
         attention_inputs: PyAttentionInputs = inputs.attention_inputs
         prefill_conv1d_meta = None
@@ -741,7 +857,7 @@ class Qwen3NextModel(GptModelBase):
 
         for i, decoder_layer in enumerate(self.layers):
             # Switch to correct block_map for this layer in hybrid attention mode
-            select_block_map_for_layer(attention_inputs, i)
+            gid = self._select_block_map_for_layer(attention_inputs, i)
             hidden_states = decoder_layer(
                 hidden_states,
                 fmha_impl,
