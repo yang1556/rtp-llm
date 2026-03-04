@@ -7,6 +7,7 @@ from rtp_llm.config.generate_config import RoleType
 
 class WorkerStatusRequest(BaseModel):
     latest_cache_version: Optional[int] = -1
+    latest_finished_version: Optional[int] = -1
 
 
 class TaskInfo(BaseModel):
@@ -46,6 +47,7 @@ class WorkStatus(BaseModel):
     alive: bool
     precision: str = "fp16"
     status_version: Optional[int] = -1  # 时间戳
+    latest_finished_version: Optional[int] = -1  # 最新完成任务的版本
 
     profile_meta: Optional[ProfileMeta] = None  # 统计的处理数据
 
