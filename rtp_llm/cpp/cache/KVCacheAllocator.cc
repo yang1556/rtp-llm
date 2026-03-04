@@ -1,28 +1,20 @@
-#include <algorithm>
-#include "rtp_llm/cpp/utils/Logger.h"
-#include "rtp_llm/cpp/cache/BlockPoolConfigHelper.h"
-#include "rtp_llm/cpp/engine_base/stream/CompleteTokenIds.h"
 #include "rtp_llm/cpp/cache/KVCacheAllocator.h"
 #include "rtp_llm/cpp/metrics/RtpLLMMetrics.h"
+#include "rtp_llm/cpp/utils/Logger.h"
 
 namespace rtp_llm {
 
 bool KVCacheAllocator::init() {
-    RTP_LLM_CHECK_WITH_INFO(doInit(), "init failed");
+    RTP_LLM_CHECK_WITH_INFO(doInit(), "kv cache allocator init failed");
 
-    // NOTE: `availableBlocksNum()` depends on `block_pool_` and must be queried after `doInit()`.
-    const int64_t reserve_ratio = reserve_block_ratio_;
-    if (reserve_ratio > 0) {
-        const size_t available_blocks = availableBlocksNum();
-        const size_t reserve_blocks = static_cast<size_t>(reserve_ratio) * available_blocks / static_cast<size_t>(100);
-        reserve_block_num_          = reserve_blocks;
-        RTP_LLM_LOG_INFO("KVCacheAllocator set reserve blocks: ratio=%ld%% reserve_blocks=%zu available_blocks=%zu",
-                         reserve_ratio,
-                         reserve_blocks,
-                         available_blocks);
-    } else {
-        reserve_block_num_ = 0;
-    }
+    const size_t available_blocks = availableBlocksNum();
+    const size_t reserve_blocks =
+        static_cast<size_t>(reserve_block_ratio_) * available_blocks / static_cast<size_t>(100);
+    reserve_block_num_ = reserve_blocks;
+    RTP_LLM_LOG_INFO("KVCacheAllocator set reserve blocks: ratio=%ld%% reserve_blocks=%zu available_blocks=%zu",
+                     reserve_block_ratio_,
+                     reserve_blocks,
+                     available_blocks);
 
     return true;
 }
@@ -41,27 +33,31 @@ MallocResult KVCacheAllocator::initMalloc(const MallocInfo& malloc_info) {
         free(free_info);
         return incr_result;
     } else {
-        if (metrics_reporter_ && malloc_info.enable_device_cache) {
-            int64_t gpu_input_length = 0;
-            if (malloc_info.batch_kv_cache_resource) {
-                const auto& cache_keys      = malloc_info.batch_kv_cache_resource->cacheKeys(0);
-                size_t      match_keys_size = cache_keys.size();
-                gpu_input_length            = static_cast<int64_t>(match_keys_size) * config_.seq_size_per_block;
-            }
-
-            if (gpu_input_length > 0) {
-                RtpLLMCacheReuseMetricsCollector collector;
-                collector.match_cost_time_us = init_result.match_cost_time_us;
-                collector.gpu_input_length   = gpu_input_length;
-                collector.gpu_reuse_length   = init_result.reuse_len;
-                collector.gpu_cache_hit_rate = static_cast<float>(static_cast<int64_t>(collector.gpu_reuse_length) * 100
-                                                                  / collector.gpu_input_length);
-                kmonitor::MetricsTags tags;
-                metrics_reporter_->report<RtpLLMCacheReuseMetrics, RtpLLMCacheReuseMetricsCollector>(&tags, &collector);
-            }
-        }
+        reportMetric(malloc_info, init_result);
         return init_result;
     }
+}
+
+void KVCacheAllocator::reportMetric(const MallocInfo& malloc_info, const MallocResult& init_result) const {
+    if (!metrics_reporter_ || !malloc_info.enable_device_cache) {
+        return;
+    }
+    int64_t gpu_input_length = 0;
+    if (malloc_info.batch_kv_cache_resource) {
+        size_t cache_keys_count = malloc_info.batch_kv_cache_resource->cacheKeyCount(0);
+        gpu_input_length        = static_cast<int64_t>(cache_keys_count) * config_.seq_size_per_block;
+    }
+    if (gpu_input_length <= 0) {
+        return;
+    }
+    RtpLLMCacheReuseMetricsCollector collector;
+    collector.match_cost_time_us = init_result.match_cost_time_us;
+    collector.gpu_input_length   = gpu_input_length;
+    collector.gpu_reuse_length   = init_result.reuse_len;
+    collector.gpu_cache_hit_rate =
+        static_cast<float>(static_cast<int64_t>(collector.gpu_reuse_length) * 100 / collector.gpu_input_length);
+    kmonitor::MetricsTags tags;
+    metrics_reporter_->report<RtpLLMCacheReuseMetrics, RtpLLMCacheReuseMetricsCollector>(&tags, &collector);
 }
 
 MallocResult KVCacheAllocator::malloc(const MallocInfo& malloc_info) {
@@ -129,13 +125,11 @@ void KVCacheAllocator::blockBatchCopy(const BlockIdPair* begin_ptr, const BlockI
             auto src_addr_info = convertIndexToAddr(layer_id, src_block_index);
             auto dst_addr_info = convertIndexToAddr(layer_id, dest_block_index);
 
-            if (!src_addr_info.kv_addr || !dst_addr_info.kv_addr) {
-                RTP_LLM_LOG_ERROR("Failed to get block address for layer %d, src_block %d, dst_block %d",
-                                  layer_id,
-                                  src_block_index,
-                                  dest_block_index);
-                continue;
-            }
+            RTP_LLM_CHECK_WITH_INFO(src_addr_info.kv_addr && dst_addr_info.kv_addr,
+                                    "Failed to get block address for layer %d, src_block %d, dst_block %d",
+                                    layer_id,
+                                    src_block_index,
+                                    dest_block_index);
 
             copy_params.add(dst_addr_info.kv_addr, src_addr_info.kv_addr, kv_block_size_bytes, copy_type);
 
@@ -152,33 +146,31 @@ void KVCacheAllocator::blockBatchCopy(const BlockIdPair* begin_ptr, const BlockI
 }
 
 size_t KVCacheAllocator::freeBlocksNum() const {
-    return block_pool_ ? block_pool_->freeBlocksNum() : 0;
+    return block_pool_->freeBlocksNum();
 }
 
 int64_t KVCacheAllocator::getMrCostTimeMs() const {
-    return block_pool_ ? block_pool_->getMrCostTimeMs() : 0;
+    return block_pool_->getMrCostTimeMs();
 }
 
 size_t KVCacheAllocator::availableBlocksNum() const {
-    return block_pool_ ? block_pool_->availableBlocksNum() : 0;
+    return block_pool_->availableBlocksNum();
 }
 
 size_t KVCacheAllocator::availableTokensNum() const {
-    return block_pool_ ? (block_pool_->availableBlocksNum() * seqSizePerBlock()) : 0;
+    return block_pool_->availableBlocksNum() * seqSizePerBlock();
 }
 
 size_t KVCacheAllocator::totalBlocksNum() const {
-    return block_pool_ ? block_pool_->totalBlocksNum() : 0;
+    return block_pool_->totalBlocksNum();
 }
 
 size_t KVCacheAllocator::maxAvailableTokensNum() const {
-    return block_pool_ ? (block_pool_->totalBlocksNum() * seqSizePerBlock()) : 0;
+    return block_pool_->totalBlocksNum() * seqSizePerBlock();
 }
 
 void KVCacheAllocator::regUserMr(size_t model_id) {
-    if (block_pool_) {
-        block_pool_->regUserMr(model_id);
-    }
+    block_pool_->regUserMr(model_id);
 }
 
 std::vector<std::pair<BufferPtr, size_t>> KVCacheAllocator::getAllBuffers() const {

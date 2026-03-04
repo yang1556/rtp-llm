@@ -82,6 +82,10 @@ public:
         return batch_resource[batch_id].cacheKeys();
     }
 
+    size_t cacheKeyCount(int batch_id = 0) const {
+        return cacheKeys(batch_id).size();
+    }
+
     void popBackCacheKey(int batch_id = 0) {
         RTP_LLM_CHECK(batch_id >= 0 && static_cast<size_t>(batch_id) < batch_resource.size());
         auto& keys = batch_resource[batch_id].cacheKeys();
