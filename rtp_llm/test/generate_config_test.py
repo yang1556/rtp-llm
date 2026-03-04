@@ -6,20 +6,20 @@ from transformers import AutoTokenizer
 
 from rtp_llm.access_logger.access_logger import AccessLogger
 from rtp_llm.config.log_config import get_log_path
-from rtp_llm.ops import SpecialTokens
-from rtp_llm.frontend.tokenizer_factory.tokenizers.tokenization_qwen import (
-    QWenTokenizer,
-)
-from rtp_llm.openai.api_datatype import ChatCompletionRequest, GenerateConfig
-from rtp_llm.openai.openai_endpoint import OpenaiEndpoint
-from rtp_llm.pipeline.pipeline import Pipeline
+from rtp_llm.config.model_config import ModelConfig
 from rtp_llm.config.py_config_modules import (
     GenerateEnvConfig,
     PyMiscellaneousConfig,
     RenderConfig,
     VitConfig,
 )
-from rtp_llm.config.model_config import ModelConfig
+from rtp_llm.frontend.tokenizer_factory.tokenizers.tokenization_qwen import (
+    QWenTokenizer,
+)
+from rtp_llm.openai.api_datatype import ChatCompletionRequest, GenerateConfig
+from rtp_llm.openai.openai_endpoint import OpenaiEndpoint
+from rtp_llm.ops import SpecialTokens
+from rtp_llm.pipeline.pipeline import Pipeline
 from rtp_llm.utils.concurrency_controller import ConcurrencyController
 
 
@@ -66,12 +66,11 @@ class GenerateConfigTest(TestCase):
         self.assertEqual(generate_config.max_new_tokens, 100)
 
         generate_config = Pipeline.create_generate_config(
-            generate_config={},
+            generate_config={**self._create_generate_config()},
             vocab_size=100,
             special_tokens=special_tokens,
             tokenizer=None,
             generate_env_config=GenerateEnvConfig(),
-            **self._create_generate_config(),
         )
         self.assertEqual(generate_config.stop_words_list, [[8848]])
         self.assertEqual(generate_config.stop_words_str, ["hello", "what's your name"])
@@ -82,12 +81,14 @@ class GenerateConfigTest(TestCase):
     def test_kwargs_overwrite(self):
         special_tokens = SpecialTokens()
         generate_config = Pipeline.create_generate_config(
-            generate_config=self._create_generate_config(),
+            generate_config={
+                **self._create_generate_config(),
+                **self._create_kwargs(),
+            },
             vocab_size=100,
             special_tokens=special_tokens,
             tokenizer=None,
             generate_env_config=GenerateEnvConfig(),
-            **self._create_kwargs(),
         )
         self.assertEqual(generate_config.stop_words_list, [[1551]])
         self.assertEqual(generate_config.stop_words_str, ["hi"])
@@ -253,7 +254,6 @@ class OpenaiGenerateConfigTest(TestCase):
             **kwargs,
         )
 
-
     def _generate_config_with_stop_word(
         self,
         model_stop_word_str: Optional[List[str]] = None,
@@ -272,13 +272,9 @@ class OpenaiGenerateConfigTest(TestCase):
 
         generate_env_config = GenerateEnvConfig()
         if env_stop_word_str is not None:
-            generate_env_config.stop_words_str = (
-                env_stop_word_str
-            )
+            generate_env_config.stop_words_str = env_stop_word_str
         if env_stop_word_list is not None:
-            generate_env_config.stop_words_list = (
-                env_stop_word_list
-            )
+            generate_env_config.stop_words_list = env_stop_word_list
 
         # Create ModelConfig object
         model_config = ModelConfig()

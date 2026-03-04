@@ -210,9 +210,7 @@ class FrontendWorker(BaseEndpoint):
         raw_request: Optional[Request] = None,
     ) -> CompleteResponseAsyncGenerator:
         """Build response generator from request_dict (BaseEndpoint entry)."""
-        default_generate_config = GenerateConfig()
-        request_extractor = RequestExtractor(default_generate_config)
-        request, kwargs = request_extractor.extract_request(request_dict)
+        request, extra_config = RequestExtractor.parse_request(request_dict)
 
         if request.is_streaming is False and request.incremental:
             raise FtRuntimeException(
@@ -220,37 +218,15 @@ class FrontendWorker(BaseEndpoint):
                 "request is non_stream but use incremental decoder",
             )
 
-        if (
+        is_multi = (
             len(request.input_texts) > 1
             or request.batch_infer
             or request.num_return_sequences > 0
-        ):
-            generators: List[AsyncGenerator[Dict[str, Any], None]] = []
-            for i, (text, urls, generate_config) in enumerate(
-                zip(request.input_texts, request.input_urls, request.generate_configs)
-            ):
-                generators.append(
-                    self._yield_generate(
-                        request.request_id + i * 10000,
-                        text,
-                        urls,
-                        generate_config=generate_config,
-                        **kwargs,
-                    )
-                )
-            response_generator = self._parallel_batch_async_generators(
-                request.incremental,
-                generators,
-                request.batch_infer,
-            )
+        )
+        if is_multi:
+            response_generator = self._build_batch_generators(request, extra_config)
         else:
-            response_generator = self._yield_generate(
-                request.request_id,
-                request.input_texts[0],
-                request.input_urls[0],
-                generate_config=request.generate_configs[0],
-                **kwargs,
-            )
+            response_generator = self._build_single_generator(request, extra_config)
 
         complete_response_collect_func = partial(
             FrontendWorker.collect_complete_response,
@@ -260,6 +236,45 @@ class FrontendWorker(BaseEndpoint):
         )
         return CompleteResponseAsyncGenerator(
             response_generator, complete_response_collect_func
+        )
+
+    def _build_batch_generators(
+        self,
+        request: Request,
+        extra_config: Dict[str, Any],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        generators: List[AsyncGenerator[Dict[str, Any], None]] = []
+        for i, (text, urls, generate_config) in enumerate(
+            zip(request.input_texts, request.input_urls, request.generate_configs)
+        ):
+            generators.append(
+                self._yield_generate(
+                    request.request_id + i * 10000,
+                    text,
+                    urls,
+                    generate_config=generate_config,
+                    generate_env_config=self.generate_env_config,
+                    extra_config=extra_config,
+                )
+            )
+        return self._parallel_batch_async_generators(
+            request.incremental,
+            generators,
+            request.batch_infer,
+        )
+
+    def _build_single_generator(
+        self,
+        request: Request,
+        extra_config: Dict[str, Any],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        return self._yield_generate(
+            request.request_id,
+            request.input_texts[0],
+            request.input_urls[0],
+            generate_config=request.generate_configs[0],
+            generate_env_config=self.generate_env_config,
+            extra_config=extra_config,
         )
 
     def _format_response(
@@ -341,15 +356,16 @@ class FrontendWorker(BaseEndpoint):
         text: str,
         urls: List[str],
         generate_config: GenerateConfig,
-        **kwargs: Any,
+        generate_env_config: Optional[Any] = None,
+        extra_config: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         stream = self.pipeline.pipeline_async(
             prompt=text,
             request_id=request_id,
             urls=urls,
             generate_config=generate_config,
-            generate_env_config=self.generate_env_config,
-            **kwargs,
+            generate_env_config=generate_env_config,
+            extra_config=extra_config,
         )
         async for generate_response in stream:
             yield self._format_response_new(generate_response, generate_config)

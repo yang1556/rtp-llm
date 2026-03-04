@@ -63,7 +63,9 @@ class SliceStopWordListTest(TestCase):
     async def test_slice(self, mock_enqueue):
         mock_enqueue.return_value = self.mock_call()
         outs = []
-        async for out in self.pipeline("hello", stop_words_list=[[29879, 596]]):
+        async for out in self.pipeline(
+            "hello", generate_config={"stop_words_list": [[29879, 596]]}
+        ):
             outs.append(out)
         out_str = [response.generate_texts[0] for response in outs]
         self.assertEqual(out_str, [",", ", what", ", what'", ", what'", ", what'"])

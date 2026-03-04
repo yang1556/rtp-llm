@@ -9,6 +9,19 @@ from rtp_llm.config.generate_config import GenerateConfig, RequestFormat, RoleAd
 request_id_field_name = "__request_id__"
 
 
+def _apply_optional_field(
+    config: GenerateConfig,
+    sources: List[Dict[str, Any]],
+    attr: str,
+    param_names: List[str],
+) -> None:
+    for source in sources:
+        for name in param_names:
+            if name in source:
+                setattr(config, attr, source[name])
+                return
+
+
 class Request(NamedTuple):
     request_id: int
     batch_infer: bool
@@ -27,12 +40,47 @@ class Request(NamedTuple):
 
 
 class RequestExtractor:
+    # (config attribute name, list of possible param names in request)
+    _OPTIONAL_CONFIG_FIELDS = [
+        ("return_hidden_states", ["return_hidden_states", "output_hidden_states"]),
+        ("return_all_hidden_states", ["return_hidden_states"]),
+        ("return_logits", ["return_logits", "output_logits"]),
+        ("return_input_ids", ["return_input_ids", "output_input_ids"]),
+        ("max_new_tokens", ["gen_length", "max_new_tokens"]),
+    ]
+
     def __init__(self, default_generate_config: GenerateConfig):
         self.default_generate_config = default_generate_config
 
-    def extract_request(self, kwargs: Dict[str, Any]) -> Tuple[Request, Dict[str, Any]]:
-        generate_config, remain_args = self._format_request(kwargs)
-        request = self._get_request(generate_config, remain_args)
+    @classmethod
+    def parse_request(
+        cls, request_dict: Dict[str, Any]
+    ) -> Tuple[Request, Dict[str, Any]]:
+        """Parse request_dict into Request and extra_config in one step."""
+
+        _default_extractor = cls(GenerateConfig())
+        generate_config, remain_args = _default_extractor._format_request(request_dict)
+        request_id = _default_extractor._get_request_id(remain_args)
+        batch_infer = _default_extractor._is_batch(remain_args)
+        input_texts = _default_extractor._get_text(remain_args)
+        input_urls = _default_extractor._get_urls(len(input_texts), remain_args)
+        generate_configs = _default_extractor._get_adapter(
+            generate_config, len(input_texts)
+        )
+        input_texts, input_urls, generate_configs = _default_extractor.extend_sequences(
+            input_texts, input_urls, generate_configs
+        )
+        is_streaming = cls.is_streaming(remain_args)
+        if generate_config.is_streaming:
+            is_streaming = True
+        request = Request(
+            request_id,
+            batch_infer,
+            input_texts,
+            input_urls,
+            generate_configs,
+            is_streaming,
+        )
         return request, remain_args
 
     @staticmethod
@@ -52,49 +100,33 @@ class RequestExtractor:
         remain_config_json = generate_config.update_and_pop(config_json)
         remain_kwargs = generate_config.update_and_pop(kwargs)
 
-        def update_optional(key: str, params: List[str]) -> None:
-            for source in [remain_config_json, remain_kwargs]:
-                for param in params:
-                    if param in source:
-                        setattr(generate_config, key, source[param])
-                        return
+        sources = [remain_config_json, remain_kwargs]
+        for attr, param_names in self._OPTIONAL_CONFIG_FIELDS:
+            _apply_optional_field(generate_config, sources, attr, param_names)
 
-        update_optional(
-            "return_hidden_states", ["return_hidden_states", "output_hidden_states"]
-        )
-        update_optional("return_all_hidden_states", ["return_hidden_states"])
-        update_optional("return_logits", ["return_logits", "output_logits"])
-        update_optional("return_input_ids", ["return_input_ids", "output_input_ids"])
-        update_optional("max_new_tokens", ["gen_length", "max_new_tokens"])
-        if self.is_streaming(kwargs) or (kwargs.get("stream", False) == True):
+        if self.is_streaming(kwargs) or kwargs.get("stream") is True:
             generate_config.is_streaming = True
         return generate_config, remain_kwargs
+
+    def _parse_role_addrs(self, generate_config: GenerateConfig) -> None:
+        """Convert role_addrs dicts to RoleAddr and set original_role_addrs."""
+        if not getattr(generate_config, "role_addrs", None):
+            return
+        try:
+            addrs = generate_config.role_addrs
+            if addrs and isinstance(addrs[0], dict):
+                generate_config.role_addrs = [
+                    RoleAddr(**a) if isinstance(a, dict) else a for a in addrs
+                ]
+            generate_config.original_role_addrs = generate_config.role_addrs.copy()
+        except Exception as e:
+            logging.warning("Failed to parse role_addrs: %s", e)
 
     def _format_request(
         self, kwargs: Dict[str, Any]
     ) -> Tuple[GenerateConfig, Dict[str, Any]]:
         generate_config, remain_kwargs = self._format_generate_config(kwargs)
-
-        # Handle role_addrs parsing - convert dict to RoleAddr objects
-        if hasattr(generate_config, "role_addrs") and generate_config.role_addrs:
-            try:
-                # Check if we have dict objects that need conversion
-                if generate_config.role_addrs and isinstance(
-                    generate_config.role_addrs[0], dict
-                ):
-                    generate_config.role_addrs = [
-                        (
-                            RoleAddr(**addr_data)
-                            if isinstance(addr_data, dict)
-                            else addr_data
-                        )
-                        for addr_data in generate_config.role_addrs
-                    ]
-                # Store original role_addrs for PD separation scenario
-                generate_config.original_role_addrs = generate_config.role_addrs.copy()
-            except Exception as e:
-                logging.warning(f"Failed to parse role_addrs: {e}")
-
+        self._parse_role_addrs(generate_config)
         return self._format_chat_api_messages(generate_config, remain_kwargs)
 
     def _get_text(self, kwargs: Dict[str, Any]):
@@ -186,29 +218,6 @@ class RequestExtractor:
         self, input_texts: Any, input_urls: Any, generate_configs: List[GenerateConfig]
     ):
         return input_texts, input_urls, generate_configs
-
-    def _get_request(
-        self, generate_config: GenerateConfig, kwargs: Dict[str, Any]
-    ) -> Request:
-        request_id = self._get_request_id(kwargs)
-        batch_infer = self._is_batch(kwargs)
-        input_texts = self._get_text(kwargs)
-        input_urls = self._get_urls(len(input_texts), kwargs)
-        generate_configs = self._get_adapter(generate_config, len(input_texts))
-        input_texts, input_urls, generate_configs = self.extend_sequences(
-            input_texts, input_urls, generate_configs
-        )
-        is_streaming = RequestExtractor.is_streaming(kwargs)
-        if generate_config.is_streaming:
-            is_streaming = True
-        return Request(
-            request_id,
-            batch_infer,
-            input_texts,
-            input_urls,
-            generate_configs,
-            is_streaming,
-        )
 
     def _format_chat_api_messages(
         self, generate_config: GenerateConfig, kwargs: Dict[str, Any]
