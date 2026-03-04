@@ -1,7 +1,7 @@
 from __future__ import annotations
 import torch
 import typing
-__all__: list[str] = ['ALLTOALL', 'ALL_GATHER', 'ALL_GATHER_WITH_OVERLAP', 'ActivationType', 'ArpcConfig', 'AttentionConfigs', 'BatchDecodeSchedulerConfig', 'CPRotateMethod', 'CacheStoreConfig', 'ConcurrencyConfig', 'DISABLED', 'DataType', 'DeviceResourceConfig', 'EPLBConfig', 'EplbMode', 'FIFOSchedulerConfig', 'FMHAConfig', 'FMHAType', 'FfnDisAggregateConfig', 'GrpcConfig', 'HWKernelConfig', 'HybridAttentionConfig', 'HybridAttentionType', 'KVCacheConfig', 'KvCacheDataType', 'LayerNormType', 'LinearAttentionConfig', 'MMModelConfig', 'MiscellaneousConfig', 'MlaOpsType', 'ModelConfig', 'ModelSpecificConfig', 'MoeConfig', 'NcclCommConfig', 'NormType', 'PDSepConfig', 'PREFILL_CP', 'ParallelismConfig', 'PrefillCPConfig', 'ProfilingDebugLoggingConfig', 'QuantAlgo', 'QuantMethod', 'RoleSpecialTokens', 'RoleType', 'RopeCache', 'RopeConfig', 'RopeStyle', 'RuntimeConfig', 'SpecialTokens', 'SpeculativeExecutionConfig', 'SpeculativeType', 'TaskType', 'UNKNOWN', 'VitConfig', 'VitSeparation', 'check_rope_cache', 'get_block_cache_keys', 'get_rope_cache', 'get_rope_cache_once']
+__all__: list[str] = ['ALLTOALL', 'ALL_GATHER', 'ALL_GATHER_WITH_OVERLAP', 'ActivationType', 'ArpcConfig', 'AttentionConfigs', 'BatchDecodeSchedulerConfig', 'CPRotateMethod', 'CacheStoreConfig', 'ConcurrencyConfig', 'DISABLED', 'DataType', 'DeviceResourceConfig', 'EPLBConfig', 'EplbMode', 'FIFOSchedulerConfig', 'FMHAConfig', 'FMHAType', 'FfnDisAggregateConfig', 'GrpcConfig', 'HWKernelConfig', 'HybridAttentionConfig', 'HybridAttentionType', 'KVCacheConfig', 'KvCacheDataType', 'LayerNormType', 'LinearAttentionConfig', 'MMModelConfig', 'MMPreprocessConfig', 'MiscellaneousConfig', 'MlaOpsType', 'ModelConfig', 'ModelSpecificConfig', 'MoeConfig', 'MultimodalInput', 'NcclCommConfig', 'NormType', 'PDSepConfig', 'PREFILL_CP', 'ParallelismConfig', 'PrefillCPConfig', 'ProfilingDebugLoggingConfig', 'QuantAlgo', 'QuantMethod', 'RoleSpecialTokens', 'RoleType', 'RopeCache', 'RopeConfig', 'RopeStyle', 'RuntimeConfig', 'SpecialTokens', 'SpeculativeExecutionConfig', 'SpeculativeType', 'TaskType', 'UNKNOWN', 'VitConfig', 'VitSeparation', 'check_rope_cache', 'get_block_cache_keys', 'get_rope_cache', 'get_rope_cache_once']
 class ActivationType:
     """
     Members:
@@ -732,6 +732,24 @@ class MMModelConfig:
     mm_sep_tokens: list[list[int]]
     def __init__(self) -> None:
         ...
+class MMPreprocessConfig:
+    crop_positions: list[float]
+    fps: int
+    height: int
+    max_frames: int
+    max_pixels: int
+    min_frames: int
+    min_pixels: int
+    mm_timeout_ms: int
+    width: int
+    def __getstate__(self) -> tuple:
+        ...
+    def __init__(self, width: int, height: int, min_pixels: int, max_pixels: int, fps: int, min_frames: int, max_frames: int, crop_positions: list[float], mm_timeout_ms: int) -> None:
+        ...
+    def __setstate__(self, arg0: tuple) -> None:
+        ...
+    def to_string(self) -> str:
+        ...
 class MiscellaneousConfig:
     aux_string: str
     disable_pdl: bool
@@ -913,6 +931,19 @@ class MoeConfig:
     def __getstate__(self) -> tuple:
         ...
     def __init__(self) -> None:
+        ...
+    def __setstate__(self, arg0: tuple) -> None:
+        ...
+    def to_string(self) -> str:
+        ...
+class MultimodalInput:
+    mm_preprocess_config: ...
+    mm_type: int
+    tensor: torch.Tensor
+    url: str
+    def __getstate__(self) -> tuple:
+        ...
+    def __init__(self, url: str, mm_type: int, tensor: torch.Tensor, mm_preprocess_config: ...) -> None:
         ...
     def __setstate__(self, arg0: tuple) -> None:
         ...
