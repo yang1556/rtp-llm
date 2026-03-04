@@ -63,9 +63,7 @@ public class GrpcWorkerStatusRunner implements Runnable {
             logger.info("GrpcWorkerStatusRunner run for {}", ipPort);
             long startTime = System.nanoTime() / 1000;
 
-            long latestFinishedTaskVersion = Optional.ofNullable(workerStatus.getLatestFinishedTaskVersion())
-                    .map(AtomicLong::get)
-                    .orElse(-1L);
+            long latestFinishedTaskVersion = workerStatus.getLatestFinishedTaskVersion();
 
             WorkerStatusResponse response = launchGrpcStatusCheck(ip, grpcPort, latestFinishedTaskVersion);
             handleStatusResponse(response, startTime);
@@ -147,8 +145,8 @@ public class GrpcWorkerStatusRunner implements Runnable {
             workerStatus.setDpSize(newWorkerStatus.getDpSize());
             workerStatus.setTpSize(newWorkerStatus.getTpSize());
             workerStatus.setAlive(newWorkerStatus.isAlive());
-            workerStatus.setVersion(String.valueOf(newWorkerStatus.getVersion()));
             workerStatus.setStatusVersion(responseVersion);
+            workerStatus.setLatestFinishedTaskVersion(newWorkerStatus.getLatestFinishedVersion());
 
             Map<String, TaskInfo> waitingTaskInfo = newWorkerStatus.getWaitingTaskInfo();
             Map<String, TaskInfo> runningTaskInfo = newWorkerStatus.getRunningTaskInfo();
