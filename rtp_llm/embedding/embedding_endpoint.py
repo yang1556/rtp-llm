@@ -70,7 +70,6 @@ class EmbeddingEndpoint(BaseEndpoint):
             access_logger=access_logger,
             rank_id=rank_id,
             server_id=server_id,
-            frontend_worker=None,
             active_requests=active_requests,
         )
         self.renderer = create_custom_module(model_config, tokenizer).renderer

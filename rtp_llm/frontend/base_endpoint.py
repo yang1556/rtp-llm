@@ -32,14 +32,12 @@ class BaseEndpoint:
         access_logger: AccessLogger,
         rank_id: str = "0",
         server_id: str = "0",
-        frontend_worker=None,
         active_requests: Optional[AtomicCounter] = None,
     ):
         self._global_controller = global_controller
         self._access_logger = access_logger
         self.rank_id = rank_id
         self.server_id = server_id
-        self._frontend_worker = frontend_worker
         self._active_requests = (
             active_requests if active_requests is not None else AtomicCounter()
         )
@@ -194,10 +192,6 @@ class BaseEndpoint:
 
     def _check_is_streaming(self, request_dict: Dict[str, Any]) -> bool:
         """Determine if request should use streaming mode."""
-        if self._frontend_worker is not None and hasattr(
-            self._frontend_worker, "is_streaming"
-        ):
-            return self._frontend_worker.is_streaming(request_dict)
         return RequestExtractor.is_streaming(request_dict) or request_dict.get(
             "stream", False
         )

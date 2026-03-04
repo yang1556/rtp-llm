@@ -132,10 +132,8 @@ class FrontendWorker(BaseEndpoint):
             access_logger=access_logger,
             rank_id=rank_id,
             server_id=server_id,
-            frontend_worker=None,
             active_requests=active_requests,
         )
-        self._frontend_worker = self
         logging.info("starting frontend worker")
 
         self.tokenizer = TokenizerFactory.create(

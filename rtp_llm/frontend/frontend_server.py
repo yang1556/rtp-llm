@@ -122,7 +122,6 @@ class FrontendServer(object):
                 access_logger=self._access_logger,
                 rank_id=self.rank_id,
                 server_id=self.server_id,
-                frontend_worker=self._frontend_worker,
                 active_requests=self._active_requests,
             )
         else:

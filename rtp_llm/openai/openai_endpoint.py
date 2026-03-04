@@ -62,7 +62,6 @@ class OpenaiEndpoint(BaseEndpoint):
         access_logger: AccessLogger,
         rank_id: str = "0",
         server_id: str = "0",
-        frontend_worker=None,
         active_requests: Optional[AtomicCounter] = None,
     ):
         super().__init__(
@@ -70,7 +69,6 @@ class OpenaiEndpoint(BaseEndpoint):
             access_logger=access_logger,
             rank_id=rank_id,
             server_id=server_id,
-            frontend_worker=frontend_worker,
             active_requests=active_requests,
         )
         # Get values from model_config
