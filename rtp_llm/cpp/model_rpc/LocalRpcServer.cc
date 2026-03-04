@@ -224,6 +224,7 @@ grpc::Status LocalRpcServer::GetWorkerStatus(grpc::ServerContext*   context,
     response->set_dp_size(status_info.dp_size);
     response->set_tp_size(status_info.tp_size);
     response->set_status_version(status_info.status_version);
+    response->set_latest_finished_version(status_info.latest_finished_version);
     response->set_alive(status_info.alive);
     response->set_precision(status_info.precision);
     reportWorkerStatusTime(request_begin_time_us, request_after_ws_time_us);
@@ -252,12 +253,13 @@ WorkerStatusInfo LocalRpcServer::getWorkerStatusInfo(int64_t latest_finished_ver
         default:
             status_info.role = "RoleType.UNKNOWN";
     }
-    status_info.dp_size        = maga_init_params_.parallelism_config.dp_size;
-    status_info.tp_size        = maga_init_params_.parallelism_config.tp_size;
-    status_info.dp_rank        = maga_init_params_.parallelism_config.dp_rank;
-    status_info.status_version = currentTimeUs();
-    status_info.alive          = true;
-    auto quant_method          = maga_init_params_.model_config_.quant_algo.getQuantMethod();
+    status_info.dp_size                 = maga_init_params_.parallelism_config.dp_size;
+    status_info.tp_size                 = maga_init_params_.parallelism_config.tp_size;
+    status_info.dp_rank                 = maga_init_params_.parallelism_config.dp_rank;
+    status_info.status_version          = currentTimeUs();
+    status_info.latest_finished_version = status_info.engine_schedule_info.latest_finished_version;
+    status_info.alive                   = true;
+    auto quant_method                   = maga_init_params_.model_config_.quant_algo.getQuantMethod();
 
     switch (quant_method) {
         case QuantMethod::WeightOnlyPerCol:
