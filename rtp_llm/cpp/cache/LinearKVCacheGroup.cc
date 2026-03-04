@@ -26,13 +26,11 @@ NeedBlocksInfo LinearKVCacheGroup::getNeedBlocks(
     const int reuse_begin = reuse_blocks_len;
     const int step        = std::max(1, linear_step_);
 
-    // calculate the number of blocks in the range (begin, end]
     auto count_linear_sparse_range = [&](int begin, int end) -> int {
         if (end <= begin) {
             return 0;
         }
         if (!reuse_enabled) {
-            // keeps only the tail block
             return 1;
         }
         const int eligible = (end + 1) / step - (begin + 1) / step;
@@ -42,16 +40,13 @@ NeedBlocksInfo LinearKVCacheGroup::getNeedBlocks(
 
     NeedBlocksInfo info;
 
-    // common_slots: blocks for common_seq_len (no reserve)
     const int common_slots = needBlocksNum(common_seq_len, 0);
-    // seq_slots: blocks for seq_len (no reserve)
-    const int seq_slots = needBlocksNum(seq_len, 0);
-    // total_slots = seq_slots + reserve_step
-    const int total_slots = needBlocksNum(seq_len, 0, reserve_step);
+    const int seq_slots    = needBlocksNum(seq_len, 0);
+    const int total_slots  = needBlocksNum(seq_len, 0, reserve_step);
 
     info.common_blocks = count_linear_sparse_range(reuse_begin, common_slots);
     info.extra_blocks  = count_linear_sparse_range(common_slots, seq_slots);
-    info.extra_blocks += std::max(total_slots - seq_slots, 0);  // for reserve_step
+    info.extra_blocks += std::max(total_slots - seq_slots, 0);
 
     info.common_blocks = std::max(info.common_blocks, 0);
     info.extra_blocks  = std::max(info.extra_blocks, 0);
@@ -83,15 +78,6 @@ bool LinearKVCacheGroup::malloc(BlockIndicesType& block_indices,
     if (new_blocks_len == 0) {
         return true;
     }
-
-    // LinearKVCacheGroup::malloc is responsible for:
-    // 1. allocating blocks for the current sequence length;
-    // 2. free unused blocks to reduce kvcache block usage;
-
-    // Two policies to follow:
-    // 1. Linear Steps: keep N * linear_step blocks if cache reuse enabled;
-    // 2. Allocate Tail Blocks: allocate the last partial block when initialization and keep last 2 block during
-    // decoding;
 
     int need_alloc_blocks = 0;
 
@@ -166,7 +152,6 @@ void LinearKVCacheGroup::removeSkippedBlocks(BlockIndicesType& block_indices,
     }
     const int step       = std::max(1, linear_step_);
     const int block_size = block_indices.size();
-    // keep last 2 and every reserve_step
     for (int i = block_size - 3 - reserve_step; i >= 0; i--) {
         if (isNullBlockIdx(block_indices[i])) {
             break;

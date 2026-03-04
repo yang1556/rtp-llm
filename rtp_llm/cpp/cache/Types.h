@@ -1,12 +1,12 @@
 #pragma once
 
 #include <cstddef>
-#include <vector>
 #include <cstdint>
+#include <vector>
 
+#include "rtp_llm/cpp/cache/BatchKVCacheResource.h"
 #include "rtp_llm/cpp/cache/CacheGroupType.h"
 #include "rtp_llm/cpp/core/Types.h"
-#include "rtp_llm/cpp/cache/BatchKVCacheResource.h"
 #include "rtp_llm/cpp/engine_base/stream/CompleteTokenIds.h"
 
 namespace rtp_llm {

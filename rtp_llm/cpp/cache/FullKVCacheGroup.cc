@@ -1,23 +1,8 @@
 #include "rtp_llm/cpp/cache/FullKVCacheGroup.h"
+
 #include "rtp_llm/cpp/utils/Logger.h"
 
 namespace rtp_llm {
-
-int FullKVCacheGroup::needBlocksNum(int seq_len, int current_blocks, int reserve_step) const {
-    return std::max((seq_len + reserve_step + seq_size_per_block_ - 1) / seq_size_per_block_ - current_blocks, 0);
-}
-
-NeedBlocksInfo FullKVCacheGroup::getNeedBlocks(
-    int common_seq_len, int seq_len, int reserve_step, int reuse_blocks_len, bool reuse_enabled) const {
-    (void)reuse_blocks_len;
-    (void)reuse_enabled;
-    NeedBlocksInfo info;
-    const int      common_slots = needBlocksNum(common_seq_len, /*current_blocks=*/0);
-    const int      total_slots  = needBlocksNum(seq_len, /*current_blocks=*/0, reserve_step);
-    info.common_blocks          = std::max(common_slots, 0);
-    info.extra_blocks           = std::max(total_slots - common_slots, 0);
-    return info;
-}
 
 bool FullKVCacheGroup::malloc(BlockIndicesType& block_indices, int seq_len, bool enable_reuse_cache, int reserve_step) {
     (void)enable_reuse_cache;
@@ -69,11 +54,6 @@ void FullKVCacheGroup::free(const BlockIndicesType& block_indices) {
     RTP_LLM_LOG_DEBUG("Freed %zu blocks", block_indices.size());
 }
 
-void FullKVCacheGroup::reference(BlockIndicesType& block_indices, const BlockIndicesType& new_block_indices) {
-    block_indices.insert(block_indices.end(), new_block_indices.begin(), new_block_indices.end());
-    block_pool_->requestReference(new_block_indices);
-}
-
 void FullKVCacheGroup::insertIntoCache(const CacheKeysType&    cache_keys,
                                        const BlockIndicesType& block_indices,
                                        bool                    is_resident) {
@@ -103,6 +83,27 @@ void FullKVCacheGroup::insertIntoCache(const CacheKeysType&    cache_keys,
 }
 
 void FullKVCacheGroup::removeSkippedBlocks(BlockIndicesType& block_indices, bool enable_reuse_cache, int reserve_step) {
+}
+
+int FullKVCacheGroup::needBlocksNum(int seq_len, int current_blocks, int reserve_step) const {
+    return std::max((seq_len + reserve_step + seq_size_per_block_ - 1) / seq_size_per_block_ - current_blocks, 0);
+}
+
+NeedBlocksInfo FullKVCacheGroup::getNeedBlocks(
+    int common_seq_len, int seq_len, int reserve_step, int reuse_blocks_len, bool reuse_enabled) const {
+    (void)reuse_blocks_len;
+    (void)reuse_enabled;
+    NeedBlocksInfo info;
+    const int      common_slots = needBlocksNum(common_seq_len, /*current_blocks=*/0);
+    const int      total_slots  = needBlocksNum(seq_len, /*current_blocks=*/0, reserve_step);
+    info.common_blocks          = std::max(common_slots, 0);
+    info.extra_blocks           = std::max(total_slots - common_slots, 0);
+    return info;
+}
+
+void FullKVCacheGroup::reference(BlockIndicesType& block_indices, const BlockIndicesType& new_block_indices) {
+    block_indices.insert(block_indices.end(), new_block_indices.begin(), new_block_indices.end());
+    block_pool_->requestReference(new_block_indices);
 }
 
 }  // namespace rtp_llm

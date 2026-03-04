@@ -379,7 +379,6 @@ KVCacheInfo KVCacheManager::getKVCacheInfo(int64_t latest_version, bool need_cac
     info.block_size         = block_size_tokens;
     info.total_kv_cache     = total_blocks * block_size_tokens;
     info.available_kv_cache = available_blocks * block_size_tokens;
-    // cached_keys left empty for now; can be populated when distributed cache is wired up.
 
     return info;
 }

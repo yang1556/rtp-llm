@@ -1,9 +1,10 @@
 #include "rtp_llm/cpp/cache/BlockPool.h"
+
 #include "rtp_llm/cpp/cache/MemoryLayoutStrategy.h"
-#include "rtp_llm/cpp/utils/KVCacheUtils.h"
+#include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
 #include "rtp_llm/cpp/disaggregate/cache_store/MemoryUtil.h"
 #include "rtp_llm/cpp/disaggregate/cache_store/NormalCacheStore.h"
-#include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
+#include "rtp_llm/cpp/utils/KVCacheUtils.h"
 
 namespace rtp_llm {
 
@@ -117,18 +118,14 @@ void BlockPool::initializeLayoutStrategy(size_t                    layout_idx,
                                          const MemoryLayoutConfig& layout_cfg,
                                          torch::Tensor&            kv_cache_tensor,
                                          torch::Tensor&            kv_scale_tensor) {
-    void* layout_cache_base_ptr =
-        static_cast<void*>(static_cast<char*>(cache_base_ptr_) + layout_cfg.kv_cache_offset_bytes);
-
     layout_strategies_[layout_idx] = std::make_unique<MemoryLayoutStrategy>();
     RTP_LLM_CHECK_WITH_INFO(layout_strategies_[layout_idx] != nullptr,
                             "Failed to create memory layout strategy for layout[%zu]",
                             layout_idx);
 
-    RTP_LLM_CHECK_WITH_INFO(
-        layout_strategies_[layout_idx]->init(layout_cfg, kv_cache_tensor, kv_scale_tensor, layout_cache_base_ptr),
-        "Failed to initialize memory layout strategy for layout[%zu]",
-        layout_idx);
+    RTP_LLM_CHECK_WITH_INFO(layout_strategies_[layout_idx]->init(layout_cfg, kv_cache_tensor, kv_scale_tensor),
+                            "Failed to initialize memory layout strategy for layout[%zu]",
+                            layout_idx);
 }
 
 void BlockPool::processLayerTensors(size_t                    layout_idx,

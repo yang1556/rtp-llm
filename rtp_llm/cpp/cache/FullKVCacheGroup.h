@@ -14,6 +14,7 @@ public:
                      int                          group_id):
         KVCacheGroup(layer_ids, kvcache_spec, block_pool, group_id) {}
 
+    // --- Virtual interface ---
     bool        malloc(BlockIndicesType& block_indices,
                        int               seq_len,
                        bool              enable_reuse_cache = false,

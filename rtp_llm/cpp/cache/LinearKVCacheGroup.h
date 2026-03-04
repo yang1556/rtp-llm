@@ -1,8 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <vector>
-#include <cstdint>
 
 #include "rtp_llm/cpp/cache/KVCacheGroup.h"
 #include "rtp_llm/cpp/core/Buffer.h"
@@ -18,8 +18,8 @@ public:
                        int                          linear_step = 0):
         KVCacheGroup(layer_ids, kvcache_spec, block_pool, group_id), linear_step_(linear_step) {}
 
+    // --- Virtual interface ---
     MatchResult match(const CacheKeysType& cache_keys) override;
-    // Match a single cache key (used by Hybrid allocator to do right-to-left joint matching).
     MatchResult matchSingleKey(CacheKeyType cache_key) const;
     bool        malloc(BlockIndicesType& block_indices,
                        int               seq_len,
@@ -27,7 +27,6 @@ public:
                        int               reserve_step       = 0) override;
     void
     insertIntoCache(const CacheKeysType& cache_keys, const BlockIndicesType& block_indices, bool is_resident) override;
-
     void           removeSkippedBlocks(BlockIndicesType& block_indices,
                                        bool              enable_reuse_cache = false,
                                        int               reserve_step       = 0) override;
@@ -43,7 +42,6 @@ public:
 private:
     void filterValidBlocks(const BlockIndicesType& in, BlockIndicesType& out) const;
 
-private:
     // NOTE: linear attention cache can be sparsified; current implementation is conservative:
     // - always keep the last 2 blocks (decode edge case: read block i, write block i+1)
     // - other blocks can be freed (set to NULL_BLOCK_IDX)

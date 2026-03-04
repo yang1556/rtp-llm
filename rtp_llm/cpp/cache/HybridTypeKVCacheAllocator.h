@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 #include "rtp_llm/cpp/cache/FullKVCacheGroup.h"

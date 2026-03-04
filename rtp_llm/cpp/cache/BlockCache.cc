@@ -1,5 +1,5 @@
 #include "rtp_llm/cpp/cache/BlockCache.h"
-#include "rtp_llm/cpp/utils/LRUCache.h"
+
 #include "rtp_llm/cpp/utils/Logger.h"
 
 namespace rtp_llm {

@@ -1,10 +1,7 @@
 #include "rtp_llm/cpp/cache/HybridTypeKVCacheAllocator.h"
 
 #include <algorithm>
-#include <cstdlib>
-#include <sstream>
 #include <unordered_map>
-#include <unordered_set>
 
 #include "rtp_llm/cpp/cache/BlockPoolConfigHelper.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
