@@ -54,21 +54,32 @@ try:
                 FlashInferTRTLLMPrefillImpl,
                 FlashInferTRTLLMSpecDecodeImpl,
             )
+            from rtp_llm.models_py.modules.factory.attention.cuda_impl.trtllm_gen_ori import (
+                FlashInferTRTLLMDecodeImplOri,
+                FlashInferTRTLLMPrefillImplOri,
+                FlashInferTRTLLMSpecDecodeImplOri,
+            )
             from rtp_llm.models_py.modules.factory.attention.cuda_impl.xqa import (
                 get_xqa_impl,
             )
 
             PREFILL_MHA_IMPS.extend(
                 [
-                    TRTMHAImpl,
+                    # FlashInferTRTLLMSpecDecodeImpl,
+                    # FlashInferTRTLLMPrefillImpl,
+                    # FlashInferTRTLLMSpecDecodeImplOri,
+                    FlashInferTRTLLMPrefillImplOri,
                     PyFlashinferPrefillImpl,
                     PyFlashinferPagedPrefillImpl,
-                    FlashInferTRTLLMSpecDecodeImpl,
-                    FlashInferTRTLLMPrefillImpl,
+                    # FlashInferTRTLLMSpecDecodeImpl,
+                    # FlashInferTRTLLMPrefillImpl,
+                    TRTMHAImpl,
                     TRTPagedMHAImpl,
                 ]
             )
-            DECODE_MHA_IMPS.extend([FlashInferTRTLLMDecodeImpl])
+            # DECODE_MHA_IMPS.extend([FlashInferTRTLLMDecodeImpl])
+            DECODE_MHA_IMPS.extend([FlashInferTRTLLMDecodeImplOri])
+            # DECODE_MHA_IMPS.extend([FlashInferTRTLLMDecodeImpl])
             DECODE_MHA_IMPS.append(get_xqa_impl())
 
             from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashinfer_mla_wrapper import (

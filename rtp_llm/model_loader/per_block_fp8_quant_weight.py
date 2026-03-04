@@ -784,7 +784,7 @@ class PerBlockFp8Weight(CompositeWeight, QuantWeight):
 
             if is_deep_gemm_e8m0_used():
                 kernel_weight, scale_weight = requant_weight_ue8m0(
-                    kernel_weight, scale_weight
+                    kernel_weight.cuda(), scale_weight.cuda()
                 )
 
             processed_res[self.scale.name] = scale_weight

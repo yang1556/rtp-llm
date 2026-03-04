@@ -106,18 +106,21 @@ def get_fmha_impl(
     attn_inputs.is_cuda_graph = is_cuda_graph
 
     mha_impls = PREFILL_MHA_IMPS if attn_inputs.is_prefill else DECODE_MHA_IMPS
+    print("try1:", mha_impls, flush=True)
+
     for impl in mha_impls:
         # Check if this FMHA implementation is disabled before creating instance
         impl_class_name = impl.__name__
-
+        print("try:", impl_class_name, flush=True)
         # Skip if this FMHA implementation is disabled in config
         if _is_fmha_impl_disabled(impl_class_name, fmha_config):
             continue
+        print("try suc:", impl_class_name, flush=True)
 
         # Check support before creating instance
         if not impl.support(attn_configs, attn_inputs):
             continue
-
+        print("try sup:", impl_class_name, flush=True)
         try:
             instance = impl(attn_configs, attn_inputs)
             if not is_cuda_graph or instance.support_cuda_graph():
