@@ -32,6 +32,7 @@ message TaskInfoPB {
   int64 iterate_count = 6;
   int64 end_time_ms = 7;
   int64 dp_rank = 8;
+  bool is_waiting = 9;
 }
 
 // Worker status response
@@ -50,7 +51,6 @@ message WorkerStatusPB {
   int64 status_version = 12;
   bool alive = 13;
   string precision = 14;
-  repeated TaskInfoPB waiting_task_info = 15;
 }
 
 // Service definition
