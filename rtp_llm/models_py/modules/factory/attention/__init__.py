@@ -90,12 +90,16 @@ try:
                 if torch.version.cuda:
                     major, minor = map(int, torch.version.cuda.split(".")[:2])
                     if (major, minor) >= (12, 9):
+                        from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl import (
+                            SparseMlaCpImpl,
+                        )
                         from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_impl import (
                             SparseMlaImpl,
                         )
 
                         DECODE_MLA_IMPS.append(SparseMlaImpl)
                         PREFILL_MLA_IMPS.append(SparseMlaImpl)
+                        PREFILL_MLA_IMPS.append(SparseMlaCpImpl)
             except (ImportError, AttributeError, ValueError):
                 pass  # Skip SparseMlaImpl if CUDA < 12.9 or flash_mla not available
 
@@ -111,12 +115,14 @@ try:
             PyFlashinferDecodeImpl,
             PyFlashinferPrefillImpl,
         )
+
         PREFILL_MHA_IMPS.append(PyFlashinferPrefillImpl)
         DECODE_MHA_IMPS.append(PyFlashinferDecodeImpl)
-        
+
         from rtp_llm.models_py.modules.factory.attention.cuda_cp_impl.prefill_cp_flashinfer import (
             CPFlashInferImpl,
         )
+
         PREFILL_MHA_IMPS.append(CPFlashInferImpl)
 except Exception as e:
     logging.warning(f"Failed to import Attention implementation: {e}")
