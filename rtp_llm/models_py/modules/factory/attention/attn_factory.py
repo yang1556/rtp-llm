@@ -34,6 +34,9 @@ def get_mla_impl(
         if not impl.support(attn_configs, attn_inputs):
             continue
 
+        if not impl.support_parallelism_config(parallelism_config):
+            continue
+
         cos_sin_cache = weight.get_global_weight(W.rope_cos_sin_cache)
         use_fast_path = (
             attn_inputs.is_prefill
@@ -59,6 +62,7 @@ def get_mla_impl(
             quant_config=quant_config,
             max_seq_len=max_seq_len,
             is_cuda_graph=is_cuda_graph,
+            parallelism_config=parallelism_config,
         )
         if not is_cuda_graph or instance.support_cuda_graph():
             return instance
