@@ -66,7 +66,7 @@ def kv_cache_offset_transform(kv_cache_offset: torch.Tensor, block_num: int) -> 
     halving memory traffic compared with the naive approach.
     """
     kv_cache_offset = kv_cache_offset.squeeze(1)
-    print("kkkk:", kv_cache_offset.shape, kv_cache_offset, flush=True)
+    # print("kkkk:", kv_cache_offset.shape, kv_cache_offset, flush=True)
     assert kv_cache_offset.dim() == 3 and kv_cache_offset.shape[1] == 2
     N, _, M = kv_cache_offset.shape
     BLOCK_SIZE = 512
@@ -81,7 +81,7 @@ def kv_cache_offset_transform(kv_cache_offset: torch.Tensor, block_num: int) -> 
         M,
         BLOCK_SIZE=BLOCK_SIZE,
     )
-    print("kkkk2:", kv_cache_offset.shape, kv_cache_offset, flush=True)
+    # print("kkkk2:", kv_cache_offset.shape, kv_cache_offset, flush=True)
 
 
 def expand_block_tables_for_trtllm(
@@ -105,7 +105,7 @@ def expand_block_tables_for_trtllm(
     if page_ratio < 1:
         return block_tables
     B, max_pages = block_tables.shape
-    print("block_tables1:", block_tables, flush=True)
+    # print("block_tables1:", block_tables, flush=True)
     offsets = torch.arange(
         page_ratio, device=block_tables.device, dtype=block_tables.dtype
     )
@@ -116,7 +116,7 @@ def expand_block_tables_for_trtllm(
         .view(B, max_pages * page_ratio)
         .cuda()
     )
-    print("block_tables2:", block_tables, flush=True)
+    # print("block_tables2:", block_tables, flush=True)
     return block_tables
 
 
@@ -194,7 +194,7 @@ class FlashInferTRTLLMPrefillOp(object):
         self,
         attn_configs: AttentionConfigs,
     ):
-        print("init prefill:", flush=True)
+        # print("init prefill:", flush=True)
 
         self.attn_configs = attn_configs
         self.head_dim = attn_configs.size_per_head
@@ -216,13 +216,13 @@ class FlashInferTRTLLMPrefillOp(object):
         release_trt_workspace_buffer(self.workspace_buffer)
 
     def support(self, attention_inputs: PyAttentionInputs):
-        print(
-            "support prefill:",
-            is_sm_100(),
-            attention_inputs.is_prefill,
-            attention_inputs.kv_cache_block_id_device is not None,
-            flush=True,
-        )
+        # print(
+        #     "support prefill:",
+        #     is_sm_100(),
+        #     attention_inputs.is_prefill,
+        #     attention_inputs.kv_cache_block_id_device is not None,
+        #     flush=True,
+        # )
         return (
             is_sm_100()
             and attention_inputs.is_prefill
@@ -251,7 +251,7 @@ class FlashInferTRTLLMPrefillOp(object):
         )
         cu_kv_seqlens[1:] = torch.cumsum(page_per_seq, dim=0, dtype=torch.int32)
 
-        print("bt:", attention_inputs.kv_cache_block_id_device, flush=True)
+        # print("bt:", attention_inputs.kv_cache_block_id_device, flush=True)
         return FlashInferTRTLLMParams(
             batch_size=attention_inputs.input_lengths.size(0),
             max_q_len=attention_inputs.input_lengths.max().item(),
@@ -290,20 +290,20 @@ class FlashInferTRTLLMPrefillOp(object):
                 self.page_size,
                 self.head_dim,
             )
-        print("bt:", fmha_params.block_tables, flush=True)
-        print("q:", q, flush=True)
-        print(
-            "k cache:",
-            kv_cache.kv_cache_base[0].shape,
-            kv_cache.kv_cache_base[0, 1, :, 0, :],
-            flush=True,
-        )
-        print(
-            "v cache:",
-            kv_cache.kv_cache_base[1].shape,
-            kv_cache.kv_cache_base[1, 1, :, 0, :],
-            flush=True,
-        )
+        # print("bt:", fmha_params.block_tables, flush=True)
+        # print("q:", q, flush=True)
+        # print(
+        #     "k cache:",
+        #     kv_cache.kv_cache_base[0].shape,
+        #     kv_cache.kv_cache_base[0, 32, :, 0, :],
+        #     flush=True,
+        # )
+        # print(
+        #     "v cache:",
+        #     kv_cache.kv_cache_base[1].shape,
+        #     kv_cache.kv_cache_base[1, 32, :, 0, :],
+        #     flush=True,
+        # )
         o = flashinfer.prefill.trtllm_batch_context_with_kv_cache(
             query=q,
             kv_cache=(kv_cache.kv_cache_base[0], kv_cache.kv_cache_base[1]),
@@ -323,7 +323,7 @@ class FlashInferTRTLLMPrefillOp(object):
             out_dtype=o_type,  # model_runner.dtype
             # kv_layout='NHD'
         )
-        print("o:", o, flush=True)
+        # print("o:", o, flush=True)
         return o.view(-1, self.local_head_num * self.head_dim).to(q_type)
 
 
@@ -332,7 +332,7 @@ class FlashInferTRTLLMDecodeOp(object):
         self,
         attn_configs: AttentionConfigs,
     ):
-        print("init decode:", flush=True)
+        # print("init decode:", flush=True)
         self.attn_configs = attn_configs
         self.head_dim = attn_configs.size_per_head
         self.head_num = attn_configs.head_num
@@ -353,13 +353,13 @@ class FlashInferTRTLLMDecodeOp(object):
         release_trt_workspace_buffer(self.workspace_buffer)
 
     def support(self, attention_inputs: PyAttentionInputs):
-        print(
-            "support decode:",
-            is_sm_100(),
-            attention_inputs.is_prefill,
-            attention_inputs.input_lengths,
-            flush=True,
-        )
+        # print(
+        #     "support decode:",
+        #     is_sm_100(),
+        #     attention_inputs.is_prefill,
+        #     attention_inputs.input_lengths,
+        #     flush=True,
+        # )
         if not is_sm_100():
             return False
         if (
@@ -435,20 +435,20 @@ class FlashInferTRTLLMDecodeOp(object):
 
         # Call TRT-LLM kernel
         # raw_out: like q, [bs, acc_q_len, num_q_heads, head_dim] but with output dtype
-        print("dbt:", fmha_params.block_tables, flush=True)
-        print("dq:", q, flush=True)
-        print(
-            "dk cache:",
-            kv_cache.kv_cache_base[0].shape,
-            kv_cache.kv_cache_base[0, 1, :, 0, :],
-            flush=True,
-        )
-        print(
-            "dv cache:",
-            kv_cache.kv_cache_base[1].shape,
-            kv_cache.kv_cache_base[1, 1, :, 0, :],
-            flush=True,
-        )
+        # print("dbt:", fmha_params.block_tables, flush=True)
+        # print("dq:", q, flush=True)
+        # print(
+        #     "dk cache:",
+        #     kv_cache.kv_cache_base[0].shape,
+        #     kv_cache.kv_cache_base[0, 32, :, 0, :],
+        #     flush=True,
+        # )
+        # print(
+        #     "dv cache:",
+        #     kv_cache.kv_cache_base[1].shape,
+        #     kv_cache.kv_cache_base[1, 32, :, 0, :],
+        #     flush=True,
+        # )
         o = flashinfer.decode.trtllm_batch_decode_with_kv_cache(
             query=q,
             kv_cache=(kv_cache.kv_cache_base[0], kv_cache.kv_cache_base[1]),
@@ -465,7 +465,7 @@ class FlashInferTRTLLMDecodeOp(object):
             # kv_layout="NHD",
             q_len_per_req=q.shape[0] // fmha_params.seq_lens.shape[0],
         )
-        print("do:", o, flush=True)
+        # print("do:", o, flush=True)
 
         return o.view(-1, self.local_head_num * self.head_dim).to(q_type)
 
@@ -496,6 +496,7 @@ class FlashInferTRTLLMPrefillImplOri(FMHAImplBase):
         attn_inputs.kv_cache_block_id_device = self.kv_cache_block_id_device_ori
 
         self.used = True
+        self.prepare_cuda_graph(attn_inputs)
 
     @classmethod
     def support(
@@ -531,6 +532,10 @@ class FlashInferTRTLLMPrefillImplOri(FMHAImplBase):
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
+        self.kv_cache_block_id_device_ori = expand_block_tables_for_trtllm(
+            attn_inputs.kv_cache_block_id_device, self.fmha_impl.page_ratio
+        )
+        self.fmha_params.block_tables.copy_(self.kv_cache_block_id_device_ori)
         new_fmha_params = self.fmha_impl.prepare(attn_inputs)
         self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
         self.fmha_params.cu_kv_seqlens.copy_(
@@ -570,6 +575,7 @@ class FlashInferTRTLLMSpecDecodeImplOri(FMHAImplBase):
         attn_inputs.kv_cache_block_id_device = self.kv_cache_block_id_device_ori
 
         self.used = True
+        self.prepare_cuda_graph(attn_inputs)
 
     @classmethod
     def support(
@@ -608,6 +614,10 @@ class FlashInferTRTLLMSpecDecodeImplOri(FMHAImplBase):
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
+        self.kv_cache_block_id_device_ori = expand_block_tables_for_trtllm(
+            attn_inputs.kv_cache_block_id_device, self.fmha_impl.page_ratio
+        )
+        self.fmha_params.block_tables.copy_(self.kv_cache_block_id_device_ori)
         new_fmha_params = self.fmha_impl.prepare(attn_inputs)
         self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
 
@@ -644,6 +654,7 @@ class FlashInferTRTLLMDecodeImplOri(FMHAImplBase):
         self.write_cache_store_impl = common.create_write_cache_store_impl(attn_inputs)
         attn_inputs.kv_cache_block_id_device = self.kv_cache_block_id_device_ori
         self.used = True
+        self.prepare_cuda_graph(attn_inputs)
 
     @classmethod
     def support(
@@ -682,6 +693,10 @@ class FlashInferTRTLLMDecodeImplOri(FMHAImplBase):
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
+        self.kv_cache_block_id_device_ori = expand_block_tables_for_trtllm(
+            attn_inputs.kv_cache_block_id_device, self.fmha_impl.page_ratio
+        )
+        self.fmha_params.block_tables.copy_(self.kv_cache_block_id_device_ori)
         new_fmha_params = self.fmha_impl.prepare(attn_inputs)
         self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
 

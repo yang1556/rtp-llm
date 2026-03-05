@@ -226,8 +226,18 @@ class ModelLoader:
         if load_method == LoadMethod.AUTO:
             is_safetensor = self._load_config.database.is_safetensor
             convert_device = self._choose_weight_convert_device(device)
+            # convert_device = 'cuda'
             tensors_name = self._load_config.database.get_pretrain_tensor_names()
             not_same_name_tensors = len(set(tensors_name)) == len(tensors_name)
+            print(
+                "gg:",
+                is_safetensor,
+                convert_device,
+                not_same_name_tensors,
+                self._is_memory_enough_for_fastsafetensor(),
+                has_module("fastsafetensors"),
+                flush=True,
+            )
             if (
                 is_safetensor
                 and convert_device != "cpu"
@@ -264,10 +274,11 @@ class ModelLoader:
             / (1024.0**2)
         )
         max_file_mem = max_file_size / (1024.0**2)
-        logging.debug(
+        logging.info(
             f"free mem: {free_mem}, model mem: {model_mem}, max file mem: {max_file_mem}"
         )
-        return (free_mem - model_mem) > (3 * max_file_mem)
+        return True
+        # return (free_mem - model_mem) > (3 * max_file_mem)
 
     def _load_from_fastsafetensor(self, device: str):
         all_tensors = self._load_config.database.fastsafetensors_weights_iterator(
@@ -426,7 +437,7 @@ class ModelLoader:
             / max(self._load_config.ep_size, self._load_config.tp_size)
             / (1024.0**3)
         )
-        device = current_device if free_mem * 0.9 > model_mem else "cpu"
+        device = current_device  # if free_mem * 0.9 > model_mem else "cpu"
         logging.info(
             f"free_mem: {free_mem:.2f}GB, estimated model_mem: {model_mem:.2f}GB, use device: {device}"
         )
