@@ -34,7 +34,7 @@ public class WorkerStatus {
     private AtomicLong runningQueueTime = new AtomicLong();
     private Map<String, TaskInfo> waitingTaskList;
     private Map<String, TaskInfo> runningTaskList;
-    private long latestFinishedTaskVersion = -1L;
+    private AtomicLong latestFinishedTaskVersion = new AtomicLong(-1L);
 
     private ConcurrentHashMap<Long/*requestId*/, TaskInfo> localTaskMap = new ConcurrentHashMap<>();
     private double stepLatencyMs;
@@ -48,7 +48,7 @@ public class WorkerStatus {
     private AtomicBoolean resourceAvailable = new AtomicBoolean(true); // Resource availability state
     private AtomicBoolean statusCheckInProgress = new AtomicBoolean(false); // Status check in progress flag
     private AtomicBoolean cacheCheckInProgress = new AtomicBoolean(false); // Cache check in progress flag
-    private Long statusVersion = -1L;
+    private AtomicLong statusVersion = new AtomicLong(-1L);
 
     /**
      * Add task to local running queue
