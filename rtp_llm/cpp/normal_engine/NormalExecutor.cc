@@ -110,6 +110,7 @@ absl::Status NormalExecutor::process(const std::list<GenerateStreamPtr>& streams
         RETURN_IF_STATUS_OR_ERROR(model_input_status);
         model_input                              = std::move(model_input_status.value());
         executor_collector.gather_model_input_us = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
+        std::cout << "FUYU gather_model_input_us:" << executor_collector.gather_model_input_us << std::endl;
     }
     {
         int64_t start_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
@@ -119,16 +120,20 @@ absl::Status NormalExecutor::process(const std::list<GenerateStreamPtr>& streams
             return absl::OkStatus();
         }
         executor_collector.tp_sync_input_us = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
+        std::cout << "FUYU tp_sync_input_us:" << executor_collector.tp_sync_input_us << std::endl;
     }
 
     // make sure last model input is released before forward
     model_->releaseBuffers();
 
     {
+        int64_t start_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
         // update kv cache
         if (model_input.kv_cache_update_mapping) {
             cache_manager_->blockBatchCopy(*model_input.kv_cache_update_mapping);
         }
+        int64_t kv_cache_update_time = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
+        std::cout << "FUYU kv_cache_update_time:" << kv_cache_update_time << std::endl;
     }
     // get lora input
     if (lora_manager_) {
@@ -146,11 +151,13 @@ absl::Status NormalExecutor::process(const std::list<GenerateStreamPtr>& streams
         model_output                        = std::move(model_->forward(model_input));
         executor_collector.model_forward_us = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
         RTP_LLM_LOG_DEBUG("model forward done");
+        std::cout << "FUYU model_forward_us:" << executor_collector.model_forward_us << std::endl;
     }
     if (expert_balancer_) {
         int64_t start_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
         expert_balancer_->stepForward(*model_, executor_collector);
         executor_collector.eplb_step_latency_us = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
+        std::cout << "FUYU eplb_step_latency_us:" << executor_collector.eplb_step_latency_us << std::endl;
     }
     if (device_->getDeviceProperties().tp_rank > 0 || warm_up_ || streams.size() == 0) {
         device_->syncAndCheck();
@@ -166,6 +173,7 @@ absl::Status NormalExecutor::process(const std::list<GenerateStreamPtr>& streams
         sampler_mask_params.reset();
         RTP_LLM_LOG_DEBUG("sampler forward done");
         executor_collector.sample_input_us = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
+        std::cout << "FUYU sample_input_us:" << executor_collector.sample_input_us << std::endl;
     }
     {
         int64_t start_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
@@ -173,8 +181,12 @@ absl::Status NormalExecutor::process(const std::list<GenerateStreamPtr>& streams
             batch_stream_processor_->dispatch(stream_groups, {std::move(model_output), std::move(sampler_output)});
         executor_collector.dispatch_output_us = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
         reportMetrics(stream_groups, executor_collector, tps_collector);
+        std::cout << "FUYU dispatch_output_us:" << executor_collector.dispatch_output_us << std::endl;
 
+        start_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
         model_->releaseBuffers();
+        int64_t release_time = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
+        std::cout << "FUYU release_buffer_time:" << release_time << std::endl;
 
         return result;
     }
