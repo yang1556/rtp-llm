@@ -1,10 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <hip/hip_runtime.h>
+
+// Minimal shim: skip bf16/fp8 and heavy HIP headers to avoid conflicts with torch in graph/runner TUs.
+#ifndef RTP_LLM_CUDA_SHIMS_MINIMAL
 #include "amd_bfloat16.h"
 #include <hip/hip_fp16.h>
 #include <hip/hip_fp8.h>
-#include <hip/hip_runtime.h>
 #include <hiprand/hiprand_kernel_rocm.h>
 
 #define __nv_bfloat16 amd_bfloat16
@@ -23,6 +26,7 @@ static inline __device__ __host__ __nv_bfloat162 __ldg(const __nv_bfloat162* ptr
 static inline __device__ __host__ __nv_bfloat16 __ldg(const __nv_bfloat16* ptr) {
     return *ptr;
 }
+#endif  // !RTP_LLM_CUDA_SHIMS_MINIMAL
 
 template<typename T>
 __device__ inline T __shfl_xor_sync(unsigned mask, T var, int laneMask, int width = 32) {
@@ -41,6 +45,7 @@ __device__ inline unsigned __ballot_sync(unsigned mask, int predicate) {
     return __ballot(predicate);
 }
 
+#ifndef RTP_LLM_CUDA_SHIMS_MINIMAL
 template<typename T_OUT, typename T_IN>
 __host__ __device__ inline T_OUT special_cast(T_IN val) {
     return val;
@@ -55,10 +60,18 @@ __host__ __device__ inline float special_cast<float, amd_bfloat16>(amd_bfloat16 
     return __bfloat162float(val);
 };
 #endif
+#else
+template<typename T_OUT, typename T_IN>
+__host__ __device__ inline T_OUT special_cast(T_IN val) {
+    return val;
+}
+#endif  // !RTP_LLM_CUDA_SHIMS_MINIMAL
 
+#ifndef RTP_LLM_CUDA_SHIMS_MINIMAL
 #define curand_uniform hiprand_uniform
 #define curand_init hiprand_init
 #define curandState_t hiprandState_t
+#endif
 
 #define cub hipcub
 #define check_cuda_value ROCM_CHECK
@@ -126,3 +139,7 @@ __host__ __device__ inline float special_cast<float, amd_bfloat16>(amd_bfloat16 
 #define cudaIpcMemLazyEnablePeerAccess hipIpcMemLazyEnablePeerAccess
 
 // Taken from cuda_utils.h
+//
+// Graph runner device API and GRAPH_DEVICE_TYPE: see rtp_llm/cpp/devices/GraphRunnerDeviceShims.h.
+// On ROCm, use at::hip::* explicitly in implementation code (#if USING_ROCM); do not add
+// ATen HIP includes to headers that are included by GraphBaseRunner.h (to avoid include conflicts).
