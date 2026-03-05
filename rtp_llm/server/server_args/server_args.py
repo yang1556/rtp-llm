@@ -495,4 +495,11 @@ def setup_args() -> PyEnvConfigs:
     # 解析参数（会自动应用所有配置绑定）
     parsed_args = parser.parse_args()
 
+    if (
+        py_env_configs.kv_cache_config.host_cache_size_mb > 0
+        and py_env_configs.kv_cache_config.enable_eviction_offload
+    ):
+        extra_bytes = py_env_configs.kv_cache_config.host_cache_size_mb * 1024 * 1024
+        py_env_configs.device_resource_config.host_reserve_memory_bytes += extra_bytes
+
     return py_env_configs

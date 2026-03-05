@@ -46,16 +46,36 @@ bool FullKVCacheGroup::malloc(BlockIndicesType& block_indices, int seq_len, bool
 MatchResult FullKVCacheGroup::match(const CacheKeysType& cache_keys) {
     MatchResult final_result;
 
-    for (const auto& cache_key : cache_keys) {
-        auto result = block_cache_->match(cache_key, group_id_);
-        if (isNullBlockIdx(result.matched_index)) {
-            break;
-        }
-        final_result.reuse_blocks++;
-        final_result.block_indices.push_back(result.matched_index);
-    }
+    if (host_cache_manager_ && host_cache_manager_->isEnabled()) {
+        auto extended = radix_tree_->matchPrefix(cache_keys, group_id_, seqSizePerBlock());
 
-    final_result.reuse_length = final_result.reuse_blocks * seqSizePerBlock();
+        for (auto& gpu_blk : extended.gpu_blocks) {
+            final_result.block_indices.push_back(gpu_blk);
+            final_result.reuse_blocks++;
+        }
+
+        for (auto* node : extended.host_nodes) {
+            auto gpu_idx = host_cache_manager_->onboardBlock(node);
+            if (isNullBlockIdx(gpu_idx)) {
+                break;
+            }
+            block_pool_->blockCacheReference(gpu_idx);
+            final_result.block_indices.push_back(gpu_idx);
+            final_result.reuse_blocks++;
+        }
+
+        final_result.reuse_length = final_result.reuse_blocks * seqSizePerBlock();
+    } else {
+        for (const auto& cache_key : cache_keys) {
+            auto result = radix_tree_->match(cache_key, group_id_);
+            if (isNullBlockIdx(result.matched_index)) {
+                break;
+            }
+            final_result.reuse_blocks++;
+            final_result.block_indices.push_back(result.matched_index);
+        }
+        final_result.reuse_length = final_result.reuse_blocks * seqSizePerBlock();
+    }
 
     return final_result;
 }
@@ -94,7 +114,7 @@ void FullKVCacheGroup::insertIntoCache(const CacheKeysType&    cache_keys,
         item.group_id    = group_id_;
         item.block_index = block_indices[i];
         item.is_resident = is_resident;
-        if (block_cache_->put(item)) {
+        if (radix_tree_->put(item)) {
             block_pool_->blockCacheReference(block_indices[i]);
         }
     }

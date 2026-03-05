@@ -183,6 +183,10 @@ BlockCachePtr BlockPool::blockCache() {
     return block_cache_;
 }
 
+RadixTreePtr BlockPool::radixTree() {
+    return radix_tree_;
+}
+
 void BlockPool::initFreeBlocks() {
     // block 0 is reserved
     for (BlockIdxType i = 1; i < static_cast<BlockIdxType>(config_.block_num); ++i) {
@@ -192,6 +196,7 @@ void BlockPool::initFreeBlocks() {
     request_ref_counter_.init(config_.block_num);
 
     block_cache_ = std::make_shared<BlockCache>();
+    radix_tree_  = std::make_shared<RadixTree>();
 }
 
 std::vector<torch::Tensor> BlockPool::allLayerCacheBase() const {

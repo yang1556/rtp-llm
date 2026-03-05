@@ -60,7 +60,7 @@ NeedBlocksInfo LinearKVCacheGroup::getNeedBlocks(
 
 MatchResult LinearKVCacheGroup::matchSingleKey(CacheKeyType cache_key) const {
     MatchResult result;
-    auto        matched = block_cache_->match(cache_key, group_id_);
+    auto        matched = radix_tree_->match(cache_key, group_id_);
     if (!isNullBlockIdx(matched.matched_index)) {
         result.block_indices = {matched.matched_index};
     }
@@ -152,7 +152,7 @@ void LinearKVCacheGroup::insertIntoCache(const CacheKeysType&    cache_keys,
         item.group_id    = group_id_;
         item.block_index = b;
         item.is_resident = is_resident;
-        if (block_cache_->put(item)) {
+        if (radix_tree_->put(item)) {
             block_pool_->blockCacheReference(b);
         }
     }

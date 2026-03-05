@@ -165,8 +165,8 @@ TEST_F(LinearKVCacheGroupTest, InsertIntoCacheSkipsNullBlocks) {
     LinearKVCacheGroup group(/*layer_ids=*/{}, spec, block_pool, /*group_id=*/3, /*linear_step=*/2);
     ASSERT_TRUE(group.init());
 
-    auto block_cache = block_pool->blockCache();
-    ASSERT_NE(block_cache, nullptr);
+    auto radix_tree = block_pool->radixTree();
+    ASSERT_NE(radix_tree, nullptr);
 
     BlockIndicesType blocks;
     blocks.push_back(NULL_BLOCK_IDX);
@@ -177,10 +177,10 @@ TEST_F(LinearKVCacheGroupTest, InsertIntoCacheSkipsNullBlocks) {
     CacheKeysType keys = {100, 101, 102, 103};
     group.insertIntoCache(keys, blocks, /*is_resident=*/false);
 
-    EXPECT_FALSE(block_cache->contains(100, /*group_id=*/3));
-    EXPECT_TRUE(block_cache->contains(101, /*group_id=*/3));
-    EXPECT_FALSE(block_cache->contains(102, /*group_id=*/3));
-    EXPECT_TRUE(block_cache->contains(103, /*group_id=*/3));
+    EXPECT_FALSE(radix_tree->contains(100, /*group_id=*/3));
+    EXPECT_TRUE(radix_tree->contains(101, /*group_id=*/3));
+    EXPECT_FALSE(radix_tree->contains(102, /*group_id=*/3));
+    EXPECT_TRUE(radix_tree->contains(103, /*group_id=*/3));
 }
 
 TEST_F(LinearKVCacheGroupTest, MatchSingleKeyReturnsMatchedBlockOrEmpty) {
@@ -191,8 +191,8 @@ TEST_F(LinearKVCacheGroupTest, MatchSingleKeyReturnsMatchedBlockOrEmpty) {
     LinearKVCacheGroup group(/*layer_ids=*/{}, spec, block_pool, /*group_id=*/7, /*linear_step=*/2);
     ASSERT_TRUE(group.init());
 
-    auto block_cache = block_pool->blockCache();
-    ASSERT_NE(block_cache, nullptr);
+    auto radix_tree = block_pool->radixTree();
+    ASSERT_NE(radix_tree, nullptr);
 
     // Allocate a block, then put it into cache for group_id=7.
     auto blocks = block_pool->malloc(1);
@@ -203,7 +203,7 @@ TEST_F(LinearKVCacheGroupTest, MatchSingleKeyReturnsMatchedBlockOrEmpty) {
     item.group_id    = 7;
     item.block_index = blocks[0];
     item.is_resident = false;
-    ASSERT_TRUE(block_cache->put(item));
+    ASSERT_TRUE(radix_tree->put(item));
 
     auto hit = group.matchSingleKey(123);
     ASSERT_EQ(hit.block_indices.size(), 1u);
@@ -363,13 +363,13 @@ TEST_F(LinearKVCacheGroupTest, InsertIntoCacheWithEmptyInputsIsNoop) {
     LinearKVCacheGroup group(/*layer_ids=*/{}, spec, block_pool, /*group_id=*/3, /*linear_step=*/2);
     ASSERT_TRUE(group.init());
 
-    auto block_cache = block_pool->blockCache();
-    ASSERT_NE(block_cache, nullptr);
-    ASSERT_EQ(block_cache->size(), 0u);
+    auto radix_tree = block_pool->radixTree();
+    ASSERT_NE(radix_tree, nullptr);
+    ASSERT_EQ(radix_tree->size(), 0u);
 
     group.insertIntoCache(CacheKeysType{}, BlockIndicesType{1, 2}, /*is_resident=*/false);
     group.insertIntoCache(CacheKeysType{100, 101}, BlockIndicesType{}, /*is_resident=*/false);
-    EXPECT_EQ(block_cache->size(), 0u);
+    EXPECT_EQ(radix_tree->size(), 0u);
 }
 
 }  // namespace test

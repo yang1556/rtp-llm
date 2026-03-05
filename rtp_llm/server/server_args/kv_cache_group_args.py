@@ -133,3 +133,19 @@ def init_kv_cache_group_args(parser, kv_cache_config):
         default=False,
         help="KVCache 同步写入开关. 当开启时, 在写入 Cache 时会等待写入完成. 默认关闭(即异步写入), Smoke 测试时需开启",
     )
+    kv_cache_group.add_argument(
+        "--host_cache_size_mb",
+        env_name="HOST_CACHE_SIZE_MB",
+        bind_to=(kv_cache_config, "host_cache_size_mb"),
+        type=int,
+        default=0,
+        help="Host memory cache size for eviction-triggered KV cache offload, in MB. 0 disables offload.",
+    )
+    kv_cache_group.add_argument(
+        "--enable_eviction_offload",
+        env_name="ENABLE_EVICTION_OFFLOAD",
+        bind_to=(kv_cache_config, "enable_eviction_offload"),
+        type=str2bool,
+        default=False,
+        help="Enable eviction-triggered GPU→CPU KV cache offload. Requires host_cache_size_mb > 0.",
+    )

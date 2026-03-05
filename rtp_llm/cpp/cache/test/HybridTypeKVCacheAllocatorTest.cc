@@ -101,7 +101,7 @@ static BatchKVCacheResourcePtr makeBatchResource(
 }
 
 static std::vector<BlockIdxType> allocateAndCache(BlockPoolPtr         block_pool,
-                                                  BlockCachePtr        block_cache,
+                                                  RadixTreePtr         radix_tree,
                                                   int                  group_id,
                                                   const CacheKeysType& keys,
                                                   bool                 is_resident = true) {
@@ -114,7 +114,7 @@ static std::vector<BlockIdxType> allocateAndCache(BlockPoolPtr         block_poo
         item.group_id    = group_id;
         item.block_index = blocks[i];
         item.is_resident = is_resident;
-        EXPECT_TRUE(block_cache->put(item));
+        EXPECT_TRUE(radix_tree->put(item));
         block_pool->blockCacheReference(blocks[i]);
     }
 
@@ -124,7 +124,7 @@ static std::vector<BlockIdxType> allocateAndCache(BlockPoolPtr         block_poo
 }
 
 static std::vector<BlockIdxType> allocateAndCacheKeepAllocated(BlockPoolPtr         block_pool,
-                                                               BlockCachePtr        block_cache,
+                                                               RadixTreePtr         radix_tree,
                                                                int                  group_id,
                                                                const CacheKeysType& keys,
                                                                bool                 is_resident = true) {
@@ -137,7 +137,7 @@ static std::vector<BlockIdxType> allocateAndCacheKeepAllocated(BlockPoolPtr     
         item.group_id    = group_id;
         item.block_index = blocks[i];
         item.is_resident = is_resident;
-        EXPECT_TRUE(block_cache->put(item));
+        EXPECT_TRUE(radix_tree->put(item));
         block_pool->blockCacheReference(blocks[i]);
     }
 
@@ -230,10 +230,10 @@ TEST_F(HybridTypeKVCacheAllocatorTest, JointReuseUsesFullPrefixAndLinearTailOnly
     auto allocator = std::make_shared<HybridTypeKVCacheAllocator>(config, device_, AllocationType::DEVICE);
     ASSERT_TRUE(allocator->init());
 
-    auto block_pool  = allocator->getBlockPool();
-    auto block_cache = block_pool->blockCache();
+    auto block_pool = allocator->getBlockPool();
+    auto radix_tree = block_pool->radixTree();
     ASSERT_NE(block_pool, nullptr);
-    ASSERT_NE(block_cache, nullptr);
+    ASSERT_NE(radix_tree, nullptr);
 
     // Config order: gid=0 linear, gid=1 full.
     const int gid_linear = 0;
@@ -241,11 +241,11 @@ TEST_F(HybridTypeKVCacheAllocatorTest, JointReuseUsesFullPrefixAndLinearTailOnly
 
     // Full group has prefix matches for {100,101,102}.
     CacheKeysType full_keys   = {100, 101, 102};
-    auto          full_blocks = allocateAndCache(block_pool, block_cache, gid_full, full_keys);
+    auto          full_blocks = allocateAndCache(block_pool, radix_tree, gid_full, full_keys);
 
     // Linear group only matches key 101 (so joint match should backoff to pos=1 => reuse_blocks_len=2).
     CacheKeysType linear_keys   = {101};
-    auto          linear_blocks = allocateAndCache(block_pool, block_cache, gid_linear, linear_keys);
+    auto          linear_blocks = allocateAndCache(block_pool, radix_tree, gid_linear, linear_keys);
     ASSERT_EQ(linear_blocks.size(), 1u);
 
     // Request has 4 keys, but allocator drops the last for matching.
@@ -311,10 +311,10 @@ TEST_F(HybridTypeKVCacheAllocatorTest, DisableDeviceCacheSkipsReuseMatchAndAlloc
     auto allocator = std::make_shared<HybridTypeKVCacheAllocator>(config, device_, AllocationType::DEVICE);
     ASSERT_TRUE(allocator->init());
 
-    auto block_pool  = allocator->getBlockPool();
-    auto block_cache = block_pool->blockCache();
+    auto block_pool = allocator->getBlockPool();
+    auto radix_tree = block_pool->radixTree();
     ASSERT_NE(block_pool, nullptr);
-    ASSERT_NE(block_cache, nullptr);
+    ASSERT_NE(radix_tree, nullptr);
 
     // Config order: gid=0 linear, gid=1 full.
     const int gid_linear = 0;
@@ -323,7 +323,7 @@ TEST_F(HybridTypeKVCacheAllocatorTest, DisableDeviceCacheSkipsReuseMatchAndAlloc
     // Prepare cached blocks for full group; keep them allocated so allocator's malloc() cannot accidentally return same
     // ids.
     CacheKeysType full_keys   = {100, 101, 102};
-    auto          full_blocks = allocateAndCacheKeepAllocated(block_pool, block_cache, gid_full, full_keys);
+    auto          full_blocks = allocateAndCacheKeepAllocated(block_pool, radix_tree, gid_full, full_keys);
     ASSERT_EQ(full_blocks.size(), 3u);
 
     auto batch_res = makeBatchResource(/*batch_size=*/1,
@@ -404,10 +404,10 @@ TEST_F(HybridTypeKVCacheAllocatorTest, InsertIntoCacheInsertsOnlyFullBlocks) {
     auto allocator = std::make_shared<HybridTypeKVCacheAllocator>(config, device_, AllocationType::DEVICE);
     ASSERT_TRUE(allocator->init());
 
-    auto block_pool  = allocator->getBlockPool();
-    auto block_cache = block_pool->blockCache();
+    auto block_pool = allocator->getBlockPool();
+    auto radix_tree = block_pool->radixTree();
     ASSERT_NE(block_pool, nullptr);
-    ASSERT_NE(block_cache, nullptr);
+    ASSERT_NE(radix_tree, nullptr);
 
     // gid=0 linear, gid=1 full.
     const int gid_linear = 0;
@@ -434,13 +434,13 @@ TEST_F(HybridTypeKVCacheAllocatorTest, InsertIntoCacheInsertsOnlyFullBlocks) {
     allocator->insertIntoCache(insert_info);
 
     // Full group should have cached first two keys.
-    EXPECT_TRUE(block_cache->contains(100, gid_full));
-    EXPECT_TRUE(block_cache->contains(101, gid_full));
-    EXPECT_FALSE(block_cache->contains(102, gid_full));
+    EXPECT_TRUE(radix_tree->contains(100, gid_full));
+    EXPECT_TRUE(radix_tree->contains(101, gid_full));
+    EXPECT_FALSE(radix_tree->contains(102, gid_full));
 
     // Linear group has NULL in early slots when reuse disabled, thus should not insert these full blocks.
-    EXPECT_FALSE(block_cache->contains(100, gid_linear));
-    EXPECT_FALSE(block_cache->contains(101, gid_linear));
+    EXPECT_FALSE(radix_tree->contains(100, gid_linear));
+    EXPECT_FALSE(radix_tree->contains(101, gid_linear));
 }
 
 TEST_F(HybridTypeKVCacheAllocatorTest, ConvertIndexToBufferAndAllLayerCacheBaseSmoke) {

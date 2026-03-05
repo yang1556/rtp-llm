@@ -12,6 +12,8 @@
 #include "rtp_llm/cpp/cache/CacheConfig.h"
 #include "rtp_llm/cpp/cache/BlockPool.h"
 #include "rtp_llm/cpp/cache/BlockCache.h"
+#include "rtp_llm/cpp/cache/RadixTree.h"
+#include "rtp_llm/cpp/cache/HostCacheManager.h"
 
 namespace rtp_llm {
 
@@ -22,11 +24,17 @@ struct NeedBlocksInfo {
 
 class KVCacheGroup {
 public:
-    KVCacheGroup(const LayerIdsType& layer_ids, KVCacheSpecPtr kvcache_spec, BlockPoolPtr block_pool, int group_id):
+    KVCacheGroup(const LayerIdsType& layer_ids,
+                 KVCacheSpecPtr      kvcache_spec,
+                 BlockPoolPtr        block_pool,
+                 int                 group_id,
+                 HostCacheManagerPtr host_cache_manager = nullptr):
         layer_ids_(layer_ids),
         kvcache_spec_(std::move(kvcache_spec)),
         block_pool_(block_pool),
         block_cache_(block_pool_->blockCache()),
+        radix_tree_(block_pool_->radixTree()),
+        host_cache_manager_(host_cache_manager),
         group_id_(group_id),
         seq_size_per_block_(kvcache_spec_->seq_size_per_block) {}
 
@@ -58,13 +66,18 @@ public:
     size_t freeBlocksNum() const;
     bool   ensureFreeBlocks(int need_blocks);
     int    seqSizePerBlock() const;
+    void   setHostCacheManager(HostCacheManagerPtr host_cache_manager) {
+        host_cache_manager_ = host_cache_manager;
+    }
 
 protected:
-    LayerIdsType   layer_ids_;
-    KVCacheSpecPtr kvcache_spec_;
-    BlockPoolPtr   block_pool_;
-    BlockCachePtr  block_cache_;
-    int            group_id_ = 0;
+    LayerIdsType        layer_ids_;
+    KVCacheSpecPtr      kvcache_spec_;
+    BlockPoolPtr        block_pool_;
+    BlockCachePtr       block_cache_;
+    RadixTreePtr        radix_tree_;
+    HostCacheManagerPtr host_cache_manager_;
+    int                 group_id_ = 0;
 
     int                                    seq_size_per_block_;
     std::unordered_map<int, torch::Tensor> global_layer_to_kv_tensors;

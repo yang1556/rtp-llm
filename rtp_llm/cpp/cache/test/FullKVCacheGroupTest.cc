@@ -74,14 +74,14 @@ TEST_F(FullKVCacheGroupTest, MatchTest) {
 
     auto block_pool = createBlockPool();
     block_pool->init();
-    auto block_cache = block_pool->blockCache();
+    auto radix_tree = block_pool->radixTree();
 
     BlockCache::CacheItem item    = {101, 0, 1, false};
-    auto                  result1 = block_cache->put(item);
+    auto                  result1 = radix_tree->put(item);
     EXPECT_TRUE(result1);
 
     BlockCache::CacheItem item2   = {102, 0, 2, false};
-    auto                  result2 = block_cache->put(item2);
+    auto                  result2 = radix_tree->put(item2);
     EXPECT_TRUE(result2);
 
     auto spec                = std::make_shared<MHAKVCacheSpec>();
@@ -107,11 +107,11 @@ TEST_F(FullKVCacheGroupTest, MatchTest) {
 
     // all match
     BlockCache::CacheItem item3   = {103, 0, 3, false};
-    auto                  result3 = block_cache->put(item3);
+    auto                  result3 = radix_tree->put(item3);
     EXPECT_TRUE(result3);
 
     BlockCache::CacheItem item4   = {104, 0, 4, false};
-    auto                  result4 = block_cache->put(item4);
+    auto                  result4 = radix_tree->put(item4);
     EXPECT_TRUE(result4);
 
     cache_keys         = {101, 102, 103, 104};
@@ -194,7 +194,7 @@ TEST_F(FullKVCacheGroupTest, InsertIntoCacheTest) {
 TEST_F(FullKVCacheGroupTest, EnsureFreeBlocksTest) {
     auto block_pool = createBlockPool();
     block_pool->init();
-    auto block_cache  = block_pool->blockCache();
+    auto radix_tree   = block_pool->radixTree();
     auto total_blocks = block_pool->freeBlocksNum();
 
     auto spec                = std::make_shared<MHAKVCacheSpec>();
@@ -216,17 +216,17 @@ TEST_F(FullKVCacheGroupTest, EnsureFreeBlocksTest) {
     ASSERT_EQ(block_pool->availableBlocksNum(), total_blocks - 4);
 
     group1.insertIntoCache(cache_keys, block_indices, false);
-    ASSERT_EQ(block_cache->size(), 4);
+    ASSERT_EQ(radix_tree->size(), 4);
     ASSERT_EQ(block_pool->freeBlocksNum(), total_blocks - 4);
     ASSERT_EQ(block_pool->availableBlocksNum(), total_blocks - 4);
 
     group1.free(block_indices);
-    ASSERT_EQ(block_cache->size(), 4);
+    ASSERT_EQ(radix_tree->size(), 4);
     ASSERT_EQ(block_pool->freeBlocksNum(), total_blocks - 4);
     ASSERT_EQ(block_pool->availableBlocksNum(), total_blocks);
 
     ASSERT_EQ(true, group1.ensureFreeBlocks(total_blocks - 2));
-    ASSERT_EQ(block_cache->size(), 2);
+    ASSERT_EQ(radix_tree->size(), 2);
     ASSERT_EQ(block_pool->freeBlocksNum(), total_blocks - 2);
     ASSERT_EQ(block_pool->availableBlocksNum(), total_blocks);
 }

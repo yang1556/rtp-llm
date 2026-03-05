@@ -14,6 +14,7 @@
 #include "rtp_llm/cpp/cache/Types.h"
 #include "rtp_llm/cpp/cache/BufferTypes.h"
 #include "rtp_llm/cpp/cache/BlockCache.h"
+#include "rtp_llm/cpp/cache/RadixTree.h"
 #include "rtp_llm/cpp/cache/MemoryLayoutStrategy.h"
 #include "rtp_llm/cpp/cache/BlockPoolConfig.h"
 #include "rtp_llm/cpp/disaggregate/cache_store/MemoryUtil.h"
@@ -30,6 +31,7 @@ public:
     bool init();
 
     BlockCachePtr blockCache();
+    RadixTreePtr  radixTree();
 
     size_t totalBlocksNum() const;
     size_t freeBlocksNum() const;
@@ -108,6 +110,7 @@ private:
     AllocationType         allocation_type_;
 
     BlockCachePtr block_cache_;
+    RadixTreePtr  radix_tree_;
 
     rtp_llm::BufferPtr cache_aligned_buffer_;
     void*              cache_base_ptr_  = nullptr;

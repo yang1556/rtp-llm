@@ -35,10 +35,15 @@ public:
                        bool                           copy_last_block,
                        std::vector<BlockIdPair>&      block_update_mapping) override;
 
-    int seqSizePerBlock() const override;
-    int singleBatchNeedBlocks(const BatchKVCacheResourcePtr& batch_kv_cache_resource,
-                              int                            seq_len,
-                              int                            reserve_step) const override;
+    int  seqSizePerBlock() const override;
+    int  singleBatchNeedBlocks(const BatchKVCacheResourcePtr& batch_kv_cache_resource,
+                               int                            seq_len,
+                               int                            reserve_step) const override;
+    void setHostCacheManager(HostCacheManagerPtr host_cache_manager) override {
+        for (auto& group : kv_cache_groups_) {
+            group->setHostCacheManager(host_cache_manager);
+        }
+    }
 
 private:
     bool         doInit() override;

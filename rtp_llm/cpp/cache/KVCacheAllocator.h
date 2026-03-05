@@ -10,6 +10,7 @@
 #include "rtp_llm/cpp/cache/CacheConfig.h"
 #include "rtp_llm/cpp/cache/BlockPool.h"
 #include "rtp_llm/cpp/cache/BufferTypes.h"
+#include "rtp_llm/cpp/cache/HostCacheManager.h"
 
 namespace rtp_llm {
 
@@ -68,13 +69,14 @@ public:
         return reserve_block_num_;
     }
 
-    void    regUserMr(size_t model_id);
-    int64_t getMrCostTimeMs() const;
-    size_t  freeBlocksNum() const;
-    size_t  availableBlocksNum() const;
-    size_t  availableTokensNum() const;
-    size_t  totalBlocksNum() const;
-    size_t  maxAvailableTokensNum() const;
+    virtual void setHostCacheManager(HostCacheManagerPtr host_cache_manager) {}
+    void         regUserMr(size_t model_id);
+    int64_t      getMrCostTimeMs() const;
+    size_t       freeBlocksNum() const;
+    size_t       availableBlocksNum() const;
+    size_t       availableTokensNum() const;
+    size_t       totalBlocksNum() const;
+    size_t       maxAvailableTokensNum() const;
 
 protected:
     virtual bool         doInit() = 0;

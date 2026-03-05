@@ -50,7 +50,10 @@ class MoeStrategy(ABC):
         checker = ConditionChecker(f"{self.__class__.__name__}.can_handle()")
 
         # Get Router and Executor types from strategy attributes
-        attrs = self.get_attributes()
+        try:
+            attrs = self.get_attributes()
+        except (ImportError, ModuleNotFoundError):
+            return False
         router_cls = attrs.get_router_class()
         executor_cls = attrs.get_executor_class()
 

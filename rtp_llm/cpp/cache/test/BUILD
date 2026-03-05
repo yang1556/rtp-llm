@@ -168,3 +168,29 @@ cc_test(
     env = {},
     exec_properties = {'gpu':'A10'},
 )
+
+cc_test(
+    name = "radix_tree_test",
+    srcs = [
+        "RadixTreeTest.cc",
+    ],
+    data = [],
+    copts = test_copts,
+    deps = block_cache_test_deps,
+    env = {},
+    exec_properties = {'gpu':'A10'},
+)
+
+cc_test(
+    name = "host_cache_manager_test",
+    srcs = [
+        "HostCacheManagerTest.cc",
+    ],
+    data = [],
+    copts = test_copts,
+    deps = test_deps + [
+        ":block_pool_test_helper",
+    ],
+    env = {},
+    exec_properties = {'gpu':'A10'},
+)

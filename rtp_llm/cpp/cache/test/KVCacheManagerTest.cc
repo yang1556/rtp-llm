@@ -415,22 +415,22 @@ TEST_F(KVCacheManagerTest, GetKVCacheInfo_MergesDeviceAndMemoryKeys_Dedup) {
     ASSERT_NE(kv_cache_manager->allocator_, nullptr);
     ASSERT_NE(kv_cache_manager->coordinator_, nullptr);
 
-    // Seed device block cache with keys: 10, 11, 12 (put makes MRU at front => snapshot order: 12,11,10)
-    auto block_cache = kv_cache_manager->allocator_->getBlockPool()->blockCache();
-    ASSERT_NE(block_cache, nullptr);
+    // Seed device radix tree with keys: 10, 11, 12
+    auto radix_tree = kv_cache_manager->allocator_->getBlockPool()->radixTree();
+    ASSERT_NE(radix_tree, nullptr);
     {
         BlockCache::CacheItem item;
         item.group_id    = 0;
         item.is_resident = false;
         item.cache_key   = 10;
         item.block_index = 1;
-        ASSERT_TRUE(block_cache->put(item));
+        ASSERT_TRUE(radix_tree->put(item));
         item.cache_key   = 11;
         item.block_index = 2;
-        ASSERT_TRUE(block_cache->put(item));
+        ASSERT_TRUE(radix_tree->put(item));
         item.cache_key   = 12;
         item.block_index = 3;
-        ASSERT_TRUE(block_cache->put(item));
+        ASSERT_TRUE(radix_tree->put(item));
     }
 
     // Inject a lightweight memory connector with a MemoryBlockCache snapshot:

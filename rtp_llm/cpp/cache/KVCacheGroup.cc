@@ -41,23 +41,46 @@ bool KVCacheGroup::ensureFreeBlocks(int required_blocks) {
         return true;
     }
 
-    // blocks popped by block cache might be occupied by request
-    // it's necessary to checkout whether free blocks are enough
+    const bool enable_offload = host_cache_manager_ && host_cache_manager_->isEnabled();
+
     while (true) {
         const auto free_blocks = block_pool_->freeBlocksNum();
         if (free_blocks >= static_cast<size_t>(required_blocks)) {
             break;
         }
 
-        const int need_evict     = required_blocks - static_cast<int>(free_blocks);
-        auto      evicted_blocks = block_cache_->pop(need_evict);
-        if (evicted_blocks.empty()) {
-            RTP_LLM_LOG_WARNING("ensure free blocks failed, free blocks : %d, need evict blocks : %d",
-                                block_pool_->freeBlocksNum(),
-                                need_evict);
-            return false;
+        const int need_evict = required_blocks - static_cast<int>(free_blocks);
+
+        if (enable_offload) {
+            auto evict_result = radix_tree_->evictGPU(need_evict, true);
+
+            // Offload nodes to host memory
+            for (auto* node : evict_result.offloadable_nodes) {
+                if (!host_cache_manager_->offloadBlock(node)) {
+                    // Offload failed, discard this block
+                    evict_result.discarded_gpu_blocks.push_back(node->gpu_block_idx);
+                }
+            }
+
+            if (evict_result.discarded_gpu_blocks.empty() && evict_result.offloadable_gpu_blocks.empty()) {
+                RTP_LLM_LOG_WARNING("ensure free blocks failed (offload), free blocks: %zu, need: %d",
+                                    block_pool_->freeBlocksNum(),
+                                    need_evict);
+                return false;
+            }
+
+            // Free the GPU blocks (offloaded ones have been copied to host already)
+            block_pool_->blockCacheFree(evict_result.discarded_gpu_blocks);
+            block_pool_->blockCacheFree(evict_result.offloadable_gpu_blocks);
+        } else {
+            auto evicted_blocks = radix_tree_->pop(need_evict);
+            if (evicted_blocks.empty()) {
+                RTP_LLM_LOG_WARNING(
+                    "ensure free blocks failed, free blocks: %zu, need: %d", block_pool_->freeBlocksNum(), need_evict);
+                return false;
+            }
+            block_pool_->blockCacheFree(evicted_blocks);
         }
-        block_pool_->blockCacheFree(evicted_blocks);
     }
 
     return true;

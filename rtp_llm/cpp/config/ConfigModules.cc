@@ -103,7 +103,9 @@ std::string KVCacheConfig::to_string() const {
         << "use_block_cache: " << use_block_cache << "\n"
         << "enable_device_cache: " << enable_device_cache << "\n"
         << "enable_memory_cache: " << enable_memory_cache << "\n"
-        << "write_cache_sync: " << write_cache_sync << "\n";
+        << "write_cache_sync: " << write_cache_sync << "\n"
+        << "host_cache_size_mb: " << host_cache_size_mb << "\n"
+        << "enable_eviction_offload: " << enable_eviction_offload << "\n";
     return oss.str();
 }
 

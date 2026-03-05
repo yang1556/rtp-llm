@@ -286,6 +286,8 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def_readwrite("enable_device_cache", &KVCacheConfig::enable_device_cache)
         .def_readwrite("enable_memory_cache", &KVCacheConfig::enable_memory_cache)
         .def_readwrite("write_cache_sync", &KVCacheConfig::write_cache_sync)
+        .def_readwrite("host_cache_size_mb", &KVCacheConfig::host_cache_size_mb)
+        .def_readwrite("enable_eviction_offload", &KVCacheConfig::enable_eviction_offload)
         .def("insertMultiTaskPromptTokens", &KVCacheConfig::insertMultiTaskPromptTokens)
         .def("to_string", &KVCacheConfig::to_string)
         .def(py::pickle(
@@ -315,10 +317,12 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                                       self.use_block_cache,
                                       self.enable_device_cache,
                                       self.enable_memory_cache,
-                                      self.write_cache_sync);
+                                      self.write_cache_sync,
+                                      self.host_cache_size_mb,
+                                      self.enable_eviction_offload);
             },
             [](py::tuple t) {
-                if (t.size() != 26)
+                if (t.size() < 26)
                     throw std::runtime_error("Invalid state!");
                 KVCacheConfig c;
                 try {
@@ -348,6 +352,12 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                     c.enable_device_cache          = t[23].cast<bool>();
                     c.enable_memory_cache          = t[24].cast<bool>();
                     c.write_cache_sync             = t[25].cast<bool>();
+                    if (t.size() > 26) {
+                        c.host_cache_size_mb = t[26].cast<int64_t>();
+                    }
+                    if (t.size() > 27) {
+                        c.enable_eviction_offload = t[27].cast<bool>();
+                    }
                 } catch (const std::exception& e) {
                     throw std::runtime_error(std::string("KVCacheConfig unpickle error: ") + e.what());
                 }

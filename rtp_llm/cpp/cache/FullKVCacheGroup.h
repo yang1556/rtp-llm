@@ -11,8 +11,9 @@ public:
     FullKVCacheGroup(const LayerIdsType&          layer_ids,
                      std::shared_ptr<KVCacheSpec> kvcache_spec,
                      BlockPoolPtr                 block_pool,
-                     int                          group_id):
-        KVCacheGroup(layer_ids, kvcache_spec, block_pool, group_id) {}
+                     int                          group_id,
+                     HostCacheManagerPtr          host_cache_manager = nullptr):
+        KVCacheGroup(layer_ids, kvcache_spec, block_pool, group_id, host_cache_manager) {}
 
     bool        malloc(BlockIndicesType& block_indices,
                        int               seq_len,
