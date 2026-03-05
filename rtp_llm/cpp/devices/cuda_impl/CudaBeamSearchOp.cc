@@ -56,10 +56,12 @@ BeamSearchOutput CudaDevice::sampleBeamSearch(const BeamSearchParams& params) {
             (__VA_ARGS__)();                                                                                           \
         }                                                                                                              \
     } while (0)
-
+    int64_t start_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
     // compute log softmax for probability calculation
     at::Tensor logits_tsr             = Buffer2torchTensor(params.logits, false);
     at::Tensor log_softmax_logits_tsr = logits_tsr.log_softmax(-1);
+    int64_t    softmax_time           = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
+    std::cout << "FUYU softmax_time:" << softmax_time << std::endl;
 
     // beam search heuristic
     tensorrt_llm::BeamSearchConfig config;
@@ -133,6 +135,8 @@ BeamSearchOutput CudaDevice::sampleBeamSearch(const BeamSearchParams& params) {
         });
     });
     check_cuda_error();
+    int64_t topk_beam_time = autil::TimeUtility::currentTimeInMicroSeconds() - softmax_time;
+    std::cout << "FUYU topk_beam_time:" << topk_beam_time << std::endl;
 
     return BeamSearchOutput({std::move(token_ids_out),
                              std::move(input_lengths_out),

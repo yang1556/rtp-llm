@@ -46,8 +46,11 @@ void TreeLogitsProcessor::process(const SamplerInputs& inputs, size_t start_idx,
     size_t vocab_size   = batch_logits->shape()[1];
 
     if (need_weight_process) {
-        auto weight_logits_params =
+        int64_t start_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
+        auto    weight_logits_params =
             generateVocabWeight(batch_size, vocab_size, batch_candidate_token_weights, batch_logits);
+        int64_t generate_weight_time = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
+        std::cout << "FUYU generate_weight_time:" << generate_weight_time << std::endl;
         weightLogits(weight_logits_params);
         if (inputs.sampler_mask_params != nullptr) {
             inputs.sampler_mask_params->addWeightParam(weight_logits_params);
