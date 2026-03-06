@@ -5,7 +5,7 @@ from torch import nn
 
 from rtp_llm.models_py.modules import IndexerOp, LayerNorm
 from rtp_llm.models_py.modules.factory import LinearFactory
-from rtp_llm.ops import AttentionConfigs, HWKernelConfig
+from rtp_llm.ops import AttentionConfigs, HWKernelConfig, ParallelismConfig
 from rtp_llm.ops.compute_ops import KVCache, rtp_llm_ops
 from rtp_llm.utils.model_weight import W
 
@@ -25,6 +25,7 @@ class Indexer(nn.Module):
         layernorm_eps: float,
         quant_config: object,
         hw_kernel_config: Optional["HWKernelConfig"] = None,
+        parallelism_config: Optional[ParallelismConfig] = None,
         scale_fmt: Optional[str] = "none",
     ):
         super().__init__()
@@ -43,6 +44,7 @@ class Indexer(nn.Module):
         self.blocksize = attn_config.tokens_per_block  # page size, typically 64
         self.indexer_size = self.index_head_dim / 2 + self.index_head_dim / 128 * 2
         self.is_neox_style = attn_config.rope_config.indexer_is_neox_style
+        self.parallelism_config = parallelism_config
 
         self.wq_b = LinearFactory.create_linear_from_weights(
             weights,
@@ -157,9 +159,22 @@ class Indexer(nn.Module):
         query, key = self._get_q_k_bf16(q_lora, hidden_states, fmha_params)
 
         # Quantize query and key using IndexerOp
-        q_fp8, q_scale = self.indexer_op.quant_q_k(
-            query, key, kv_cache, fmha_params.slot_mapping
-        )
+        if (
+            attention_inputs.is_prefill
+            and self.parallelism_config.prefill_cp_config.enable_cp
+        ):
+            q_fp8, q_scale = self.indexer_op.quant_q_k_cp(
+                query,
+                key,
+                kv_cache,
+                fmha_params.slot_mapping,
+                attention_inputs,
+                cp_rank=self.parallelism_config.tp_rank,
+            )
+        else:
+            q_fp8, q_scale = self.indexer_op.quant_q_k(
+                query, key, kv_cache, fmha_params.slot_mapping
+            )
 
         # Compute weights for attention
         weights = self._get_logits_head_gate(hidden_states, q_scale)
@@ -170,8 +185,19 @@ class Indexer(nn.Module):
                 q_fp8, weights, kv_cache, fmha_params, attention_inputs
             )
         else:
-            topk_result = self.indexer_op._get_topk_ragged(
-                q_fp8, weights, kv_cache, fmha_params, attention_inputs
-            )
+            if self.parallelism_config.prefill_cp_config.enable_cp:
+                topk_result = self.indexer_op._get_topk_ragged_cp(
+                    q_fp8,
+                    weights,
+                    kv_cache,
+                    fmha_params,
+                    attention_inputs,
+                    cp_rank=self.parallelism_config.tp_rank,
+                    cp_size=self.parallelism_config.tp_size,
+                )
+            else:
+                topk_result = self.indexer_op._get_topk_ragged(
+                    q_fp8, weights, kv_cache, fmha_params, attention_inputs
+                )
 
         return topk_result

@@ -52,6 +52,7 @@ class MlaAttention(nn.Module):
                 layernorm_eps,
                 quant_config,
                 hw_kernel_config,
+                parallelism_config,
             )
         else:
             self.indexer = None

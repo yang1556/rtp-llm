@@ -218,6 +218,8 @@ class SparseMlaFp8CPOpTest(TestCase):
         def _identity_all_gather(tensor, group=None):
             return tensor
 
+        topk0 = torch.index_select(topk_indices, 0, cp_op.q0_idx).contiguous()
+        topk1 = torch.index_select(topk_indices, 0, cp_op.q1_idx).contiguous()
         with patch(
             "rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl.all_gather",
             side_effect=_identity_all_gather,
@@ -226,7 +228,8 @@ class SparseMlaFp8CPOpTest(TestCase):
                 q,
                 compressed_kv,
                 k_pe,
-                topk_indices,
+                topk0,
+                topk1,
                 batch_indice_d,
                 kv_cache,
                 layer_id=0,
@@ -370,6 +373,8 @@ class SparseMlaFp8CPOpTest(TestCase):
         def _identity_all_gather(tensor, group=None):
             return tensor
 
+        topk0 = torch.index_select(topk_indices, 0, cp_op.q0_idx).contiguous()
+        topk1 = torch.index_select(topk_indices, 0, cp_op.q1_idx).contiguous()
         with patch(
             "rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl.all_gather",
             side_effect=_identity_all_gather,
@@ -378,7 +383,8 @@ class SparseMlaFp8CPOpTest(TestCase):
                 q,
                 compressed_kv,
                 k_pe,
-                topk_indices,
+                topk0,
+                topk1,
                 batch_indice_d,
                 kv_cache,
                 layer_id=0,

@@ -3,7 +3,7 @@ Unified Sparse MLA implementation for both prefill and decode stages.
 Uses flash_mla_sparse_fwd kernel with triton-based index conversion.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
@@ -143,19 +143,21 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
         q: torch.Tensor,
         compressed_kv: torch.Tensor,
         k_pe: torch.Tensor,
-        topk_indices: torch.Tensor,
+        topk0: torch.Tensor,
+        topk1: torch.Tensor,
         batch_indice_d: torch.Tensor,
         kv_cache=None,
         layer_id: int = 0,
     ) -> torch.Tensor:
         """
-        CP prefill forward: all-gather KV, restore, write to kv_cache, then same attention as non-CP.
+        CP prefill forward: all-gather KV, restore, write to kv_cache, then two-part attention.
 
         Args:
             q: [total_q_len, num_heads, qk_head_dim], already RoPE-applied and input-BMM applied (q_transformed).
             compressed_kv: [total_kv_len, kv_lora_rank], local.
             k_pe: [total_kv_len, rope_head_dim], local.
-            topk_indices: [total_q_len, num_heads, topk] or [total_q_len, topk], request-local.
+            topk0: [len(q0_idx), topk] or [len(q0_idx), num_heads, topk], request-local for first CP chunk.
+            topk1: [len(q1_idx), topk] or [len(q1_idx), num_heads, topk], request-local for second CP chunk.
             batch_indice_d: [total_q_len], int32, request id per token.
             kv_cache: KV cache to write restored KV into (same paged layout as non-CP).
             layer_id: layer id.
@@ -190,9 +192,11 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
             self.write_cache_store_impl, self.attn_inputs, kv_cache
         )
 
-        global_topk_indices = self._convert_topk_indices_to_global(topk_indices)
+        # Convert request-local topk0/topk1 to global indices for flash_mla_with_kvcache
+        topk0 = self._convert_topk_indices_to_global(topk0)
+        topk1 = self._convert_topk_indices_to_global(topk1)
 
-        # Two-part attention (q0, q1) using self.block_table, self._fp8_kernel_metadata, self._convert_topk_indices_to_global
+        # Two-part attention (q0, q1) using self.block_table, self._fp8_kernel_metadata
         kv_cache_flat = kv_cache.kv_cache_base.view(
             -1, 1, kv_cache.kv_cache_base.size(-1)
         ).view(torch.uint8)
@@ -209,12 +213,6 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
 
         q0 = torch.index_select(q, 0, self.q0_idx).contiguous()
         q1 = torch.index_select(q, 0, self.q1_idx).contiguous()
-        if topk_indices.dim() == 3:
-            topk0 = torch.index_select(global_topk_indices, 0, self.q0_idx).contiguous()
-            topk1 = torch.index_select(global_topk_indices, 0, self.q1_idx).contiguous()
-        else:
-            topk0 = torch.index_select(global_topk_indices, 0, self.q0_idx).contiguous()
-            topk1 = torch.index_select(global_topk_indices, 0, self.q1_idx).contiguous()
 
         def run_part(
             q_part: torch.Tensor,
@@ -295,6 +293,7 @@ class SparseMlaCpImpl(SparseMlaImpl):
         )
         self.fmha_impl.kv_cache_write_op = self.kv_cache_write_op
         self.fmha_impl.write_cache_store_impl = self.write_cache_store_impl
+        self.cp_info = attn_inputs.context_parallel_info
 
     @staticmethod
     def fmha_type() -> FMHAType:
@@ -310,6 +309,14 @@ class SparseMlaCpImpl(SparseMlaImpl):
             and parallelism_config.prefill_cp_config.is_enabled()
         )
 
+    @classmethod
+    def support_prefill_cp(cls) -> bool:
+        return True
+
+    def prepare(self, attn_inputs: PyAttentionInputs):
+        attn_inputs.input_lengths = self.cp_info.prefill_actual_input_lengths_cpu
+        super().prepare(attn_inputs)
+
     def forward(
         self,
         q: torch.Tensor,
@@ -317,7 +324,7 @@ class SparseMlaCpImpl(SparseMlaImpl):
         k_pe: torch.Tensor,
         kv_cache: Optional[KVCache],
         layer_id: int,
-        topk_indices: Optional[torch.Tensor] = None,
+        topk_indices: Tuple[torch.Tensor, torch.Tensor],
     ) -> torch.Tensor:
         """
         Forward pass for sparse MLA attention (prefill or decode).
@@ -334,9 +341,7 @@ class SparseMlaCpImpl(SparseMlaImpl):
                 - Decode: [batch_size, rope_head_dim] (not used)
             kv_cache: KV cache object
             layer_id: Current layer ID
-            topk_indices: Sparse indices (request-local)
-                - Prefill: [total_q_len, num_heads, topk]
-                - Decode: [batch_size, num_heads, topk]
+            topk_indices: (topk0, topk1) from indexer CP path, request-local for the two chunks.
 
         Returns:
             Attention output
@@ -344,7 +349,6 @@ class SparseMlaCpImpl(SparseMlaImpl):
                 - Decode: [batch_size, num_heads, nope_head_dim]
         """
         assert self.rope_impl is not None and self.rope_params is not None
-        assert topk_indices is not None, "topk_indices is required for sparse MLA"
         assert kv_cache is not None, "kv_cache is required for sparse MLA"
         assert self.fmha_impl is not None, "fmha_impl is not initialized"
 
@@ -356,11 +360,13 @@ class SparseMlaCpImpl(SparseMlaImpl):
         q_transformed = self._apply_input_bmm(q, layer_id)
 
         assert self.fmha_params is not None
+        topk0, topk1 = topk_indices[0], topk_indices[1]
         attn_output = self.fmha_impl.forward(
             q_transformed,
             compressed_kv,
             k_pe,
-            topk_indices,
+            topk0,
+            topk1,
             self.fmha_params.batch_indice_d,
             kv_cache,
             layer_id=layer_id,
