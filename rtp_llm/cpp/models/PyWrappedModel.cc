@@ -1,21 +1,258 @@
 #include "rtp_llm/cpp/models/PyWrappedModel.h"
+#include "rtp_llm/cpp/models/ModelUtils.h"
 #include "rtp_llm/cpp/devices/utils/DebugUtils.h"
 #include "rtp_llm/cpp/core/BufferHelper.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
 #include "rtp_llm/cpp/utils/utils.h"
 #include "rtp_llm/cpp/model_utils/AttentionConfig.h"
+#include "rtp_llm/cpp/devices/OpData.h"
 #include <cstdint>
 #include <stdexcept>
 #include <mutex>
 #include <vector>
+#include <algorithm>
+#include <numeric>
 #include "rtp_llm/cpp/pybind/PyUtils.h"
 #include "rtp_llm/cpp/utils/AssertUtils.h"
-#include "rtp_llm/cpp/devices/utils/DebugUtils.h"
 #include <cstdlib>
 #include <iostream>
+#include <cstring>
 #include "rtp_llm/cpp/devices/utils/DevicePerfWrapper.h"
 
 namespace rtp_llm {
+
+PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
+                               py::object                py_instance,
+                               bool                      is_prefill_cuda_graph_mode):
+    device_(params.device),
+    device_props_(params.device->getDeviceProperties()),
+    description_(params.description),
+    weights_(params.weights),
+    model_id_(params.model_id),
+    layer_num_(params.weights.layers.size()),
+    kv_cache_layer_layout_(params.kv_cache_layer_layout),
+    enable_cuda_graph_(params.device->initParams().hw_kernel_config.enable_cuda_graph),
+    is_prefill_cuda_graph_mode_(is_prefill_cuda_graph_mode) {
+    if (setenv("PYTHONUNBUFFERED", "TRUE", 1) != 0) {
+        RTP_LLM_LOG_WARNING("Failed to set PYTHONUNBUFFERED environment variable on POSIX.");
+    } else {
+        RTP_LLM_LOG_INFO("Set PYTHONUNBUFFERED=TRUE for Python interpreter.");
+    }
+
+    py::gil_scoped_acquire          gil;
+    torch_ext::PyModelInitResources init_resources;
+
+    if (params.kv_cache_layer_layout.has_value()) {
+        torch_ext::KVCache kv_cache;
+        kv_cache.seq_size_per_block = params.description.attention_conf.tokens_per_block;
+        const auto& layout          = params.kv_cache_layer_layout.value();
+        kv_cache.kv_cache_base_by_layer.reserve(layout.layers_to_kv_buffer_ptrs.size());
+        for (const auto& buf : layout.layers_to_kv_buffer_ptrs) {
+            if (buf) {
+                kv_cache.kv_cache_base_by_layer.push_back(Buffer2torchTensor(buf, false));
+            } else {
+                kv_cache.kv_cache_base_by_layer.push_back(torch::Tensor());
+            }
+        }
+        kv_cache.kv_scale_base_by_layer.reserve(layout.layers_to_scale_buffer_ptrs.size());
+        for (const auto& buf : layout.layers_to_scale_buffer_ptrs) {
+            if (buf) {
+                kv_cache.kv_scale_base_by_layer.push_back(Buffer2torchTensor(buf, false));
+            } else {
+                kv_cache.kv_scale_base_by_layer.push_back(torch::Tensor());
+            }
+        }
+        init_resources.kv_cache = kv_cache;
+    }
+
+    py::object py_init_result;
+    py_model_                 = py_instance;
+    auto py_initialize_method = py_model_.attr("initialize");
+    py_init_result            = py_initialize_method(init_resources);
+    if (enable_cuda_graph_) {
+#if USING_CUDA
+        c10::ScalarType dtype         = dataTypeToTorchType(description_.data_type);
+        const auto&     device_params = params.device->initParams();
+        GraphParams     graph_params;
+        graph_params.enable_cuda_graph            = device_params.hw_kernel_config.enable_cuda_graph;
+        graph_params.enable_cuda_graph_debug_mode = device_params.hw_kernel_config.enable_cuda_graph_debug_mode;
+        graph_params.is_prefill_cuda_graph_mode   = is_prefill_cuda_graph_mode;
+        graph_params.max_seq_len                  = device_params.max_seq_len;
+        graph_params.tokens_per_block             = device_params.tokens_per_block;
+        graph_params.hidden_size                  = device_params.hidden_size;
+        graph_params.model_data_type              = dtype;
+        graph_params.max_context_batch_size = device_params.runtime_config.fifo_scheduler_config.max_context_batch_size;
+        graph_params.concurrency_limit      = device_params.concurrency_config.concurrency_limit;
+        graph_params.prefill_capture_seq_lens   = device_params.hw_kernel_config.prefill_capture_seq_lens;
+        graph_params.decode_capture_batch_sizes = device_params.hw_kernel_config.decode_capture_batch_sizes;
+        graph_params.kv_cache_layer_to_group    = device_params.kv_cache_layer_to_group;
+        graph_params.kv_cache_group_num         = device_params.kv_cache_group_num;
+
+        if (is_prefill_cuda_graph_mode) {
+            graph_params.num_tokens_per_bs = device_params.max_seq_len;
+        } else if (device_params.sp_config.gen_num_per_cycle > 1 && !params.model_id) {
+            graph_params.num_tokens_per_bs = device_params.sp_config.gen_num_per_cycle + 1;
+        } else {
+            graph_params.num_tokens_per_bs = 1;
+        }
+
+        graph_runner_ = new CudaGraphRunner(graph_params, py_instance);
+        RTP_LLM_CHECK_WITH_INFO(graph_runner_ != nullptr, "graph_runner_ can't be nullptr in PyWrapper");
+#else
+        RTP_LLM_CHECK_WITH_INFO(false, "CUDA Graph is only supported on CUDA platform for now");
+#endif
+        if (weights_.position_encoding) {
+            graph_runner_->setPositionEncoding(Buffer2torchTensor(weights_.position_encoding->kernel, false).cuda());
+        }
+        if (weights_.token_type_embedding) {
+            graph_runner_->setTokenTypeEmbedding(
+                Buffer2torchTensor(weights_.token_type_embedding->kernel, false).cuda());
+        }
+        graph_runner_->setInputEmbeddingScalar(description_.input_embedding_scalar);
+        RTP_LLM_CHECK_WITH_INFO(graph_runner_ != nullptr, "graph_runner_ can't be null");
+        py_init_result = py_instance.attr("initialize")(init_resources);
+        RTP_LLM_LOG_INFO("allocation records before capture:");
+        params.device->traceMemoryUsage();
+        graph_runner_->initCapture();
+        RTP_LLM_LOG_INFO("allocation records after capture:");
+        params.device->traceMemoryUsage();
+    }
+
+    auto py_init_success = py_init_result.cast<bool>();
+    if (!py_init_success) {
+        throw std::runtime_error("PyWrappedModel constructor: Python model initialization failed.");
+    }
+
+    if (params.device->getDeviceProperties().enable_prefill_cp) {
+        context_parallel_processor_ = ContextParallelProcessorFactory::create(ProcessorType::ZIG_ZAG);
+        RTP_LLM_LOG_INFO("Context parallel processor initialized with ZIG_ZAG strategy.");
+    }
+
+    RTP_LLM_LOG_INFO("PyWrappedModel initialized done.");
+}
+
+void PyWrappedModel::releaseBuffers() {
+    buffer_holder_.release();
+}
+
+BufferPtr PyWrappedModel::tpSyncEmbeddingOrLogits(const BufferPtr& buffer) {
+    return rtp_llm::tpSyncEmbeddingOrLogits(device_, device_props_, buffer);
+}
+
+MicroBatchPlan PyWrappedModel::planMicroBatches(const GptModelInputs& inputs) {
+    return rtp_llm::planMicroBatches(inputs, layer_num_, device_props_);
+}
+
+std::pair<std::vector<GptModelInputs>, std::vector<TokenSliceInfo>>
+PyWrappedModel::splitInputsIntoMicroBatches(const GptModelInputs& inputs, const MicroBatchPlan& micro_batch_plan) {
+    return rtp_llm::splitInputsIntoMicroBatches(inputs, micro_batch_plan, device_);
+}
+
+void PyWrappedModel::holdInputsHostBuffers(const GptModelInputs& inputs) {
+    rtp_llm::holdInputsHostBuffers(buffer_holder_, inputs);
+}
+
+GptModelOutputs PyWrappedModel::forwardPostLayers(BufferPtr             input,
+                                                  bool                  has_context_request,
+                                                  bool                  need_all_logits,
+                                                  const BufferPtr&      lm_output_indexes,
+                                                  bool                  enable_sp,
+                                                  size_t                token_num,
+                                                  const GptModelInputs& inputs,
+                                                  BufferPtr             merged_eagle3_hidden,
+                                                  bool                  skip_final_layernorm) {
+    (void)inputs;
+    DevicePerfWrapper wrapper(device_, "forwardPostLayers");
+    BufferPtr         all_gather_output = nullptr;
+    if (enable_sp && device_props_.tp_size > 1) {
+        all_gather_output = device_->allocateBuffer(
+            {input->type(), {input->shape()[0] * device_props_.tp_size, input->shape()[1]}}, {"all_gather_output"});
+        size_t m                 = all_gather_output->shape()[0];
+        int    m_split           = device_props_.m_split;
+        size_t overlap_comm_type = device_props_.overlap_comm_type;
+        if (overlap_comm_type == 1 && m_split > 0) {
+            size_t token_idx    = 0;
+            size_t ag_token_idx = 0;
+            size_t m_chunk      = m / m_split;
+            if (m > 128) {
+                m_chunk = (m / m_split + 127) & ~127;
+            }
+            while (token_idx < m) {
+                const auto micro_batch_tokens      = std::min(m - token_idx, m_chunk);
+                const auto ag_micro_batch_tokens   = micro_batch_tokens / device_props_.tp_size;
+                auto       micro_batch_recv_buffer = all_gather_output->slice(token_idx, micro_batch_tokens);
+                auto       micro_ag_send_buffer    = input->slice(ag_token_idx, ag_micro_batch_tokens);
+                device_->allGather({{micro_batch_recv_buffer}, ParallelMode::TP, {micro_ag_send_buffer}, false});
+                token_idx += micro_batch_tokens;
+                ag_token_idx += ag_micro_batch_tokens;
+            }
+        } else {
+            device_->allGather({{all_gather_output}, ParallelMode::TP, {input}, false});
+        }
+        size_t pad_mod_num = device_props_.tp_size * std::max((size_t)1, (size_t)device_props_.m_split);
+        if (token_num % pad_mod_num != 0) {
+            input = device_->clone({all_gather_output->view(0, token_num), AllocationType::DEVICE});
+        } else {
+            input = all_gather_output;
+        }
+    }
+
+    auto hidden = input;
+    if (weights_.final_layernorm && !skip_final_layernorm) {
+        auto final_layernorm = device_->layernorm(LayernormParams(hidden,
+                                                                  nullptr,
+                                                                  rtp_llm::mayGetRef(weights_.final_layernorm),
+                                                                  std::nullopt,
+                                                                  std::nullopt,
+                                                                  std::nullopt,
+                                                                  0.f,
+                                                                  description_.layernorm_eps,
+                                                                  true,
+                                                                  false,
+                                                                  description_.norm_type));
+        hidden               = std::move(final_layernorm.output);
+    }
+    printBufferData(*hidden, "final_hidden");
+
+    const auto& lm_head = weights_.lm_head;
+    if (lm_head) {
+        printBufferData(*lm_output_indexes, "lm_output_indexes");
+        buffer_holder_.hold_host(lm_output_indexes);
+        BufferPtr lm_output_indexes_device = device_->clone({*lm_output_indexes, AllocationType::DEVICE});
+        auto      last_hidden =
+            has_context_request && !need_all_logits ? device_->select({*hidden, *lm_output_indexes_device}) : hidden;
+        printBufferData(*last_hidden, "last_hidden");
+        auto logits = device_->gemm(GemmParams(*last_hidden,
+                                               *(lm_head->kernel),
+                                               std::nullopt,
+                                               nullptr,
+                                               rtp_llm::DataType::TYPE_FP32,
+                                               rtp_llm::DataType::TYPE_FP32,
+                                               TransposeOperation::NONE,
+                                               TransposeOperation::TRANSPOSE));
+        printBufferData(*logits, "logits");
+        if (device_props_.tp_size > 1) {
+            logits = tpSyncEmbeddingOrLogits(logits);
+        }
+        if (device_->initParams().profile_debug_logging_config.check_nan) {
+            (void)device_->checkNAN(*last_hidden);
+            (void)device_->checkNAN(*logits);
+        }
+        BufferPtr softmax_result;
+        if (need_all_logits) {
+            auto last_logits = device_->select({*logits, *lm_output_indexes_device});
+            return {std::move(last_logits),
+                    std::move(last_hidden),
+                    std::move(hidden),
+                    std::move(logits),
+                    std::move(softmax_result)};
+        }
+        hidden = merged_eagle3_hidden ? merged_eagle3_hidden : hidden;
+        return {std::move(logits), std::move(last_hidden), std::move(hidden), nullptr, std::move(softmax_result)};
+    } else {
+        return {nullptr, nullptr, std::move(hidden)};
+    }
+}
 
 torch::Tensor PyWrappedModel::tensorHoldHostAndToCuda(const torch::Tensor& tensor) {
     if (tensor.device().is_cuda()) {
@@ -182,12 +419,12 @@ torch_ext::BertEmbeddingInputs PyWrappedModel::buildBertEmbeddingInputs(const Gp
     return bert_embedding_inputs;
 }
 
-// Helper function to call forwardPostLayers with common parameters
 GptModelOutputs PyWrappedModel::callForwardPostLayers(BufferPtr             hidden_states,
                                                       const GptModelInputs& inputs,
                                                       bool                  skip_final_layernorm,
                                                       size_t                num_valid_tokens) {
-    size_t num_input_tokens = num_valid_tokens != -1 ? num_valid_tokens : inputs.combo_tokens->shape()[0];
+    size_t num_input_tokens =
+        num_valid_tokens != static_cast<size_t>(-1) ? num_valid_tokens : inputs.combo_tokens->shape()[0];
     return forwardPostLayers(hidden_states,
                              inputs.input_lengths->shape()[0] != inputs.sequence_lengths->shape()[0],
                              false,
@@ -329,13 +566,13 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         torch::Tensor input_hiddens =
             inputs.last_hidden_states ? Buffer2torchTensor(inputs.last_hidden_states, false) : torch::empty({0});
 
-        auto                   attention_inputs      = buildPyAttentionInputs(inputs);
-        auto                   bert_embedding_inputs = buildBertEmbeddingInputs(inputs);
+        auto attention_inputs      = buildPyAttentionInputs(inputs);
+        auto bert_embedding_inputs = buildBertEmbeddingInputs(inputs);
 
         if (device_props_.enable_prefill_cp) {
             attention_inputs.context_parallel_info = cp_params;
         }
- 
+
         BufferPtr              kv_cache_block_id_device;
         std::vector<BufferPtr> kv_cache_block_id_device_by_group;
         if (!inputs.warmup && inputs.pd_separation) {

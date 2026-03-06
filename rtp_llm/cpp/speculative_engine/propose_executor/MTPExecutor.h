@@ -62,12 +62,12 @@ public:
             std::unique_ptr<GptModel> new_model;
             if (sp_type_ == "mtp" || sp_type_ == "eagle") {
                 RTP_LLM_LOG_INFO("prepare mtp model");
-                executor->setGptModel(std::make_unique<MTPModel>(model_params));
-                norm_executor->setGptModel(std::make_unique<MTPModel>(model_params));
+                executor->setModel(std::make_unique<MTPModel>(model_params));
+                norm_executor->setModel(std::make_unique<MTPModel>(model_params));
             } else if (sp_type == "eagle3") {
                 RTP_LLM_LOG_INFO("prepare eagle3 model");
-                executor->setGptModel(std::make_unique<Eagle3Model>(model_params));
-                norm_executor->setGptModel(std::make_unique<Eagle3Model>(model_params));
+                executor->setModel(std::make_unique<Eagle3Model>(model_params));
+                norm_executor->setModel(std::make_unique<Eagle3Model>(model_params));
             } else {
                 RTP_LLM_LOG_ERROR("unknown sp_type %s", sp_type_.c_str());
             }

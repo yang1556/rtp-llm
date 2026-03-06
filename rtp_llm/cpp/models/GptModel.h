@@ -5,6 +5,7 @@
 #include "rtp_llm/cpp/devices/DeviceBase.h"
 #include "rtp_llm/cpp/devices/OpData.h"
 #include "rtp_llm/cpp/devices/Weights.h"
+#include "rtp_llm/cpp/models/GptModelTypes.h"
 #include "rtp_llm/cpp/models/eplb/stats/ExpertStats.h"
 #include "rtp_llm/models_py/bindings/OpDefs.h"
 #include "rtp_llm/cpp/cache/BufferTypes.h"
@@ -13,30 +14,6 @@
 #include <utility>
 
 namespace rtp_llm {
-
-struct GptModelDescription {
-    rtp_llm::AttentionConfigs attention_conf;
-    rtp_llm::FfnConfigs       ffn_conf;
-    rtp_llm::NormType         norm_type;
-    DataType                  data_type;
-    rtp_llm::QScheme          act_qscheme            = rtp_llm::QScheme::NoQuantize;
-    const DataType            compute_type           = rtp_llm::DataType::TYPE_INVALID;
-    double                    layernorm_eps          = 1e-5;
-    size_t                    vocab_size             = 0;
-    bool                      post_layernorm         = false;
-    double                    input_embedding_scalar = 1;
-    double                    residual_scalar        = 1;
-    bool                      reverse_e_h_norm       = false;
-};
-
-struct GptModelInitParams {
-    rtp_llm::DeviceBase*      device;
-    const rtp_llm::Weights    weights;
-    const GptModelDescription description;
-    // Optional per-layer cache buffers from KVCacheManager::allLayerCacheBase().
-    const std::optional<CacheLayerLayout> kv_cache_layer_layout;
-    size_t                                model_id;
-};
 
 struct EmbeddingPostOutput {
     BufferPtr hidden;
@@ -80,16 +57,6 @@ struct GptLayerOutputs {
     rtp_llm::BufferPtr hidden;
     rtp_llm::BufferPtr pre_decoder_residual;
     rtp_llm::BufferPtr moe_gating;
-};
-
-struct MicroBatchInfo {
-    size_t prefill_num;
-    size_t decoder_num;
-};
-
-struct MicroBatchPlan {
-    bool                        enable = false;
-    std::vector<MicroBatchInfo> batch_infos;
 };
 
 struct LayerMicroBatchInputs {
@@ -150,53 +117,14 @@ struct LastLayerDeferedParams {
     rtp_llm::DeviceHookPtr                           comm_barrier_hook;
 };
 
-struct TokenSliceInfo {
-    size_t offset = 0;
-    size_t count  = 0;
-};
-
-struct ModelBufferHolder {
-    std::vector<BufferPtr>     buffers;
-    std::vector<torch::Tensor> tensors;
-
-    void hold_host(const BufferPtr& buffer) {
-        if (buffer && buffer->where() != MemoryType::MEMORY_GPU) {
-            buffers.push_back(buffer);
-        }
-    }
-
-    void hold_host(const torch::Tensor& tensor) {
-        if (tensor.defined() && tensor.device().is_cpu()) {
-            tensors.push_back(tensor);
-        }
-    }
-
-    void hold(const BufferPtr& buffer) {
-        if (buffer) {
-            buffers.push_back(buffer);
-        }
-    }
-
-    void hold(const torch::Tensor& tensor) {
-        if (tensor.defined()) {
-            tensors.push_back(tensor);
-        }
-    }
-
-    void release() {
-        buffers.clear();
-        tensors.clear();
-    }
-};
-
-class GptModel {
+class GptModel: public IGptModel {
 public:
     GptModel(const GptModelInitParams& params);
     virtual ~GptModel() {};
 
-    virtual GptModelOutputs forward(const GptModelInputs& inputs);
+    GptModelOutputs forward(const GptModelInputs& inputs) override;
 
-    void releaseBuffers() {
+    void releaseBuffers() override {
         buffer_holder_.release();
     }
 

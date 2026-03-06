@@ -1,6 +1,7 @@
 #pragma once
 
 #include <torch/extension.h>
+#include "rtp_llm/cpp/models/GptModelTypes.h"
 #include "rtp_llm/cpp/models/eplb/ExpertBalancerPythonWrapper.h"
 #include "rtp_llm/cpp/metrics/RtpLLMMetrics.h"
 #include "rtp_llm/cpp/devices/DeviceBase.h"
@@ -86,23 +87,22 @@ public:
 
 class ExpertBalancer {
 public:
-    __attribute__((visibility("default")))
-    ExpertBalancer(size_t                       log_exp_num,
-                   size_t                       phy_exp_num,
-                   size_t                       num_layers,
-                   size_t                       moe_size,
-                   size_t                       hidden_size,
-                   size_t                       ep_rank,
-                   size_t                       ep_size,
-                   py::object                   py_eplb,
-                   DataType                     dtype,
-                   DeviceBase*                  device,
-                   QuantAlgo                    quant_algo,
-                   kmonitor::MetricsReporterPtr metrics_reporter,
-                   const EPLBConfig&             eplb_config);
+    __attribute__((visibility("default"))) ExpertBalancer(size_t                       log_exp_num,
+                                                          size_t                       phy_exp_num,
+                                                          size_t                       num_layers,
+                                                          size_t                       moe_size,
+                                                          size_t                       hidden_size,
+                                                          size_t                       ep_rank,
+                                                          size_t                       ep_size,
+                                                          py::object                   py_eplb,
+                                                          DataType                     dtype,
+                                                          DeviceBase*                  device,
+                                                          QuantAlgo                    quant_algo,
+                                                          kmonitor::MetricsReporterPtr metrics_reporter,
+                                                          const EPLBConfig&            eplb_config);
     ~ExpertBalancer();
 
-    void stepForward(GptModel& model, RtpLLMExecutorMetricsCollector& executor_collector);
+    void stepForward(IGptModel& model, RtpLLMExecutorMetricsCollector& executor_collector);
 
     bool updateEplbConfig(const EPLBConfig& config);
 

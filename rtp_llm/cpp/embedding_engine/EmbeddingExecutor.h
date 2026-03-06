@@ -12,6 +12,7 @@
 #include "rtp_llm/cpp/models/SampleInfos.h"
 #include "rtp_llm/cpp/embedding_engine/ModelRequest.h"
 #include "rtp_llm/cpp/engine_base/Executor.h"
+#include "rtp_llm/cpp/models/GptModelTypes.h"
 
 namespace rtp_llm {
 
@@ -39,18 +40,18 @@ public:
 
     absl::Status process(const std::list<EmbeddingStreamPtr>& streams);
 
-    rtp_llm::DeviceBase*            device_;
+    rtp_llm::DeviceBase* device_;
 
 private:
-    std::unique_ptr<GptModel>       model_;
-    py::object                      handler_;
-    HandlerArgs::Flag               handler_args_;
-    py::handle                      torch_type_;
-    rtp_llm::BufferPtr              max_position_ids_buf_;
-    kmonitor::MetricsReporterPtr    metrics_reporter_ = nullptr;
-    ModelConfig                     model_config_;
-    ParallelismConfig               parallelism_config;
-    EPLBConfig                      eplb_config;
+    std::unique_ptr<IGptModel>   model_;
+    py::object                   handler_;
+    HandlerArgs::Flag            handler_args_;
+    py::handle                   torch_type_;
+    rtp_llm::BufferPtr           max_position_ids_buf_;
+    kmonitor::MetricsReporterPtr metrics_reporter_ = nullptr;
+    ModelConfig                  model_config_;
+    ParallelismConfig            parallelism_config;
+    EPLBConfig                   eplb_config;
 
     ModelRequest                     generateOldModelRequest(GptModelInputs& model_input);
     absl::StatusOr<GptModelInputs>   gatherModelInput(const std::list<EmbeddingStreamPtr>& streams) const;

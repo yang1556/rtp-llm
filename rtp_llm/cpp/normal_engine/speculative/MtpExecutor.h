@@ -12,6 +12,7 @@
 #include "rtp_llm/cpp/normal_engine/speculative/MtpBatchStreamProcessor.h"
 #include "rtp_llm/cpp/engine_base/ProposeModelEngineInitParams.h"
 #include "rtp_llm/cpp/normal_engine/speculative/SpeculativeSampler.h"
+#include "rtp_llm/cpp/models/GptModelTypes.h"
 
 namespace rtp_llm {
 
@@ -57,11 +58,11 @@ public:
     absl::Status process(const std::list<GenerateStreamPtr>& streams) override;
     bool         updateEplbConfig(const EPLBConfig& config) override;
 
-    void setTargetModel(std::unique_ptr<GptModel> model) {
+    void setTargetModel(std::unique_ptr<IGptModel> model) {
         model_ = std::move(model);
     }
 
-    void setDraftModel(std::unique_ptr<GptModel> model) {
+    void setDraftModel(std::unique_ptr<IGptModel> model) {
         draft_model_ = std::move(model);
     }
 
@@ -112,7 +113,7 @@ protected:
                         std::list<GenerateStreamPtr>&       decode_streams);
 
 private:
-    std::unique_ptr<GptModel>                model_;
+    std::unique_ptr<IGptModel>               model_;
     std::unique_ptr<Sampler>                 sampler_;
     std::unique_ptr<MtpBatchStreamProcessor> batch_stream_processor_;
     std::shared_ptr<KVCacheManager>          cache_manager_;
@@ -128,7 +129,7 @@ private:
     size_t                                           hidden_size_;
     size_t                                           propose_step_;
     size_t                                           propose_vocab_size_;
-    std::unique_ptr<GptModel>                        draft_model_;
+    std::unique_ptr<IGptModel>                       draft_model_;
     std::unique_ptr<speculative::SpeculativeSampler> speculative_sampler_;
     std::unique_ptr<speculative::FastTopKSampler>    fast_topk_sampler_;
 

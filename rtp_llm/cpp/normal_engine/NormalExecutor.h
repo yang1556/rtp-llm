@@ -11,6 +11,7 @@
 #include "rtp_llm/cpp/metrics/RtpLLMMetrics.h"
 #include "rtp_llm/cpp/models/lora/LoraManager.h"
 #include "rtp_llm/cpp/models/eplb/ExpertBalancer.h"
+#include "rtp_llm/cpp/models/GptModelTypes.h"
 
 namespace rtp_llm {
 
@@ -35,14 +36,14 @@ public:
         batch_stream_processor_ = std::move(processor);
     }
 
-    void setGptModel(std::unique_ptr<GptModel> model) {
+    void setModel(std::unique_ptr<IGptModel> model) {
         model_ = std::move(model);
     }
 
     bool updateEplbConfig(const EPLBConfig& config) override;
 
 private:
-    std::unique_ptr<GptModel>                                                model_;
+    std::unique_ptr<IGptModel>                                               model_;
     std::unique_ptr<Sampler>                                                 sampler_;
     std::unique_ptr<NormalBatchStreamProcessor>                              batch_stream_processor_;
     std::shared_ptr<KVCacheManager>                                          cache_manager_;
