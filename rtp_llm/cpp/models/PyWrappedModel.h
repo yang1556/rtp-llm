@@ -22,7 +22,11 @@ namespace rtp_llm {
 class PyWrappedModel: public GptModel {
 public:
     // py_instance is `py_model` indeedly.
-    PyWrappedModel(const GptModelInitParams& params, py::object py_instance, bool is_prefill_cuda_graph_mode = false);
+    PyWrappedModel(const GptModelInitParams& params,
+                   py::object                py_instance,
+                   bool                      is_prefill_cuda_graph_mode = false,
+                   bool                      use_spec_decoding          = false,
+                   const std::vector<int>&   kv_cache_layer_to_group    = {});
     ~PyWrappedModel();
 
     GptModelOutputs forward(const GptModelInputs& inputs) override;
@@ -47,15 +51,19 @@ private:
     py::object py_model_;
     bool       enable_cuda_graph_{false};
     bool       is_prefill_cuda_graph_mode_{false};
+    bool       use_spec_decoding_{false};
 };
 
 // NOTE(wangyin): constructor can not be compiled correctly when placed in cc file.
 inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
                                       py::object                py_instance,
-                                      bool                      is_prefill_cuda_graph_mode):
+                                      bool                      is_prefill_cuda_graph_mode,
+                                      bool                      use_spec_decoding,
+                                      const std::vector<int>&   kv_cache_layer_to_group):
     GptModel(params),
     enable_cuda_graph_(params.device->initParams().hw_kernel_config.enable_cuda_graph),
-    is_prefill_cuda_graph_mode_(is_prefill_cuda_graph_mode) {
+    is_prefill_cuda_graph_mode_(is_prefill_cuda_graph_mode),
+    use_spec_decoding_(use_spec_decoding) {
 
     if (setenv("PYTHONUNBUFFERED", "TRUE", 1) != 0) {
         RTP_LLM_LOG_WARNING("Failed to set PYTHONUNBUFFERED environment variable on POSIX.");
@@ -109,8 +117,13 @@ inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
             num_tokens_per_bs = params.device->initParams().sp_config.gen_num_per_cycle + 1;
         }
 
-        graph_runner_ = new CudaGraphRunner(
-            params.device->initParams(), py_instance, dtype, num_tokens_per_bs, is_prefill_cuda_graph_mode);
+        graph_runner_ = new CudaGraphRunner(params.device->initParams(),
+                                            py_instance,
+                                            dtype,
+                                            num_tokens_per_bs,
+                                            is_prefill_cuda_graph_mode,
+                                            use_spec_decoding,
+                                            kv_cache_layer_to_group);
         RTP_LLM_CHECK_WITH_INFO(graph_runner_ != nullptr, "graph_runner_ can't be nullptr in PyWrapper");
 #else
         RTP_LLM_CHECK_WITH_INFO(false, "CUDA Graph is only supported on CUDA platform for now");
