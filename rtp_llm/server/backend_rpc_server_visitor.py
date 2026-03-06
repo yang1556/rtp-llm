@@ -12,7 +12,7 @@ from rtp_llm.metrics import kmonitor
 from rtp_llm.metrics.kmonitor_metric_reporter import AccMetrics, GaugeMetrics
 from rtp_llm.ops import SpeculativeExecutionConfig, VitSeparation, get_block_cache_keys
 from rtp_llm.server.host_service import HostService, HostServiceArgs
-from rtp_llm.server.master_client import MasterClient
+from rtp_llm.server.master_client import FlexlbResponse, MasterClient
 from rtp_llm.server.misc import format_exception
 from rtp_llm.utils.base_model_datatypes import GenerateInput, GenerateOutputs
 from rtp_llm.utils.time_util import Timer
@@ -122,44 +122,54 @@ class BackendRPCServerVisitor:
         logging.info(f"configured backend role list: {role_list}")
         return role_list
 
-    async def get_master_route_addrs(self, input: GenerateInput):
-        token_ids = []
-        if len(input.token_ids.shape) == 2:
-            token_ids: List[int] = input.token_ids.tolist()[0]  # type: ignore
-        else:
-            token_ids: List[int] = input.token_ids.tolist()  # type: ignore
+    async def get_master_route_addrs(
+        self, input: GenerateInput
+    ) -> Optional[FlexlbResponse]:
+        """
+        Resolve role addrs from FlexLB master (and slave on connection failure).
+        Returns None on success; on failure returns FlexlbResponse for routing decisions.
+        request_id is frontend-generated and is not overwritten.
+        """
+        token_ids = (
+            input.token_ids.tolist()[0]
+            if len(input.token_ids.shape) == 2
+            else input.token_ids.tolist()
+        )
         block_cache_keys = get_block_cache_keys(token_ids, self.seq_size_per_block)
-        start = time.time()
+
         try:
-            role_addrs = await self.master_client.get_backend_role_addrs(
+            route_result = await self.master_client.get_backend_role_addrs(
                 block_cache_keys=block_cache_keys,
                 input=input,
                 request_id=input.request_id,
             )
         except BaseException as e:
             exception_json = format_exception(e)
-            error_code_str = exception_json.get("error_code_str", "")
             kmonitor.report(
                 AccMetrics.MASTER_ROUTE_ERROR_QPS_METRIC,
                 1,
-                {"error_code": error_code_str},
+                {"error_code": exception_json.get("error_code_str", "")},
             )
-            logging.error(
-                f"master route failed, request <{input.request_id}> {exception_json}, start={start}, rt={time.time() - start}"
-            )
-            raise e
+            raise
 
-        if not role_addrs:
-            route_logger.error(
-                f"master route failed, request <{input.request_id}> no role addresses returned"
-            )
-        else:
-            input.generate_config.role_addrs = role_addrs
-            input.generate_config.inter_request_id = input.request_id
+        if route_result.is_ok:
+            input.generate_config.role_addrs = route_result.role_addrs
             route_logger.debug(
-                f"master route success, request <{input.request_id}> route to address: {role_addrs}, input request_id: {input.request_id}"
+                "master route success, request_id=%s, addrs=%s",
+                input.request_id,
+                route_result.role_addrs,
             )
             kmonitor.report(AccMetrics.MASTER_ROUTE_QPS_METRIC, 1)
+            return None
+
+        route_logger.error(
+            "master route failed, request_id=%s, connection_failed=%s, error_code=%s, error_message=%s",
+            input.request_id,
+            route_result.connection_failed,
+            route_result.error_code,
+            route_result.error_message or "",
+        )
+        return route_result
 
     async def get_domain_route_addrs(self, input: GenerateInput):
         specified_roles = {addr.role for addr in input.generate_config.role_addrs}
@@ -172,7 +182,9 @@ class BackendRPCServerVisitor:
         if role_addrs:
             input.generate_config.role_addrs.extend(role_addrs)
             route_logger.warning(
-                f"fallback to host service, request <{input.request_id}> route to address: {role_addrs}"
+                "fallback to host service, request_id=%s, addrs=%s",
+                input.request_id,
+                role_addrs,
             )
             kmonitor.report(
                 AccMetrics.DOMAIN_ROUTE_QPS_METRIC,
@@ -180,7 +192,9 @@ class BackendRPCServerVisitor:
             )
         else:
             route_logger.error(
-                f"host service failed, request <{input.request_id}>, missing roles: {missing_roles}"
+                "host service failed, request_id=%s, missing_roles=%s",
+                input.request_id,
+                missing_roles,
             )
 
     async def route_ips(self, input: GenerateInput):
@@ -200,43 +214,50 @@ class BackendRPCServerVisitor:
                     message=f"Flexlb queue length {queue_length} exceeds threshold {threshold}",
                 )
         with Timer() as route_timer:
-            # Check if role_addrs is already specified in the request
             role_addrs_specified = bool(input.generate_config.role_addrs)
+            master_addr = self.host_service.get_master_addr()
+            route_logger.debug("routing to master: %s", master_addr)
 
-            # master don't support schedule batched input yet
             input_token_batched = False
             if len(input.token_ids.shape) == 2 and input.token_ids.size(0) != 1:
                 input_token_batched = True
 
-            # Only get route from master if role_addrs is not specified
-            if not role_addrs_specified and not input_token_batched:
+            master_route_result: Optional[FlexlbResponse] = None
+            if not role_addrs_specified and master_addr and not input_token_batched:
                 with Timer() as master_route_timer:
-                    await self.get_master_route_addrs(input)
+                    master_route_result = await self.get_master_route_addrs(input)
                 kmonitor.report(
                     GaugeMetrics.MASTER_ROUTE_RT_METRIC, master_route_timer.cost_ms()
                 )
             elif not role_addrs_specified:
                 route_logger.warning(
-                    f"input token batched: {input_token_batched} is not valid, fallback to domain routing"
+                    "master address: %s or input token batched: %s is not valid, fallback to domain routing",
+                    master_addr,
+                    input_token_batched,
                 )
             specified_roles = {addr.role for addr in input.generate_config.role_addrs}
-            # 预先计算是否需要调用
             need_domain_routing = not set(self.backend_role_list).issubset(
                 specified_roles
             )
-            if not input.generate_config.role_addrs or need_domain_routing:
+            allow_domain_fallback = master_route_result is None or (
+                master_route_result.connection_failed
+            )
+            if (
+                not input.generate_config.role_addrs or need_domain_routing
+            ) and allow_domain_fallback:
                 with Timer() as domain_route_timer:
                     await self.get_domain_route_addrs(input)
                 kmonitor.report(
                     GaugeMetrics.DOMAIN_ROUTE_RT_METRIC, domain_route_timer.cost_ms()
                 )
-            route_logger.debug(f"routing to master done")
+            route_logger.debug("routing to master done")
 
         kmonitor.report(GaugeMetrics.ROUTE_RT_METRIC, route_timer.cost_ms())
         if not input.generate_config.role_addrs:
             raise FtRuntimeException(
                 ExceptionType.ROUTE_ERROR,
-                f"request <{input.request_id}> no backend role addresses found after routing",
+                "request_id=%s no backend role addresses found after routing"
+                % input.request_id,
             )
 
     def check_sp_supported(self, input: GenerateInput):
