@@ -157,10 +157,7 @@ class ParallelInfo(object):
                 f"local rank {info.local_rank} set accl select port to {select_port} "
             )
 
-        if (
-            os.environ.get("ACCL_USE_NICS") == None
-            and os.environ.get("ACCL_NIC_GPU_AFFINITY") != None
-        ):
+        if os.environ.get("ACCL_NIC_GPU_AFFINITY") is not None:
             content = os.environ.get("ACCL_NIC_GPU_AFFINITY")
             try:
                 gpu_nic_affinity = json.loads(content)  # 验证内容是否为合法 JSON
