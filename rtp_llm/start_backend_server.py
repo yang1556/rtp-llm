@@ -273,6 +273,11 @@ def multi_rank_start(
 
 
 def load_gpu_nic_affinity():
+    if os.environ.get("ACCL_USE_NICS") is not None:
+        logging.info(
+            "ACCL_USE_NICS is already set by user, skip loading ACCL_NIC_GPU_AFFINITY"
+        )
+        return False
     if os.environ.get("ACCL_NIC_GPU_AFFINITY") != None:
         return True
     # 检查 /usr/local/bin/run_affinity 是否存在
