@@ -146,6 +146,7 @@ struct KVCacheConfig {
     int     fp8_kv_cache        = 0;
     int64_t kv_cache_mem_mb     = -1;
     int     seq_size_per_block  = 64;
+    int     kernel_seq_size_per_block = 0;  // 0 means same as seq_size_per_block
     int     test_block_num      = 0;
     int     use_block_cache     = -1;  // -1 means not set, use Optional<int> equivalent
     bool    enable_device_cache = true;

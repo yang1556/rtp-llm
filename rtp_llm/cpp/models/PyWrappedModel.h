@@ -42,9 +42,11 @@ private:
                                                                   const GptModelInputs&         inputs,
                                                                   BufferPtr&                    kv_cache_block_id_device,
                                                                   std::vector<BufferPtr>*       kv_cache_block_id_device_by_group = nullptr);
-    GptModelOutputs
-                  callForwardPostLayers(BufferPtr hidden_states, const GptModelInputs& inputs, bool skip_final_layernorm, size_t num_valid_tokens = -1);
-    torch::Tensor tensorHoldHostAndToCuda(const torch::Tensor& tensor);
+    GptModelOutputs                callForwardPostLayers(BufferPtr             hidden_states,
+                                                         const GptModelInputs& inputs,
+                                                         bool                  skip_final_layernorm,
+                                                         size_t                num_valid_tokens = -1);
+    torch::Tensor                  tensorHoldHostAndToCuda(const torch::Tensor& tensor);
 
     GraphBase* graph_runner_{nullptr};
     py::object py_model_;
@@ -73,14 +75,15 @@ inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
 
     if (params.kv_cache_layer_layout.has_value()) {
         torch_ext::KVCache kv_cache;
-        kv_cache.seq_size_per_block = params.description.attention_conf.tokens_per_block;
-        const auto& layout          = params.kv_cache_layer_layout.value();
+        kv_cache.seq_size_per_block        = params.description.attention_conf.tokens_per_block;
+        kv_cache.kernel_seq_size_per_block = params.description.attention_conf.kernel_tokens_per_block;
+        const auto& layout                 = params.kv_cache_layer_layout.value();
         kv_cache.kv_cache_base_by_layer.reserve(layout.layers_to_kv_buffer_ptrs.size());
-        kv_cache.num_kv_heads       = params.description.attention_conf.kv_head_num;
-        kv_cache.head_dim           = params.description.attention_conf.size_per_head;
-        kv_cache.use_mla            = params.description.attention_conf.use_mla;
-        kv_cache.kv_lora_rank       = params.description.attention_conf.kv_lora_rank;
-        kv_cache.rope_head_dim      = params.description.attention_conf.rope_head_dim;
+        kv_cache.num_kv_heads  = params.description.attention_conf.kv_head_num;
+        kv_cache.head_dim      = params.description.attention_conf.size_per_head;
+        kv_cache.use_mla       = params.description.attention_conf.use_mla;
+        kv_cache.kv_lora_rank  = params.description.attention_conf.kv_lora_rank;
+        kv_cache.rope_head_dim = params.description.attention_conf.rope_head_dim;
         for (const auto& buf : layout.layers_to_kv_buffer_ptrs) {
             if (buf) {
                 kv_cache.kv_cache_base_by_layer.push_back(Buffer2torchTensor(buf, false));
@@ -96,7 +99,9 @@ inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
                 kv_cache.kv_scale_base_by_layer.push_back(torch::Tensor());
             }
         }
-        init_resources.kv_cache = kv_cache;
+
+        kv_cache.layer_attn_types = layout.layer_attn_types;
+        init_resources.kv_cache   = kv_cache;
     }
 
     py::object py_init_result;
