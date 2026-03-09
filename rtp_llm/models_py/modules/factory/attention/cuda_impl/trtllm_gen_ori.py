@@ -532,20 +532,23 @@ class FlashInferTRTLLMPrefillImplOri(FMHAImplBase):
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
+        kv_cache_block_id_device_ori = attn_inputs.kv_cache_block_id_device
         self.kv_cache_block_id_device_ori = expand_block_tables_for_trtllm(
             attn_inputs.kv_cache_block_id_device, self.fmha_impl.page_ratio
         )
-        self.fmha_params.block_tables.copy_(self.kv_cache_block_id_device_ori)
+        attn_inputs.kv_cache_block_id_device = self.kv_cache_block_id_device_ori
+        new_rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
+        new_offset = new_rope_params.kv_cache_offset
+        old_offset = self.rope_params.kv_cache_offset
+        common.copy_kv_cache_offset(old_offset, new_offset)
+
         new_fmha_params = self.fmha_impl.prepare(attn_inputs)
         self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
         self.fmha_params.cu_kv_seqlens.copy_(
             new_fmha_params.cu_kv_seqlens, non_blocking=True
         )
 
-        new_rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
-        new_offset = new_rope_params.kv_cache_offset
-        old_offset = self.rope_params.kv_cache_offset
-        common.copy_kv_cache_offset(old_offset, new_offset)
+        attn_inputs.kv_cache_block_id_device = kv_cache_block_id_device_ori
 
 
 class FlashInferTRTLLMSpecDecodeImplOri(FMHAImplBase):
@@ -614,17 +617,20 @@ class FlashInferTRTLLMSpecDecodeImplOri(FMHAImplBase):
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
+        kv_cache_block_id_device_ori = attn_inputs.kv_cache_block_id_device
         self.kv_cache_block_id_device_ori = expand_block_tables_for_trtllm(
             attn_inputs.kv_cache_block_id_device, self.fmha_impl.page_ratio
         )
-        self.fmha_params.block_tables.copy_(self.kv_cache_block_id_device_ori)
-        new_fmha_params = self.fmha_impl.prepare(attn_inputs)
-        self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
-
+        attn_inputs.kv_cache_block_id_device = self.kv_cache_block_id_device_ori
         new_rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
         new_offset = new_rope_params.kv_cache_offset
         old_offset = self.rope_params.kv_cache_offset
         common.copy_kv_cache_offset(old_offset, new_offset)
+
+        new_fmha_params = self.fmha_impl.prepare(attn_inputs)
+        self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
+
+        attn_inputs.kv_cache_block_id_device = kv_cache_block_id_device_ori
 
 
 class FlashInferTRTLLMDecodeImplOri(FMHAImplBase):
@@ -693,14 +699,21 @@ class FlashInferTRTLLMDecodeImplOri(FMHAImplBase):
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
+        kv_cache_block_id_device_ori = attn_inputs.kv_cache_block_id_device
         self.kv_cache_block_id_device_ori = expand_block_tables_for_trtllm(
             attn_inputs.kv_cache_block_id_device, self.fmha_impl.page_ratio
         )
-        self.fmha_params.block_tables.copy_(self.kv_cache_block_id_device_ori)
-        new_fmha_params = self.fmha_impl.prepare(attn_inputs)
-        self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
-
+        attn_inputs.kv_cache_block_id_device = self.kv_cache_block_id_device_ori
         new_rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
         new_offset = new_rope_params.kv_cache_offset
         old_offset = self.rope_params.kv_cache_offset
         common.copy_kv_cache_offset(old_offset, new_offset)
+
+        new_fmha_params = self.fmha_impl.prepare(attn_inputs)
+        self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
+
+        attn_inputs.kv_cache_block_id_device = kv_cache_block_id_device_ori
+        # new_rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
+        # new_offset = new_rope_params.kv_cache_offset
+        # old_offset = self.rope_params.kv_cache_offset
+        # common.copy_kv_cache_offset(old_offset, new_offset)
