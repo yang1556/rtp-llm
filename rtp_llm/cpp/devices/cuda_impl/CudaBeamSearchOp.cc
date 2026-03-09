@@ -63,10 +63,10 @@ BeamSearchOutput CudaDevice::sampleBeamSearch(const BeamSearchParams& params) {
     int64_t    softmax_time           = autil::TimeUtility::currentTimeInMicroSeconds() - start_time_us;
     std::cout << "FUYU softmax_time:" << softmax_time << std::endl;
 
-    int64_t s_time = autil::TimeUtility::currentTimeInMicroSeconds()
+    int64_t s_time = autil::TimeUtility::currentTimeInMicroSeconds();
 
-        // beam search heuristic
-        tensorrt_llm::BeamSearchConfig config;
+    // beam search heuristic
+    tensorrt_llm::BeamSearchConfig config;
     DISPATCH_TYPE(T, params.logits.type(), [&]() {
         config = tensorrt_llm::configureBeamSearch<T>(batch_size, beam_width_in, beam_width_out, vocab_size);
     });
