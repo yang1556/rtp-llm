@@ -131,20 +131,20 @@ def http_deps():
         sha256 = "dd375f794557a1135934b40b23a7435569644922c5c7116cb69dd36f699ad5a4",
     )
 
-    http_file(
+     http_file(
         name = "remote_kv_cache_manager_client_rpm",
         urls = [
-            "https://rtp-opensource.oss-cn-hangzhou.aliyuncs.com/package/kvcm/kv-cache-manager-client-2026_02_28_11_34.rpm",
+            "http://search-ad.oss-cn-hangzhou-zmf-internal.aliyuncs.com/kv_cache_manager%2Fclient%2Fkv-cache-manager-client-2026_03_09_23_47.rpm",
         ],
-        sha256 = "14ed1759d596bb049a3cc2b68b91797b1d8b4d1b13577304e5ab916e5a4fe159",
+        sha256 = "8c5fb030b4ebc7d168ea774b736ade7a460ce08ac2750a915784691643fbcbdf",
     )
 
     http_archive(
         name = "remote_kv_cache_manager_server",
         urls = [
-            "https://rtp-opensource.oss-cn-hangzhou.aliyuncs.com/package/kvcm/kv_cache_manager_server_2026_02_28_11_36.tar.gz",
+            "http://search-ad.oss-cn-hangzhou-zmf-internal.aliyuncs.com/kv_cache_manager%2Fserver%2Fkv_cache_manager_server_2026_03_09_23_52.tar.gz",
         ],
-        sha256 = "757eaec92b45a156ae02bae2000db54d767538c572276269ebc803c1513bb3f2",
+        sha256 = "8f22df7aae327cafbde8ec0eeb53fdee735a1d06fe63389345a907e618455aaf",
         build_file_content = """
 exports_files(["bin/kv_cache_manager_bin"])
         """,
