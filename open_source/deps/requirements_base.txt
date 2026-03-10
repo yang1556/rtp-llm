@@ -37,6 +37,7 @@ py-spy
 pydantic
 pynvml
 pyodps
+lm-eval==0.4.3
 pyOpenSSL==24.1.0
 safetensors
 sentence-transformers==2.7.0
