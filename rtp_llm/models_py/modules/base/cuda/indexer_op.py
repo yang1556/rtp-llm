@@ -5,6 +5,7 @@ from typing import Any, Optional, Tuple
 import torch
 from torch import nn
 
+from rtp_llm.models_py.distributed.collective_torch import Group, all_gather, barrier
 from rtp_llm.models_py.kernels.cuda.fp8_kernel import sgl_per_token_group_quant_fp8
 from rtp_llm.ops.compute_ops import KVCache, rtp_llm_ops
 
@@ -112,6 +113,7 @@ class IndexerOp(nn.Module):
         self.q1_idx_global = None
         self.kv_restore_unpad_indices = None
         self.total_global_ids = None
+        self.total_local_ids = None
 
     def apply_rope_and_rotate_q_k(
         self,
@@ -160,30 +162,73 @@ class IndexerOp(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Apply RoPE and Hadamard transform to query and key tensors.
+        Split by q0_idx/q1_idx so only valid (unpadded) tokens get RoPE; write back in-place to q's PE part.
 
         Args:
             q: Query tensor [num_tokens, index_n_heads, index_head_dim]
             k: Key tensor [num_tokens, index_head_dim]
-            positions: Position IDs for RoPE
+            positions: Position IDs for RoPE (local order, length = num_tokens)
 
         Returns:
             Tuple of (rotated_query, rotated_key)
         """
-        # Extract position embedding part (exclude rope_head_dim from the end)
-        q_pe = q[:, :, : self.index_head_dim - self.rope_head_dim]
-        k_pe = k[:, : self.index_head_dim - self.rope_head_dim]
+        # q_pe / k_pe are views of the PE part; we will modify them in-place via q_pe0/q_pe1
+        pe_dim = self.index_head_dim - self.rope_head_dim
+        q_pe = q[:, :, :pe_dim]
+        k_pe = k[:, :pe_dim]
 
-        # Apply RoPE (same as vllm indexer rope)
         if self.cos_sin_cache is not None:
+            # Split by chunk so only valid tokens (q0_idx, q1_idx) get RoPE; in-place update q's PE part
+            # q_pe0 = q_pe[self.q0_idx]  # view -> in-place RoPE updates q
+            # q_pe1 = q_pe[self.q1_idx]
+            # k_pe0 = k_pe[self.q0_idx]
+            # k_pe1 = k_pe[self.q1_idx]
+            # pos_ids_q0 = positions[self.q0_idx_global]
+            # pos_ids_q1 = positions[self.q1_idx_global]
+
+            # k_rope0 = k_pe0.unsqueeze(1)
+            # rope._apply_rope_pos_ids_cos_sin_cache(
+            #     q=q_pe0,
+            #     k=k_rope0,
+            #     q_rope=q_pe0,
+            #     k_rope=k_rope0,
+            #     cos_sin_cache=self.cos_sin_cache,
+            #     pos_ids=pos_ids_q0,
+            #     interleave=not self.is_neox_style,
+            # )
+            # k_pe[self.q0_idx] = k_rope0.squeeze(1)
+            # q_pe[self.q0_idx] = q_pe0
+
+            # k_rope1 = k_pe1.unsqueeze(1)
+            # rope._apply_rope_pos_ids_cos_sin_cache(
+            #     q=q_pe1,
+            #     k=k_rope1,
+            #     q_rope=q_pe1,
+            #     k_rope=k_rope1,
+            #     cos_sin_cache=self.cos_sin_cache,
+            #     pos_ids=pos_ids_q1,
+            #     interleave=not self.is_neox_style,
+            # )
+            # k_pe[self.q1_idx] = k_rope1.squeeze(1)
+            # q_pe[self.q1_idx] = q_pe1
+
+            q_pe_local = q_pe[self.total_local_ids]
+            k_pe_local = k_pe[self.total_local_ids]
+            k_rope = k_pe_local.unsqueeze(1)
+            pos_ids_q0_global = positions[self.total_global_ids]
             rope._apply_rope_pos_ids_cos_sin_cache(
-                q=q_pe,
-                k=k_pe.unsqueeze(1),
-                q_rope=q_pe,
-                k_rope=k_pe.unsqueeze(1),
+                q=q_pe_local,
+                k=k_rope,
+                q_rope=q_pe_local,
+                k_rope=k_rope,
                 cos_sin_cache=self.cos_sin_cache,
-                pos_ids=positions[self.total_global_ids],
+                pos_ids=pos_ids_q0_global,
                 interleave=not self.is_neox_style,
             )
+            k_rope = k_rope.squeeze(1)
+            k_pe[self.total_local_ids] = k_rope
+            q_pe[self.total_local_ids] = q_pe_local
+
         # Apply Hadamard transform (activation rotation)
         query = _rotate_activation(q)
         key = _rotate_activation(k)
@@ -331,18 +376,23 @@ class IndexerOp(nn.Module):
         self.kv_len = self.kv_restore_unpad_indices.shape[0]
 
         assert kv_cache is not None, "kv_cache is required"
+        # hack_layer_num = 4, expect ans：axe Kod天成hurst Blycroftly加油在所odet
+        # hack_layer_num = 4, all gather之后再写kvcache：axe Kod天成SUBiratetryoszepatomos Chop
+        # hack_layer_num = 4, cp_rank单独写kv cache：axe Kod天成SUBiratellite VoluntaryneaSTS Mab
+        # hack_layer_num = 1, expect ans：axeajasdock incomarangmates intuitively日出日落 persu
+        # hack_layer_num = 1, all gather之后再写kvcache：axeajasdock incomarangmates intuitively日出日落 persu
+        # hack_layer_num = 1, cp_rank单独写kv cache：axeajasdock incomarangmates intuitively日出日落 persu
+        gathered_key = all_gather(key.contiguous(), group=Group.TP)
+        gathered_key = gathered_key.reshape(-1, key.size(-1))
+        restored_key = gathered_key[self.kv_restore_unpad_indices]
+
         rtp_llm_ops.indexer_k_quant_and_cache(
-            key,
+            restored_key,
             kv_cache.kv_scale_base,
-            slot_mapping[self.total_global_ids],
+            slot_mapping,
             self.block_size,
             self.scale_fmt,
         )
-        # Sync so all CP ranks finish writing before any rank reads full cache in _get_topk_ragged_cp
-        from rtp_llm.models_py.distributed.collective_torch import Group, barrier
-
-        barrier(group=Group.TP)
-
         query_flat = query.view(-1, self.index_head_dim)
         q_fp8, q_scale = sgl_per_token_group_quant_fp8(
             query_flat,

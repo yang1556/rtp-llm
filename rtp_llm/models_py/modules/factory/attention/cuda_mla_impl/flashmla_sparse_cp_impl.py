@@ -22,7 +22,7 @@ except (ImportError, AttributeError, ValueError) as e:
 
     logging.warning(f"flash_mla not available: {e}. Requires CUDA >= 12.9")
 
-from rtp_llm.models_py.distributed.collective_torch import Group, all_gather
+from rtp_llm.models_py.distributed.collective_torch import Group, all_gather, barrier
 from rtp_llm.models_py.modules.factory.attention import common
 from rtp_llm.models_py.modules.factory.attention.cuda_cp_impl.prefill_mha.cp_utils import (
     generate_kv_indices,
@@ -96,7 +96,6 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
         self.mla_params = mla_params
 
         cp_info = self.cp_info
-        # TODO： ensure kv_restore_indices is diff from mha
         padding_mask = cp_info.prefill_qkv_padding_mask
         kv_restore_indices = cp_info.prefill_qkv_restore_indice
         self.kv_restore_unpad_indices = kv_restore_indices[padding_mask == 1]
@@ -130,14 +129,23 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
         self.q0_idx_global = inv_restore[source_flat_0]
         self.q1_idx_global = inv_restore[source_flat_1]
 
+        # Keep only indices where padding_mask is 1 (valid); drop padded positions (0)
+        padding_mask_d = padding_mask.to(device=self.device)
+        valid_mask_q0 = padding_mask_d[self.q0_idx_global] == 1
+        valid_mask_q1 = padding_mask_d[self.q1_idx_global] == 1
+        self.q0_idx_global = self.q0_idx_global[valid_mask_q0]
+        self.q1_idx_global = self.q1_idx_global[valid_mask_q1]
+        self.q0_idx = self.q0_idx[valid_mask_q0]
+        self.q1_idx = self.q1_idx[valid_mask_q1]
         self.total_global_ids = torch.cat(
             [self.q0_idx_global, self.q1_idx_global], dim=0
         )
+        self.total_local_ids = torch.cat([self.q0_idx, self.q1_idx], dim=0)
 
         # get_mla_metadata: num_q_tokens_per_head_k = num_q_tokens * num_heads_q // num_heads_k (for tile scheduling).
-        # For q0 and q1 we need separate metadata since each part has different q token count.
-        n_q0 = len(q0_idx)
-        n_q1 = len(q1_idx)
+        # For q0 and q1 we need separate metadata since each part has different q token count (use filtered counts).
+        n_q0 = self.q0_idx_global.size(0)
+        n_q1 = self.q1_idx_global.size(0)
         tile_sched_q0, num_splits_q0 = get_mla_metadata(  # type: ignore
             cache_seqlens=None,
             num_q_tokens_per_head_k=n_q0 * self.num_heads,
@@ -188,13 +196,19 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
         Returns:
             attn_output: [total_q_len, num_heads, kv_lora_rank], same as non-CP SparseMlaOp.
         """
+        # All-gather KV across CP ranks, restore to global order, then write full KV to cache
+        gathered_ckv = all_gather(compressed_kv.contiguous(), group=Group.TP)
+        gathered_ckv = gathered_ckv.reshape(-1, compressed_kv.size(-1))
+        gathered_k_pe = all_gather(k_pe.contiguous(), group=Group.TP)
+        gathered_k_pe = gathered_k_pe.reshape(-1, k_pe.size(-1))
+
+        restored_ckv = gathered_ckv[self.kv_restore_unpad_indices]
+        restored_k_pe = gathered_k_pe[self.kv_restore_unpad_indices]
 
         self.kv_cache_write_op.forward(
-            compressed_kv, k_pe, kv_cache, self.mla_params, self.total_global_ids
+            restored_ckv, restored_k_pe, kv_cache, self.mla_params
         )
-        from rtp_llm.models_py.distributed.collective_torch import Group, barrier
 
-        barrier(group=Group.TP)
         # TODO: write cache for each cp_rank
         common.apply_write_cache_store(
             self.write_cache_store_impl, self.attn_inputs, kv_cache
@@ -312,6 +326,7 @@ class SparseMlaCpImpl(SparseMlaImpl):
             q0_idx_global=self.fmha_impl.q0_idx_global,
             q1_idx_global=self.fmha_impl.q1_idx_global,
             total_global_ids=self.fmha_impl.total_global_ids,
+            total_local_ids=self.fmha_impl.total_local_ids,
         )
 
     @classmethod
@@ -353,14 +368,66 @@ class SparseMlaCpImpl(SparseMlaImpl):
         assert kv_cache is not None, "kv_cache is required for sparse MLA"
         assert self.fmha_impl is not None, "fmha_impl is not initialized"
 
-        # Apply RoPE to q_pe and k_pe (use cp_params when available, else fmha_impl)
+        # Apply RoPE to q_pe and k_pe
         q_pe = q[:, :, self.nope_head_dim :]
-        cp = getattr(self, "cp_params", None)
-        if cp is not None:
-            q_total_pos_ids = cp.total_global_ids
-        else:
-            q_total_pos_ids = self.fmha_impl.total_global_ids
-        self.rope_impl.forward(q_pe, k_pe, self.rope_params, q_total_pos_ids)
+        # cp = getattr(self, "cp_params", None)
+        # if cp is not None:
+        #     q_total_pos_ids = cp.total_global_ids
+        # else:
+        #     q_total_pos_ids = self.fmha_impl.total_global_ids
+
+        # self.rope_impl.forward(q_pe, k_pe, self.rope_params, q_total_pos_ids)
+        # q_pe0 = q_pe[self.fmha_impl.q0_idx]  # view -> in-place RoPE updates q
+        # q_pe1 = q_pe[self.fmha_impl.q1_idx]
+        # k_pe0 = k_pe[self.fmha_impl.q0_idx]
+        # k_pe1 = k_pe[self.fmha_impl.q1_idx]
+        # pos_ids_q0 = self.rope_params.positions_d[self.fmha_impl.q0_idx_global]
+        # pos_ids_q1 = self.rope_params.positions_d[self.fmha_impl.q1_idx_global]
+        import flashinfer.rope as rope
+
+        # k_rope0 = k_pe0.unsqueeze(1)
+        # rope._apply_rope_pos_ids_cos_sin_cache(
+        #     q=q_pe0,
+        #     k=k_rope0,
+        #     q_rope=q_pe0,
+        #     k_rope=k_rope0,
+        #     cos_sin_cache=self.rope_impl.cos_sin_cache,
+        #     pos_ids=pos_ids_q0,
+        #     interleave=not self.rope_impl.is_neox_style,
+        # )
+        # k_pe[self.fmha_impl.q0_idx] = k_rope0.squeeze(1)
+        # q_pe[self.fmha_impl.q0_idx] = q_pe0
+        # k_rope1 = k_pe1.unsqueeze(1)
+        # rope._apply_rope_pos_ids_cos_sin_cache(
+        #     q=q_pe1,
+        #     k=k_rope1,
+        #     q_rope=q_pe1,
+        #     k_rope=k_rope1,
+        #     cos_sin_cache=self.rope_impl.cos_sin_cache,
+        #     pos_ids=pos_ids_q1,
+        #     interleave=not self.rope_impl.is_neox_style,
+        # )
+        # k_pe[self.fmha_impl.q1_idx] = k_rope1.squeeze(1)
+        # q_pe[self.fmha_impl.q1_idx] = q_pe1
+
+        q_pe_local = q_pe[self.fmha_impl.total_local_ids]
+        k_pe_local = k_pe[self.fmha_impl.total_local_ids]
+        k_rope = k_pe_local.unsqueeze(1)
+        pos_ids_q0_global = self.rope_params.positions_d[
+            self.fmha_impl.total_global_ids
+        ]
+        rope._apply_rope_pos_ids_cos_sin_cache(
+            q=q_pe_local,
+            k=k_rope,
+            q_rope=q_pe_local,
+            k_rope=k_rope,
+            cos_sin_cache=self.rope_impl.cos_sin_cache,
+            pos_ids=pos_ids_q0_global,
+            interleave=not self.rope_impl.is_neox_style,
+        )
+        k_rope = k_rope.squeeze(1)
+        k_pe[self.fmha_impl.total_local_ids] = k_rope
+        q_pe[self.fmha_impl.total_local_ids] = q_pe_local
 
         # Apply input BMM to transform query
         q_transformed = self._apply_input_bmm(q, layer_id)
