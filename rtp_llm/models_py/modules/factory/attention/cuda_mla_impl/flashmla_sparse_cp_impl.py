@@ -144,19 +144,10 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
 
         # get_mla_metadata: num_q_tokens_per_head_k = num_q_tokens * num_heads_q // num_heads_k (for tile scheduling).
         # For q0 and q1 we need separate metadata since each part has different q token count (use filtered counts).
-        n_q0 = self.q0_idx_global.size(0)
-        n_q1 = self.q1_idx_global.size(0)
+        n_q = self.total_global_ids.size(0)
         tile_sched_q0, num_splits_q0 = get_mla_metadata(  # type: ignore
             cache_seqlens=None,
-            num_q_tokens_per_head_k=n_q0 * self.num_heads,
-            topk=self.top_k,
-            num_heads_q=self.num_heads,
-            num_heads_k=1,
-            is_fp8_kvcache=True,
-        )
-        tile_sched_q1, num_splits_q1 = get_mla_metadata(  # type: ignore
-            cache_seqlens=None,
-            num_q_tokens_per_head_k=n_q1 * self.num_heads,
+            num_q_tokens_per_head_k=n_q * self.num_heads,
             topk=self.top_k,
             num_heads_q=self.num_heads,
             num_heads_k=1,
@@ -165,17 +156,47 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
         self._fp8_kernel_metadata_q0 = SparseMlaFp8DecodeParams(
             tile_sched_q0, num_splits_q0
         )
-        self._fp8_kernel_metadata_q1 = SparseMlaFp8DecodeParams(
-            tile_sched_q1, num_splits_q1
+
+    def _convert_topk_indices_to_global(
+        self, topk_indices: torch.Tensor
+    ) -> torch.Tensor:
+        """CP: topk 行与 total_local_ids 对齐，req_id 需用 total_global_ids 取 batch_indice_d，保证第 i 行对应 global token 的 request id。"""
+        if topk_indices.dim() == 2:
+            num_tokens, topk = topk_indices.shape
+            h_kv = 1
+            topk_indices_2d = topk_indices
+        else:
+            num_tokens, h_kv, topk = topk_indices.shape
+            topk_indices_2d = topk_indices[:, 0, :]
+        assert topk == self.top_k
+        assert self.block_table is not None
+        assert self.mla_params is not None
+        # req_id[i] = request id for global token total_global_ids[i]
+        req_id = self.mla_params.batch_indice_d[self.total_global_ids]
+        from rtp_llm.models_py.triton_kernels.sparse_mla.block_index_to_global import (
+            triton_convert_req_index_to_global_index,
         )
+
+        global_indices_2d = triton_convert_req_index_to_global_index(
+            req_id=req_id,
+            block_table=self.block_table,
+            token_indices=topk_indices_2d,
+            BLOCK_SIZE=self.token_per_block,
+            NUM_TOPK_TOKENS=topk,
+            BLOCK_N=min(128, topk),
+            HAS_PREFILL_WORKSPACE=False,
+        )
+        global_indices_3d = global_indices_2d.unsqueeze(1).expand(
+            num_tokens, h_kv, topk
+        )
+        return global_indices_3d
 
     def forward(
         self,
         q: torch.Tensor,
         compressed_kv: torch.Tensor,
         k_pe: torch.Tensor,
-        topk0: torch.Tensor,
-        topk1: torch.Tensor,
+        topk: Optional[torch.Tensor],
         batch_indice_d: torch.Tensor,
         kv_cache=None,
         layer_id: int = 0,
@@ -214,10 +235,11 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
             self.write_cache_store_impl, self.attn_inputs, kv_cache
         )
 
-        # Convert request-local topk0/topk1 to global indices for flash_mla_with_kvcache
-        topk0 = self._convert_topk_indices_to_global(topk0)
-        topk1 = self._convert_topk_indices_to_global(topk1)
+        if topk is None:
+            return None
 
+        # Convert request-local topk0/topk1 to global indices for flash_mla_with_kvcache
+        global_topk = self._convert_topk_indices_to_global(topk)
         # Two-part attention (q0, q1) using self.block_table, self._fp8_kernel_metadata
         kv_cache_flat = kv_cache.kv_cache_base.view(
             -1, 1, kv_cache.kv_cache_base.size(-1)
@@ -226,15 +248,14 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
             kv_cache_flat = kv_cache_flat.unsqueeze(-2)
 
         if layer_id == 0:
-            for meta in (self._fp8_kernel_metadata_q0, self._fp8_kernel_metadata_q1):
-                if meta is not None:
-                    metadata = meta.tile_scheduler_metadata
-                    if metadata is not None:
-                        metadata.tile_scheduler_metadata = None
-                        metadata.num_splits = None
+            meta = self._fp8_kernel_metadata_q0
+            if meta is not None:
+                metadata = meta.tile_scheduler_metadata
+                if metadata is not None:
+                    metadata.tile_scheduler_metadata = None
+                    metadata.num_splits = None
 
-        q0 = torch.index_select(q, 0, self.q0_idx).contiguous()
-        q1 = torch.index_select(q, 0, self.q1_idx).contiguous()
+        q0 = torch.index_select(q, 0, self.total_local_ids).contiguous()
 
         def run_part(
             q_part: torch.Tensor,
@@ -259,15 +280,13 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
             )
             return part_out.squeeze(0)
 
-        out0 = run_part(q0, topk0, self._fp8_kernel_metadata_q0)
-        out1 = run_part(q1, topk1, self._fp8_kernel_metadata_q1)
+        out0 = run_part(q0, global_topk, self._fp8_kernel_metadata_q0)
 
         total_q = q.size(0)
-        out = torch.empty(
+        out = torch.zeros(
             total_q, out0.size(1), out0.size(2), dtype=out0.dtype, device=out0.device
         )
-        out[self.q0_idx] = out0
-        out[self.q1_idx] = out1
+        out[self.total_local_ids] = out0
         return out
 
 
@@ -340,7 +359,7 @@ class SparseMlaCpImpl(SparseMlaImpl):
         k_pe: torch.Tensor,
         kv_cache: Optional[KVCache],
         layer_id: int,
-        topk_indices: Tuple[torch.Tensor, torch.Tensor],
+        topk_indices: Optional[torch.Tensor],
     ) -> torch.Tensor:
         """
         Forward pass for sparse MLA attention (prefill or decode).
@@ -370,82 +389,45 @@ class SparseMlaCpImpl(SparseMlaImpl):
 
         # Apply RoPE to q_pe and k_pe
         q_pe = q[:, :, self.nope_head_dim :]
-        # cp = getattr(self, "cp_params", None)
-        # if cp is not None:
-        #     q_total_pos_ids = cp.total_global_ids
-        # else:
-        #     q_total_pos_ids = self.fmha_impl.total_global_ids
-
-        # self.rope_impl.forward(q_pe, k_pe, self.rope_params, q_total_pos_ids)
-        # q_pe0 = q_pe[self.fmha_impl.q0_idx]  # view -> in-place RoPE updates q
-        # q_pe1 = q_pe[self.fmha_impl.q1_idx]
-        # k_pe0 = k_pe[self.fmha_impl.q0_idx]
-        # k_pe1 = k_pe[self.fmha_impl.q1_idx]
-        # pos_ids_q0 = self.rope_params.positions_d[self.fmha_impl.q0_idx_global]
-        # pos_ids_q1 = self.rope_params.positions_d[self.fmha_impl.q1_idx_global]
         import flashinfer.rope as rope
 
-        # k_rope0 = k_pe0.unsqueeze(1)
-        # rope._apply_rope_pos_ids_cos_sin_cache(
-        #     q=q_pe0,
-        #     k=k_rope0,
-        #     q_rope=q_pe0,
-        #     k_rope=k_rope0,
-        #     cos_sin_cache=self.rope_impl.cos_sin_cache,
-        #     pos_ids=pos_ids_q0,
-        #     interleave=not self.rope_impl.is_neox_style,
-        # )
-        # k_pe[self.fmha_impl.q0_idx] = k_rope0.squeeze(1)
-        # q_pe[self.fmha_impl.q0_idx] = q_pe0
-        # k_rope1 = k_pe1.unsqueeze(1)
-        # rope._apply_rope_pos_ids_cos_sin_cache(
-        #     q=q_pe1,
-        #     k=k_rope1,
-        #     q_rope=q_pe1,
-        #     k_rope=k_rope1,
-        #     cos_sin_cache=self.rope_impl.cos_sin_cache,
-        #     pos_ids=pos_ids_q1,
-        #     interleave=not self.rope_impl.is_neox_style,
-        # )
-        # k_pe[self.fmha_impl.q1_idx] = k_rope1.squeeze(1)
-        # q_pe[self.fmha_impl.q1_idx] = q_pe1
-
-        q_pe_local = q_pe[self.fmha_impl.total_local_ids]
-        k_pe_local = k_pe[self.fmha_impl.total_local_ids]
-        k_rope = k_pe_local.unsqueeze(1)
-        pos_ids_q0_global = self.rope_params.positions_d[
-            self.fmha_impl.total_global_ids
-        ]
-        rope._apply_rope_pos_ids_cos_sin_cache(
-            q=q_pe_local,
-            k=k_rope,
-            q_rope=q_pe_local,
-            k_rope=k_rope,
-            cos_sin_cache=self.rope_impl.cos_sin_cache,
-            pos_ids=pos_ids_q0_global,
-            interleave=not self.rope_impl.is_neox_style,
-        )
-        k_rope = k_rope.squeeze(1)
-        k_pe[self.fmha_impl.total_local_ids] = k_rope
-        q_pe[self.fmha_impl.total_local_ids] = q_pe_local
+        if self.fmha_impl.total_local_ids.size(0) > 0:
+            q_pe_local = q_pe[self.fmha_impl.total_local_ids]  # element wise
+            k_pe_local = k_pe[self.fmha_impl.total_local_ids]  # element wise
+            k_rope = k_pe_local.unsqueeze(1)
+            pos_ids_q0_global = self.rope_params.positions_d[
+                self.fmha_impl.total_global_ids
+            ]  # element wise
+            rope._apply_rope_pos_ids_cos_sin_cache(
+                q=q_pe_local,
+                k=k_rope,
+                q_rope=q_pe_local,
+                k_rope=k_rope,
+                cos_sin_cache=self.rope_impl.cos_sin_cache,
+                pos_ids=pos_ids_q0_global,
+                interleave=not self.rope_impl.is_neox_style,
+            )
+            k_rope = k_rope.squeeze(1)
+            k_pe[self.fmha_impl.total_local_ids] = k_rope  # element wise
+            q_pe[self.fmha_impl.total_local_ids] = q_pe_local  # element wise
 
         # Apply input BMM to transform query
         q_transformed = self._apply_input_bmm(q, layer_id)
 
         assert self.fmha_params is not None
-        topk0, topk1 = topk_indices[0], topk_indices[1]
         attn_output = self.fmha_impl.forward(
             q_transformed,
             compressed_kv,
             k_pe,
-            topk0,
-            topk1,
+            topk_indices,
             self.fmha_params.batch_indice_d,
             kv_cache,
             layer_id=layer_id,
         )
 
         # Apply output BMM to get final output
+        if attn_output is None:
+            return None
         output = self._apply_output_bmm(attn_output, layer_id)
 
         return output

@@ -177,45 +177,11 @@ class IndexerOp(nn.Module):
         q_pe = q[:, :, :pe_dim]
         k_pe = k[:, :pe_dim]
 
-        if self.cos_sin_cache is not None:
-            # Split by chunk so only valid tokens (q0_idx, q1_idx) get RoPE; in-place update q's PE part
-            # q_pe0 = q_pe[self.q0_idx]  # view -> in-place RoPE updates q
-            # q_pe1 = q_pe[self.q1_idx]
-            # k_pe0 = k_pe[self.q0_idx]
-            # k_pe1 = k_pe[self.q1_idx]
-            # pos_ids_q0 = positions[self.q0_idx_global]
-            # pos_ids_q1 = positions[self.q1_idx_global]
-
-            # k_rope0 = k_pe0.unsqueeze(1)
-            # rope._apply_rope_pos_ids_cos_sin_cache(
-            #     q=q_pe0,
-            #     k=k_rope0,
-            #     q_rope=q_pe0,
-            #     k_rope=k_rope0,
-            #     cos_sin_cache=self.cos_sin_cache,
-            #     pos_ids=pos_ids_q0,
-            #     interleave=not self.is_neox_style,
-            # )
-            # k_pe[self.q0_idx] = k_rope0.squeeze(1)
-            # q_pe[self.q0_idx] = q_pe0
-
-            # k_rope1 = k_pe1.unsqueeze(1)
-            # rope._apply_rope_pos_ids_cos_sin_cache(
-            #     q=q_pe1,
-            #     k=k_rope1,
-            #     q_rope=q_pe1,
-            #     k_rope=k_rope1,
-            #     cos_sin_cache=self.cos_sin_cache,
-            #     pos_ids=pos_ids_q1,
-            #     interleave=not self.is_neox_style,
-            # )
-            # k_pe[self.q1_idx] = k_rope1.squeeze(1)
-            # q_pe[self.q1_idx] = q_pe1
-
-            q_pe_local = q_pe[self.total_local_ids]
-            k_pe_local = k_pe[self.total_local_ids]
+        if self.cos_sin_cache is not None and self.total_local_ids.size(0) > 0:
+            q_pe_local = q_pe[self.total_local_ids]  # element wise
+            k_pe_local = k_pe[self.total_local_ids]  # element wise
             k_rope = k_pe_local.unsqueeze(1)
-            pos_ids_q0_global = positions[self.total_global_ids]
+            pos_ids_q0_global = positions[self.total_global_ids]  # element wise
             rope._apply_rope_pos_ids_cos_sin_cache(
                 q=q_pe_local,
                 k=k_rope,
@@ -226,8 +192,8 @@ class IndexerOp(nn.Module):
                 interleave=not self.is_neox_style,
             )
             k_rope = k_rope.squeeze(1)
-            k_pe[self.total_local_ids] = k_rope
-            q_pe[self.total_local_ids] = q_pe_local
+            k_pe[self.total_local_ids] = k_rope  # element wise
+            q_pe[self.total_local_ids] = q_pe_local  # element wise
 
         # Apply Hadamard transform (activation rotation)
         query = _rotate_activation(q)
@@ -384,7 +350,7 @@ class IndexerOp(nn.Module):
         # hack_layer_num = 1, cp_rank单独写kv cache：axeajasdock incomarangmates intuitively日出日落 persu
         gathered_key = all_gather(key.contiguous(), group=Group.TP)
         gathered_key = gathered_key.reshape(-1, key.size(-1))
-        restored_key = gathered_key[self.kv_restore_unpad_indices]
+        restored_key = gathered_key[self.kv_restore_unpad_indices]  # element wise
 
         rtp_llm_ops.indexer_k_quant_and_cache(
             restored_key,
@@ -609,10 +575,12 @@ class IndexerOp(nn.Module):
         device = q_fp8.device
         weights_sq = weights.squeeze(-1)
 
-        q0 = torch.index_select(q_fp8, 0, self.q0_idx).contiguous()
-        q1 = torch.index_select(q_fp8, 0, self.q1_idx).contiguous()
-        weights_sq0 = torch.index_select(weights_sq, 0, self.q0_idx).contiguous()
-        weights_sq1 = torch.index_select(weights_sq, 0, self.q1_idx).contiguous()
+        q0 = torch.index_select(
+            q_fp8, 0, self.total_local_ids
+        ).contiguous()  # element wise
+        weights_sq0 = torch.index_select(
+            weights_sq, 0, self.total_local_ids
+        ).contiguous()  # element wise
 
         # Full KV from cache (KV not split).
         k_fp8 = torch.empty(
@@ -642,6 +610,7 @@ class IndexerOp(nn.Module):
             q_idx_global: torch.Tensor,
             weights_part: torch.Tensor,
         ) -> torch.Tensor:
+            assert q_idx_global.size(0) > 0, "q_idx_global must be set"
             logits_p = deep_gemm.fp8_mqa_logits(
                 q_part,
                 kv_fp8_full,
@@ -658,6 +627,8 @@ class IndexerOp(nn.Module):
                 row_starts=fmha_params.ks[q_idx_global],
             )
 
-        topk0 = run_part_logits_topk(q0, self.q0_idx_global, weights_sq0)
-        topk1 = run_part_logits_topk(q1, self.q1_idx_global, weights_sq1)
-        return (topk0, topk1)
+        if self.total_local_ids.size(0) > 0:
+            topk = run_part_logits_topk(q0, self.total_global_ids, weights_sq0)
+        else:
+            topk = None
+        return topk
