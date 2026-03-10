@@ -229,7 +229,7 @@ class DefaultRouterTest {
         fusionServerStatus.setServerIp("192.168.1.3");
         fusionServerStatus.setHttpPort(8082);
         fusionServerStatus.setGroup("group2");
-        fusionServerStatus.setInterRequestId(54321L);
+        fusionServerStatus.setRequestId(54321L);
         when(fusionLoadBalancer.select(any(BalanceContext.class), eq(RoleType.PDFUSION), isNull())).thenReturn(fusionServerStatus);
 
         // Execute
@@ -467,7 +467,7 @@ class DefaultRouterTest {
         fusionServerStatus.setServerIp("192.168.1.3");
         fusionServerStatus.setHttpPort(8082);
         fusionServerStatus.setGroup("group2");
-        fusionServerStatus.setInterRequestId(54321L);
+        fusionServerStatus.setRequestId(54321L);
         when(fusionLoadBalancer.select(any(BalanceContext.class), eq(RoleType.PDFUSION), isNull())).thenReturn(fusionServerStatus);
 
         ServerStatus vitServerStatus = new ServerStatus();
