@@ -356,13 +356,13 @@ class WorkerStatusTest {
         @DisplayName("Task in waiting list only: IN_TRANSIT becomes CONFIRMED and fields updated from waiting task")
         void taskInWaitingOnly_shouldBecomeConfirmedAndSyncFields() {
             TaskInfo localTask = new TaskInfo();
-            localTask.setInterRequestId(REQUEST_ID);
+            localTask.setRequestId(REQUEST_ID);
             localTask.setInputLength(200);
             localTask.setPrefixLength(0);
             workerStatus.putLocalTask(REQUEST_ID, localTask);
 
             TaskInfo waitingTask = new TaskInfo();
-            waitingTask.setInterRequestId(REQUEST_ID);
+            waitingTask.setRequestId(REQUEST_ID);
             waitingTask.setPrefixLength(50);
             waitingTask.setInputLength(200);
             waitingTask.setWaitingTime(100);
@@ -385,7 +385,7 @@ class WorkerStatusTest {
         @DisplayName("Task in waiting list with null running and finished maps should not NPE")
         void taskInWaitingWithNullMaps_shouldNotThrow() {
             TaskInfo localTask = new TaskInfo();
-            localTask.setInterRequestId(REQUEST_ID);
+            localTask.setRequestId(REQUEST_ID);
             workerStatus.putLocalTask(REQUEST_ID, localTask);
 
             Map<String, TaskInfo> waitingTaskInfo = new HashMap<>();
@@ -402,9 +402,9 @@ class WorkerStatusTest {
         @DisplayName("Task CONFIRMED but not in waiting/running/finished should be marked LOST")
         void taskConfirmedButNotInAnyList_shouldBeMarkedLost() {
             TaskInfo localTask = new TaskInfo();
-            localTask.setInterRequestId(REQUEST_ID);
+            localTask.setRequestId(REQUEST_ID);
             localTask.updateTaskState(TaskStateEnum.CONFIRMED);
-            workerStatus.putLocalTask(REQUEST_ID, localTask);
+            workerStatus.getLocalTaskMap().put(REQUEST_ID, localTask);
 
             workerStatus.updateTaskStates(new HashMap<>(), new HashMap<>(), new HashMap<>());
 
@@ -417,13 +417,13 @@ class WorkerStatusTest {
         @DisplayName("Task in finished list should be removed from local map")
         void taskInFinishedList_shouldBeRemoved() {
             TaskInfo localTask = new TaskInfo();
-            localTask.setInterRequestId(REQUEST_ID);
+            localTask.setRequestId(REQUEST_ID);
             localTask.setInputLength(100);
             localTask.setPrefixLength(0);
             workerStatus.putLocalTask(REQUEST_ID, localTask);
 
             TaskInfo finishedTask = new TaskInfo();
-            finishedTask.setInterRequestId(REQUEST_ID);
+            finishedTask.setRequestId(REQUEST_ID);
             finishedTask.setEndTimeMs(System.currentTimeMillis());
             Map<String, TaskInfo> finishedTaskInfo = new HashMap<>();
             finishedTaskInfo.put(String.valueOf(REQUEST_ID), finishedTask);
@@ -437,11 +437,11 @@ class WorkerStatusTest {
         @DisplayName("Task in running list should become RUNNING and sync fields")
         void taskInRunningList_shouldBecomeRunningAndSyncFields() {
             TaskInfo localTask = new TaskInfo();
-            localTask.setInterRequestId(REQUEST_ID);
+            localTask.setRequestId(REQUEST_ID);
             workerStatus.putLocalTask(REQUEST_ID, localTask);
 
             TaskInfo runningTask = new TaskInfo();
-            runningTask.setInterRequestId(REQUEST_ID);
+            runningTask.setRequestId(REQUEST_ID);
             runningTask.setPrefixLength(100);
             runningTask.setInputLength(200);
             runningTask.setPrefillTime(50);
@@ -467,7 +467,7 @@ class WorkerStatusTest {
         @DisplayName("Task in waiting then in running on next call should be RUNNING")
         void taskInWaitingThenInRunning_shouldBeRunning() {
             TaskInfo localTask = new TaskInfo();
-            localTask.setInterRequestId(REQUEST_ID);
+            localTask.setRequestId(REQUEST_ID);
             workerStatus.putLocalTask(REQUEST_ID, localTask);
 
             Map<String, TaskInfo> waitingTaskInfo = new HashMap<>();
@@ -477,7 +477,7 @@ class WorkerStatusTest {
 
             Map<String, TaskInfo> runningTaskInfo = new HashMap<>();
             TaskInfo runningTask = new TaskInfo();
-            runningTask.setInterRequestId(REQUEST_ID);
+            runningTask.setRequestId(REQUEST_ID);
             runningTaskInfo.put(String.valueOf(REQUEST_ID), runningTask);
             workerStatus.updateTaskStates(new HashMap<>(), runningTaskInfo, new HashMap<>());
 
@@ -488,14 +488,14 @@ class WorkerStatusTest {
         @DisplayName("Finished takes precedence over waiting when task in both")
         void taskInFinishedAndWaiting_shouldBeRemovedAsFinished() {
             TaskInfo localTask = new TaskInfo();
-            localTask.setInterRequestId(REQUEST_ID);
+            localTask.setRequestId(REQUEST_ID);
             workerStatus.putLocalTask(REQUEST_ID, localTask);
 
             TaskInfo finishedTask = new TaskInfo();
-            finishedTask.setInterRequestId(REQUEST_ID);
+            finishedTask.setRequestId(REQUEST_ID);
             finishedTask.setEndTimeMs(1);
             TaskInfo waitingTask = new TaskInfo();
-            waitingTask.setInterRequestId(REQUEST_ID);
+            waitingTask.setRequestId(REQUEST_ID);
             Map<String, TaskInfo> finishedTaskInfo = new HashMap<>();
             finishedTaskInfo.put(String.valueOf(REQUEST_ID), finishedTask);
             Map<String, TaskInfo> waitingTaskInfo = new HashMap<>();
