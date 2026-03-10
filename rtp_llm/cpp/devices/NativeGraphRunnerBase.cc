@@ -110,12 +110,54 @@ GptModelInputs NativeGraphRunnerBase<GptModelInputs, GptModelOutputs>::prepareIn
         old.mm_features_locs ? device_->allocateBufferLike(*old.mm_features_locs, AllocationType::HOST) : nullptr;
     input.input_embeddings      = std::nullopt;
     input.input_embeddings_locs = nullptr;
-    input.request_id = old.request_id ? device_->allocateBufferLike(*old.request_id, AllocationType::HOST) : nullptr;
-    input.request_pd_separation = old.request_pd_separation ?
-                                      device_->allocateBufferLike(*old.request_pd_separation, AllocationType::HOST) :
-                                      nullptr;
-    input.cache_keys = old.cache_keys ? device_->allocateBufferLike(*old.cache_keys, AllocationType::HOST) : nullptr;
-    return input;
+    auto request_id = old.request_id ? device_->allocateBufferLike(*old.request_id, AllocationType::HOST) : nullptr;
+    auto request_pd_separation = old.request_pd_separation ?
+                                     device_->allocateBufferLike(*old.request_pd_separation, AllocationType::HOST) :
+                                     nullptr;
+    auto cache_keys = old.cache_keys ? device_->allocateBufferLike(*old.cache_keys, AllocationType::HOST) : nullptr;
+    RTP_LLM_CHECK_WITH_INFO(old.lora_model_input == nullptr, "Native graph with lora_model_input not supported");
+    RTP_LLM_CHECK_WITH_INFO(old.multimodal_features == std::nullopt,
+                            "Native graph with multimodal_features not supported");
+    RTP_LLM_CHECK_WITH_INFO(old.input_embeddings == std::nullopt && old.input_embeddings_locs == nullptr,
+                            "Native graph with input_embeddings not supported");
+    // Native graph 目前不支持 multimodal_features / input_embeddings / extra_input_ids 等高级特性，
+    // 这里只是把已有的 extra_input_ids 结构原样透传，避免构造 GptModelInputs 失败。
+    return {combo_tokens,
+            input_lengths,
+            sequence_lengths,
+            lm_output_indexes,
+            lm_output_lengths,
+            prefix_lengths,
+            combo_tokens_type_ids,
+            combo_position_ids,
+            last_hidden_states,
+            lora_ids,
+            lora_input_lengths,
+            nullptr,  // lora_model_input
+            attention_mask,
+            kv_cache_block_id,
+            nullptr,  // kv_cache_update_mapping
+            {},       // multimodal_features
+            text_tokens_mask,
+            mm_features_locs,
+            // extra_input_ids
+            {old.extra_input_ids.combo_extra_input_ids,
+             old.extra_input_ids.extra_input_ids_lengths,
+             old.extra_input_ids.extra_input_ids_locs},
+            std::nullopt,  // input_embeddings
+            nullptr,       // input_embeddings_locs
+            request_id,
+            request_pd_separation,
+            cache_keys,
+            old.kv_block_stride_bytes,
+            old.kv_scale_stride_bytes,
+            old.seq_size_per_block,
+            old.pd_separation,
+            old.decode_entrance,
+            old.need_all_logits,
+            old.need_moe_gating,
+            old.warmup,
+            old.skip_run};
 }
 
 template<>

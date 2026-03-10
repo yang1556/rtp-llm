@@ -190,6 +190,48 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
     int                             cum_output_seq_len = batch_idx;
     int                             mm_feature_index   = 0;
 
+    // Collect extra_input_ids (only from context streams)
+    size_t              total_extra_input_ids_size = 0;
+    std::vector<size_t> extra_input_ids_lengths_vec;
+    std::vector<int>    extra_input_ids_locs_vec;
+    extra_input_ids_lengths_vec.reserve(total_context_batch_size);
+    extra_input_ids_locs_vec.reserve(total_context_batch_size);
+
+    int decoder_token_offset = 0;  // Accumulated offset for decoder input_ids
+
+    for (const auto& stream : context_streams) {
+        auto current_batch_size = stream->currentBatchSize();
+        for (auto i = 0; i < current_batch_size; ++i) {
+            auto generate_input = stream->generateInput();
+            if (generate_input && generate_input->extra_input_ids.has_value()) {
+                size_t len = generate_input->extra_input_ids.value()->size();
+                total_extra_input_ids_size += len;
+                extra_input_ids_lengths_vec.push_back(len);
+
+                // Get location from GenerateInput (relative to single sequence)
+                int extra_input_ids_loc = generate_input->extra_input_ids_loc;
+                if (extra_input_ids_loc >= 0) {
+                    // Convert to global index by adding decoder_token_offset
+                    extra_input_ids_locs_vec.push_back(decoder_token_offset + extra_input_ids_loc);
+                } else {
+                    extra_input_ids_locs_vec.push_back(-1);
+                }
+            } else {
+                extra_input_ids_lengths_vec.push_back(0);
+                extra_input_ids_locs_vec.push_back(-1);
+            }
+            // Update decoder_token_offset (using processed input_ids length)
+            decoder_token_offset += generate_input->inputLength();
+        }
+    }
+
+    // Allocate buffers for extra_input_ids
+    if (total_extra_input_ids_size > 0) {
+        model_input.extra_input_ids.combo_extra_input_ids   = CACHED_HOST_BUF(TYPE_INT32, {total_extra_input_ids_size});
+        model_input.extra_input_ids.extra_input_ids_lengths = CACHED_HOST_BUF(TYPE_INT32, {total_context_batch_size});
+        model_input.extra_input_ids.extra_input_ids_locs    = CACHED_HOST_BUF(TYPE_INT32, {total_context_batch_size});
+    }
+
     for (const auto& stream : context_streams) {
         // context stream也需要batch运行是为了perf test的场景
         model_input.need_all_logits = model_input.need_all_logits || stream->calculateLoss();
@@ -303,6 +345,47 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
     if (is_multimodal_ && gathered_mm_features.size() > 0) {
         model_input.multimodal_features = std::move(gathered_mm_features);
     }
+
+    // Fill extra_input_ids data
+    if (total_extra_input_ids_size > 0) {
+        int* combo_extra_input_ids_ptr   = (int*)model_input.extra_input_ids.combo_extra_input_ids->data();
+        int* extra_input_ids_lengths_ptr = (int*)model_input.extra_input_ids.extra_input_ids_lengths->data();
+        int* extra_input_ids_locs_ptr    = (int*)model_input.extra_input_ids.extra_input_ids_locs->data();
+
+        int context_batch_idx      = 0;
+        int extra_input_ids_offset = 0;
+        decoder_token_offset       = 0;
+
+        for (const auto& stream : context_streams) {
+            auto current_batch_size = stream->currentBatchSize();
+            for (auto i = 0; i < current_batch_size; ++i) {
+                auto generate_input = stream->generateInput();
+                if (generate_input && generate_input->extra_input_ids.has_value()) {
+                    auto   buffer = generate_input->extra_input_ids.value();
+                    size_t len    = buffer->size();
+                    memcpy(combo_extra_input_ids_ptr + extra_input_ids_offset, buffer->data(), len * sizeof(int32_t));
+                    extra_input_ids_lengths_ptr[context_batch_idx] = len;
+
+                    // Get location from GenerateInput and convert to global index
+                    int extra_input_ids_loc = generate_input->extra_input_ids_loc;
+                    if (extra_input_ids_loc >= 0) {
+                        extra_input_ids_locs_ptr[context_batch_idx] = decoder_token_offset + extra_input_ids_loc;
+                    } else {
+                        extra_input_ids_locs_ptr[context_batch_idx] = -1;
+                    }
+
+                    extra_input_ids_offset += len;
+                } else {
+                    extra_input_ids_lengths_ptr[context_batch_idx] = 0;
+                    extra_input_ids_locs_ptr[context_batch_idx]    = -1;
+                }
+                // Update decoder_token_offset
+                decoder_token_offset += generate_input->inputLength();
+                context_batch_idx++;
+            }
+        }
+    }
+
     return model_input;
 }
 

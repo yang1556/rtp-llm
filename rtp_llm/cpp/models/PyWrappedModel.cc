@@ -290,7 +290,30 @@ GptModelOutputs PyWrappedModel::forwardMicroBatched(const GptModelInputs& inputs
         torch::Tensor token_ids = Buffer2torchTensor(micro_inputs.combo_tokens).cuda();
         torch::Tensor input_hiddens =
             inputs.last_hidden_states ? Buffer2torchTensor(inputs.last_hidden_states, false) : torch::empty({0});
-        input_list.emplace_back(PyModelInputs{token_ids, input_hiddens, py_attn_inputs, bert_embedding_inputs});
+
+        // Convert extra_input_ids for micro batch
+        PyExtraInputIds extra_input_ids;
+        if (inputs.extra_input_ids.combo_extra_input_ids != nullptr
+            && inputs.extra_input_ids.extra_input_ids_lengths != nullptr) {
+            extra_input_ids.combo_extra_input_ids =
+                tensorHoldHostAndToCuda(Buffer2torchTensor(inputs.extra_input_ids.combo_extra_input_ids, false));
+            extra_input_ids.extra_input_ids_lengths =
+                tensorHoldHostAndToCuda(Buffer2torchTensor(inputs.extra_input_ids.extra_input_ids_lengths, false));
+            if (inputs.extra_input_ids.extra_input_ids_locs != nullptr) {
+                extra_input_ids.extra_input_ids_locs =
+                    tensorHoldHostAndToCuda(Buffer2torchTensor(inputs.extra_input_ids.extra_input_ids_locs, false));
+            } else {
+                extra_input_ids.extra_input_ids_locs = torch::empty({0}, torch::kInt32);
+            }
+        } else {
+            extra_input_ids.combo_extra_input_ids   = torch::empty({0}, torch::kInt32);
+            extra_input_ids.extra_input_ids_lengths = torch::empty({0}, torch::kInt32);
+            extra_input_ids.extra_input_ids_locs    = torch::empty({0}, torch::kInt32);
+        }
+
+        PyModelInputs py_model_input   = PyModelInputs{token_ids, input_hiddens, py_attn_inputs, bert_embedding_inputs};
+        py_model_input.extra_input_ids = extra_input_ids;
+        input_list.emplace_back(py_model_input);
     }
 
     py::object py_outputs_obj   = py_forward_method(input_list);
@@ -388,6 +411,30 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         attention_inputs.padding_offset = tensorHoldHostAndToCuda(attention_inputs.padding_offset);
 
         auto py_model_inputs = PyModelInputs({token_ids, input_hiddens, attention_inputs, bert_embedding_inputs});
+
+        // Convert extra_input_ids
+        if (inputs.extra_input_ids.combo_extra_input_ids != nullptr
+            && inputs.extra_input_ids.extra_input_ids_lengths != nullptr) {
+            // Convert Buffer to torch::Tensor
+            py_model_inputs.extra_input_ids.combo_extra_input_ids =
+                tensorHoldHostAndToCuda(Buffer2torchTensor(inputs.extra_input_ids.combo_extra_input_ids, false));
+            py_model_inputs.extra_input_ids.extra_input_ids_lengths =
+                tensorHoldHostAndToCuda(Buffer2torchTensor(inputs.extra_input_ids.extra_input_ids_lengths, false));
+
+            // Convert location information
+            if (inputs.extra_input_ids.extra_input_ids_locs != nullptr) {
+                py_model_inputs.extra_input_ids.extra_input_ids_locs =
+                    tensorHoldHostAndToCuda(Buffer2torchTensor(inputs.extra_input_ids.extra_input_ids_locs, false));
+            } else {
+                py_model_inputs.extra_input_ids.extra_input_ids_locs = torch::empty({0}, torch::kInt32);
+            }
+        } else {
+            // If no extra_input_ids, set to empty tensors
+            py_model_inputs.extra_input_ids.combo_extra_input_ids   = torch::empty({0}, torch::kInt32);
+            py_model_inputs.extra_input_ids.extra_input_ids_lengths = torch::empty({0}, torch::kInt32);
+            py_model_inputs.extra_input_ids.extra_input_ids_locs    = torch::empty({0}, torch::kInt32);
+        }
+
         PyModelOutputs py_model_outputs;
         BufferPtr      hidden_states;
 
