@@ -84,17 +84,17 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      * Release local cached tasks on the specified worker
      *
      * @param ipPort Worker IP address
-     * @param interRequestId Internal request ID
+     * @param requestId Request ID
      */
     @Override
-    public void rollBack(String ipPort, long interRequestId) {
+    public void rollBack(String ipPort, long requestId) {
 
         Map<String, WorkerStatus> workerStatusMap = engineWorkerStatus.selectModelWorkerStatus(RoleType.PREFILL, null);
-        Logger.debug("Prefill rollBack - ipPort: {}, interRequestId: {}", ipPort, interRequestId);
+        Logger.debug("Prefill rollBack - ipPort: {}, requestId: {}", ipPort, requestId);
 
         WorkerStatus workerStatus = workerStatusMap.get(ipPort);
         if (workerStatus != null) {
-            workerStatus.removeLocalTask(interRequestId);
+            workerStatus.removeLocalTask(requestId);
         }
     }
 
@@ -107,7 +107,7 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      * @return Selected server status
      */
     private ServerStatus doSelect(BalanceContext balanceContext, RoleType roleType, String group) {
-        long interRequestId = balanceContext.getRequestId();
+        long requestId = balanceContext.getRequestId();
         long seqLen = balanceContext.getRequest().getSeqLen();
 
         Logger.debug("Starting shortest TTFT selection for role: {}", roleType);
@@ -131,7 +131,7 @@ public class ShortestTTFTStrategy implements LoadBalancer {
             return ServerStatus.code(StrategyErrorType.NO_AVAILABLE_WORKER);
         }
 
-        return finalizeWorkerSelection(bestWorker, balanceContext, roleType, interRequestId, seqLen);
+        return finalizeWorkerSelection(bestWorker, balanceContext, roleType, requestId, seqLen);
     }
 
     /**
@@ -207,24 +207,24 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      * @param selectedWorker Selected worker
      * @param balanceContext Load balancing context
      * @param roleType Worker role type
-     * @param interRequestId Internal request ID
+     * @param requestId Request ID
      * @param seqLen Sequence length
      * @return Server status
      */
     private ServerStatus finalizeWorkerSelection(ScoredWorker selectedWorker,
                                                  BalanceContext balanceContext,
                                                  RoleType roleType,
-                                                 long interRequestId,
+                                                 long requestId,
                                                  long seqLen) {
         WorkerStatus workerStatus = selectedWorker.worker();
 
         logWorkerSelection(selectedWorker, roleType);
         reportCacheHitMetrics(roleType, workerStatus.getIp(), selectedWorker.hitCacheTokens(), seqLen);
 
-        TaskInfo task = createTaskInfo(interRequestId, balanceContext.getRequest().getSeqLen(), selectedWorker.hitCacheTokens());
-        workerStatus.putLocalTask(interRequestId, task);
+        TaskInfo task = createTaskInfo(requestId, balanceContext.getRequest().getSeqLen(), selectedWorker.hitCacheTokens());
+        workerStatus.putLocalTask(requestId, task);
 
-        return buildServerStatus(selectedWorker, roleType, interRequestId);
+        return buildServerStatus(selectedWorker, roleType, requestId);
     }
 
     /**
@@ -259,14 +259,14 @@ public class ShortestTTFTStrategy implements LoadBalancer {
     /**
      * Create task information
      *
-     * @param interRequestId Internal request ID
+     * @param requestId Request ID
      * @param inputLength Input length
      * @param prefixLength Prefix length
      * @return Task information
      */
-    private TaskInfo createTaskInfo(long interRequestId, long inputLength, long prefixLength) {
+    private TaskInfo createTaskInfo(long requestId, long inputLength, long prefixLength) {
         TaskInfo task = new TaskInfo();
-        task.setInterRequestId(interRequestId);
+        task.setRequestId(requestId);
         task.setInputLength(inputLength);
         task.setPrefixLength(prefixLength);
         return task;
@@ -389,23 +389,23 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      *
      * @param selectedWorker Selected worker
      * @param roleType Worker role type
-     * @param interRequestId Internal request ID
+     * @param requestId Request ID
      * @return Server status
      */
-    private ServerStatus buildServerStatus(ScoredWorker selectedWorker, RoleType roleType, long interRequestId) {
+    private ServerStatus buildServerStatus(ScoredWorker selectedWorker, RoleType roleType, long requestId) {
         WorkerStatus workerStatus = selectedWorker.worker();
         ServerStatus result = new ServerStatus();
         try {
             result.setSuccess(true);
             result.setRole(roleType);
-            result.setInterRequestId(interRequestId);
+            result.setRequestId(requestId);
             result.setPrefillTime(selectedWorker.ttft());
             result.setGroup(workerStatus.getGroup());
             result.setServerIp(workerStatus.getIp());
             result.setHttpPort(workerStatus.getPort());
             result.setGrpcPort(CommonUtils.toGrpcPort(workerStatus.getPort()));
         } catch (Exception e) {
-            Logger.error("Failed to build server status for requestId: {}", interRequestId, e);
+            Logger.error("Failed to build server status for requestId: {}", requestId, e);
             result.setCode(StrategyErrorType.NO_AVAILABLE_WORKER.getErrorCode());
             result.setMessage(StrategyErrorType.NO_AVAILABLE_WORKER.getErrorMsg());
             result.setSuccess(false);
