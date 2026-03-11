@@ -146,6 +146,14 @@ absl::Status StreamCacheResource::initKVBlock(size_t reserve_step) {
         return absl::InternalError("malloc failed");
     }
 
+    if (malloc_info.enable_device_cache) {
+        int64_t gpu_input_length = 0;
+        if (malloc_info.batch_kv_cache_resource) {
+            gpu_input_length = malloc_info.complete_token_ids->seqLength();
+        }
+        stream_->setDeviceCacheReuseLength(gpu_input_length, result.reuse_len, result.match_cost_time_us);
+    }
+
     if (result.reuse_len > 0) {
         stream_->setReuseLength(result.reuse_len);
         stream_->setMtpTokenIndex(result.reuse_len);

@@ -367,6 +367,14 @@ void GenerateStream::setInitialReuseLength(int initial_reuse_length) {
     initial_reuse_length_ = initial_reuse_length;
 }
 
+void GenerateStream::setDeviceCacheReuseLength(int64_t device_input_length,
+                                               int64_t device_reuse_length,
+                                               int64_t match_cost_time_us) {
+    device_input_length_       = device_input_length;
+    device_reuse_length_       = device_reuse_length;
+    device_match_cost_time_us_ = match_cost_time_us;
+}
+
 void GenerateStream::incLastOutputPos() {
     last_output_pos_++;
 }
@@ -963,6 +971,14 @@ void GenerateStream::reportCacheReuseMetrics() const {
         RtpLLMCacheReuseMetricsCollector collector;
         collector.kv_cache_reuse_length = reuseLength();
         collector.kv_cache_hit_rate     = inputLength() > 0 ? (reuseLength() * 100.0 / inputLength()) : 0.0;
+        if (enableDeviceCache() && device_input_length_ > 0) {
+            collector.match_cost_time_us = device_match_cost_time_us_;
+            collector.gpu_input_length   = device_input_length_;
+            collector.gpu_reuse_length   = device_reuse_length_;
+            collector.gpu_cache_hit_rate =
+                device_input_length_ > 0 ? (static_cast<double>(device_reuse_length_) * 100.0 / device_input_length_) :
+                                           0.0;
+        }
         kmonitor::MetricsTags tags;
         metrics_reporter_->report<RtpLLMCacheReuseMetrics, RtpLLMCacheReuseMetricsCollector>(&tags, &collector);
     }

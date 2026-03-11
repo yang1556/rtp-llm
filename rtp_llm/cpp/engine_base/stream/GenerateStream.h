@@ -194,6 +194,7 @@ public:
     void   setMemoryReuseLength(int length);
     int    memoryReuseLength() const;
     void   setInitialReuseLength(int initial_reuse_length);
+    void   setDeviceCacheReuseLength(int64_t gpu_input_length, int64_t gpu_reuse_length, int64_t match_cost_time_us);
     void   incLastOutputPos();
 
     bool                      isContextStream() const;
@@ -511,15 +512,19 @@ protected:
     int64_t                              wait_time_us_  = 0;
     std::shared_ptr<StreamCacheResource> stream_cache_resource_;
     std::shared_ptr<bool>                is_context_stream_;
-    size_t                               iter_count_           = 0;
-    size_t                               sp_iter_count_        = 0;
-    size_t                               last_output_pos_      = 0;
-    int                                  initial_reuse_length_ = 0;
-    int                                  reuse_length_         = 0;
-    int                                  local_reuse_length_   = 0;
-    int                                  remote_reuse_length_  = 0;
-    int                                  memory_reuse_length_  = 0;
-    int                                  reuse_mm_length_      = 0;
+    size_t                               iter_count_                = 0;
+    size_t                               sp_iter_count_             = 0;
+    size_t                               last_output_pos_           = 0;
+    int                                  initial_reuse_length_      = 0;
+    int                                  reuse_length_              = 0;
+    int                                  local_reuse_length_        = 0;
+    int                                  remote_reuse_length_       = 0;
+    int                                  memory_reuse_length_       = 0;
+    int64_t                              device_input_length_       = 0;
+    int64_t                              device_reuse_length_       = 0;
+    int64_t                              device_match_cost_time_us_ = 0;
+    int                                  reuse_mm_length_           = 0;
+
     // TOOD(xinfei.sxf) fix state
     bool done_                  = false;
     bool released_              = false;
