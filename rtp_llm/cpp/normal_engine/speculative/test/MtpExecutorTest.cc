@@ -10,7 +10,7 @@
 #include "rtp_llm/cpp/normal_engine/NormalGenerateStream.h"
 #include "rtp_llm/cpp/normal_engine/speculative/MtpExecutor.h"
 #include "rtp_llm/cpp/models/SampleInfos.h"
-#include "rtp_llm/cpp/models/GptModel.h"
+#include "rtp_llm/cpp/models/GptModelTypes.h"
 #include "rtp_llm/cpp/core/Types.h"
 #include "rtp_llm/cpp/core/BufferHelper.h"
 #include "rtp_llm/cpp/devices/testing/TestBase.h"
@@ -122,13 +122,17 @@ vector<T> catVectors(const vector<vector<T>>& vectors) {
     return result;
 }
 
-class FakeModel: public GptModel {
+class FakeModel: public IGptModel {
 public:
-    FakeModel(const GptModelInitParams& params, DeviceBase* device): GptModel(params), device(device) {}
+    FakeModel(const GptModelInitParams& params, DeviceBase* device): weights_(params.weights), device(device) {}
 
     GptModelOutputs forward(const GptModelInputs& inputs) override {
         checkInputs(inputs);
         return output_holder.get();
+    }
+
+    Weights& getWeights() override {
+        return weights_;
     }
 
     void checkInputs(const GptModelInputs& inputs) {
@@ -156,6 +160,7 @@ public:
     }
 
 private:
+    Weights                         weights_;
     TestDataHolder<GptModelInputs>  input_holder;
     TestDataHolder<GptModelOutputs> output_holder;
     DeviceBase*                     device;

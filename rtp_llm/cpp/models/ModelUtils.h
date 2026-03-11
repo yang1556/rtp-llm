@@ -33,4 +33,7 @@ planMicroBatches(const GptModelInputs& inputs, size_t layer_num, const rtp_llm::
 std::pair<std::vector<GptModelInputs>, std::vector<TokenSliceInfo>> splitInputsIntoMicroBatches(
     const GptModelInputs& inputs, const MicroBatchPlan& micro_batch_plan, rtp_llm::DeviceBase* device);
 
+/** Synchronize model inputs across TP ranks via broadcast. */
+void tpSyncModelInputs(GptModelInputs& inputs, rtp_llm::DeviceBase* device);
+
 }  // namespace rtp_llm

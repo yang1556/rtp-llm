@@ -4,7 +4,7 @@
 #include "autil/TimeUtility.h"
 #include "autil/SynchronizedQueue.h"
 #include "kmonitor/client/MetricsReporter.h"
-#include "rtp_llm/cpp/models/GptModel.h"
+#include "rtp_llm/cpp/models/GptModelTypes.h"
 #include "rtp_llm/cpp/models/Sampler.h"
 #include "rtp_llm/cpp/models/logits_processor/BaseLogitsProcessor.h"
 #include "rtp_llm/cpp/engine_base/stream/StreamCacheResource.h"

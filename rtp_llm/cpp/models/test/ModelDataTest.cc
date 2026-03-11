@@ -2,7 +2,6 @@
 #include "gtest/gtest.h"
 
 #include "rtp_llm/cpp/devices/testing/TestBase.h"
-#include "rtp_llm/cpp/models/GptModel.h"
 #include "rtp_llm/cpp/models/Sampler.h"
 #include "rtp_llm/cpp/core/BufferHelper.h"
 

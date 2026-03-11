@@ -1,4 +1,3 @@
-#include "rtp_llm/cpp/models/MTPModel.h"
 #include "rtp_llm/cpp/normal_engine/speculative/MtpExecutor.h"
 #include "rtp_llm/cpp/engine_base/stream/GenerateStream.h"
 #include "rtp_llm/cpp/engine_base/EngineBase.h"
@@ -14,7 +13,7 @@
 #include "rtp_llm/cpp/utils/StringUtil.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
 #include "rtp_llm/cpp/models/PyWrappedModel.h"
-#include "rtp_llm/cpp/models/NativeDeviceGraphModel.h"
+#include "rtp_llm/cpp/models/ModelUtils.h"
 #include "rtp_llm/cpp/models/logits_processor/LogitsProcessorFactory.h"
 #include "autil/TimeUtility.h"
 #include <memory>
@@ -173,16 +172,10 @@ MtpExecutor::MtpExecutor(const EngineInitParams&                        params,
         enable_ffn_disaggregate_ = true;
     }
 
-    if (!params.py_model.is_none()) {
-        RTP_LLM_LOG_INFO("init executor with python model");
-        model_.reset(new PyWrappedModel(model_init_params, params.py_model));
-    } else if (device_->initParams().hw_kernel_config.enable_native_cuda_graph) {
-        RTP_LLM_LOG_INFO("init legacy c++ gpt model with native cuda graph");
-        model_.reset(new NativeDeviceGraphModel(model_init_params));
-    } else {
-        RTP_LLM_LOG_INFO("init legacy c++ gpt model");
-        model_.reset(new GptModel(model_init_params));
-    }
+    RTP_LLM_CHECK_WITH_INFO(!params.py_model.is_none(),
+                            "Python model is required. Legacy C++ GptModel has been removed.");
+    RTP_LLM_LOG_INFO("init executor with python model");
+    model_.reset(new PyWrappedModel(model_init_params, params.py_model));
 
     // when warmup, cache manager maybe nullptr
     const auto& cache_config = cache_manager ? cache_manager->cacheConfig() : CacheConfig();
@@ -206,13 +199,10 @@ MtpExecutor::MtpExecutor(const EngineInitParams&                        params,
                                            mtp_params->moe_config),
              cache_manager ? std::make_optional(cache_manager->getMTPModuleCacheLayerLayout(index)) : std::nullopt,
              mtp_params->model_id});
-        if (!params.py_sp_model.is_none()) {
-            RTP_LLM_LOG_INFO("[speculative decoding] using py model");
-            draft_model_.reset(new PyWrappedModel(model_params, params.py_sp_model));
-        } else {
-            RTP_LLM_LOG_INFO("[speculative decoding] legacy c++ gpt model");
-            draft_model_.reset(new MTPModel(model_params));
-        }
+        RTP_LLM_CHECK_WITH_INFO(!params.py_sp_model.is_none(),
+                                "[speculative decoding] Python model is required. Legacy MTPModel has been removed.");
+        RTP_LLM_LOG_INFO("[speculative decoding] using py model");
+        draft_model_.reset(new PyWrappedModel(model_params, params.py_sp_model));
         break;  // NOTE: only support one mtp model now
     }
 

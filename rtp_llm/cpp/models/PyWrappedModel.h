@@ -17,6 +17,7 @@
 #endif
 
 #include "rtp_llm/cpp/models/context_parallel/ContextParallelProcessorBase.h"
+#include "rtp_llm/cpp/models/eplb/stats/ExpertStats.h"
 
 namespace py = pybind11;
 
@@ -30,6 +31,12 @@ public:
 
     GptModelOutputs forward(const GptModelInputs& inputs) override;
     void            releaseBuffers() override;
+    Weights&        getWeights() override {
+        return weights_;
+    }
+    OverallExpertStats* getOverallExpertStats() override {
+        return &overall_expert_stats_;
+    }
 
     GptModelOutputs forwardMicroBatched(const GptModelInputs& inputs);
 
@@ -80,6 +87,7 @@ private:
     bool                                       enable_cuda_graph_{false};
     bool                                       is_prefill_cuda_graph_mode_{false};
     std::unique_ptr<IContextParallelProcessor> context_parallel_processor_{nullptr};
+    OverallExpertStats                         overall_expert_stats_;
 };
 
 }  // namespace rtp_llm

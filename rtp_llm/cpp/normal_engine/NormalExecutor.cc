@@ -2,9 +2,8 @@
 #include <cstdlib>
 #include <memory>
 #include "rtp_llm/cpp/utils/StatusUtil.h"
-#include "rtp_llm/cpp/models/GptModel.h"
 #include "rtp_llm/cpp/models/PyWrappedModel.h"
-#include "rtp_llm/cpp/models/NativeDeviceGraphModel.h"
+#include "rtp_llm/cpp/models/ModelUtils.h"
 #include "rtp_llm/cpp/models/Sampler.h"
 #include "rtp_llm/cpp/config/ModelConfig.h"
 #include "rtp_llm/cpp/models/logits_processor/LogitsProcessorFactory.h"
@@ -73,16 +72,10 @@ NormalExecutor::NormalExecutor(const EngineInitParams&                   params,
         RTP_LLM_LOG_INFO("using ffn as service");
         enable_ffn_disaggregate_ = true;
     }
-    if (!params.py_model.is_none()) {
-        RTP_LLM_LOG_INFO("init executor with python model");
-        model_.reset(new PyWrappedModel(model_init_params, params.py_model));
-    } else if (device_->initParams().hw_kernel_config.enable_native_cuda_graph) {
-        RTP_LLM_LOG_INFO("init legacy c++ gpt model with native cuda graph");
-        model_.reset(new NativeDeviceGraphModel(model_init_params));
-    } else {
-        RTP_LLM_LOG_INFO("init legacy c++ gpt model");
-        model_.reset(new GptModel(model_init_params));
-    }
+    RTP_LLM_CHECK_WITH_INFO(!params.py_model.is_none(),
+                            "Python model is required. Legacy C++ GptModel has been removed.");
+    RTP_LLM_LOG_INFO("init executor with python model");
+    model_.reset(new PyWrappedModel(model_init_params, params.py_model));
 
     // when warmup, cache manager maybe nullptr
     const auto& cache_config = cache_manager ?

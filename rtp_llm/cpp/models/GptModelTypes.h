@@ -13,6 +13,8 @@
 
 namespace rtp_llm {
 
+struct OverallExpertStats;
+
 struct GptModelDescription {
     rtp_llm::AttentionConfigs attention_conf;
     rtp_llm::FfnConfigs       ffn_conf;
@@ -51,6 +53,35 @@ struct TokenSliceInfo {
     size_t count  = 0;
 };
 
+enum GptModelInputIndex : size_t {
+    comboTokens,
+    inputLengths,
+    sequenceLengths,
+    prefixLengths,
+    maxBlocksPerBatch,
+    kvCacheGroupNum,
+    kvCacheLayerToGroupLen,
+    kvCacheGroupTypesLen,
+    kvCacheUpdateCopyNum,
+    lmOutputIndexes,
+    lmOutputLengthes,
+    comboPositionIds,
+    loraIds,
+    loraInputLengths,
+    textTokensMask,
+    mmFeaturesLocs,
+    mmFeaturesNum,
+    mmFeaturesSize,
+    mmFeaturesDtype,
+    needAllLogits,
+    mtpHiddenStates,
+    mtpHiddenStatesDtype,
+    skipRun,
+    gptModelRequestLength,
+    isFakeStream,
+    gptModelInputLength,
+};
+
 struct ModelBufferHolder {
     std::vector<BufferPtr>     buffers;
     std::vector<torch::Tensor> tensors;
@@ -85,12 +116,16 @@ struct ModelBufferHolder {
     }
 };
 
-/** Abstract model interface. PyWrappedModel and GptModel both implement this. */
+/** Abstract model interface. PyWrappedModel implements this. */
 class IGptModel {
 public:
-    virtual ~IGptModel()                                          = default;
-    virtual GptModelOutputs forward(const GptModelInputs& inputs) = 0;
-    virtual void            releaseBuffers() {}
+    virtual ~IGptModel()                                              = default;
+    virtual GptModelOutputs     forward(const GptModelInputs& inputs) = 0;
+    virtual void                releaseBuffers() {}
+    virtual Weights&            getWeights() = 0;
+    virtual OverallExpertStats* getOverallExpertStats() {
+        return nullptr;
+    }
 };
 
 }  // namespace rtp_llm

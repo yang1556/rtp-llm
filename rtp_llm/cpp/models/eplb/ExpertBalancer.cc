@@ -1,6 +1,6 @@
 #include "rtp_llm/cpp/models/eplb/ExpertBalancer.h"
 #include <thread>
-#include "rtp_llm/cpp/models/GptModel.h"
+#include "rtp_llm/cpp/models/GptModelTypes.h"
 #include "rtp_llm/cpp/devices/utils/DebugUtils.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
 #include "rtp_llm/cpp/config/ConfigModules.h"
@@ -204,18 +204,18 @@ void ExpertBalancer::stepForward(IGptModel& model, RtpLLMExecutorMetricsCollecto
         return;
     }
 
-    GptModel* gpt_model = dynamic_cast<GptModel*>(&model);
-    if (!gpt_model) {
+    OverallExpertStats* stats_ptr = model.getOverallExpertStats();
+    if (!stats_ptr) {
         return;
     }
 
-    OverallExpertStats& stats = gpt_model->overall_expert_stats_;
+    OverallExpertStats& stats = *stats_ptr;
 
     // report stats
     reportStats(stats);
 
     // eplb plan
-    excuteEplbPlan(stats, *gpt_model);
+    excuteEplbPlan(stats, model);
 }
 
 bool ExpertBalancer::updateEplbConfig(const EPLBConfig& config) {
@@ -264,7 +264,7 @@ EplbPlanStatus ExpertBalancer::getPlanStatus() const {
     return status;
 }
 
-void ExpertBalancer::excuteEplbPlan(OverallExpertStats& stats, GptModel& model) {
+void ExpertBalancer::excuteEplbPlan(OverallExpertStats& stats, IGptModel& model) {
     if (eplb_control_data_.checkEplbMode(eplb_control_data_.eplb_mode, EplbMode::EPLB, EplbMode::ALL)) {
         EplbPlanStatus status = getPlanStatus();
         switch (status) {
@@ -394,9 +394,9 @@ void ExpertBalancer::loadPlanWeights() {
     executor_collector_.update_weights_latency_ms = autil::TimeUtility::currentTimeInMilliSeconds() - start_time_ms;
 }
 
-void ExpertBalancer::applyPlanWeights(GptModel& model) {
+void ExpertBalancer::applyPlanWeights(IGptModel& model) {
     auto& result          = eplb_plan_buffers_;
-    auto& balanced_layer  = model.weights_.layers[result.layer_id].ffn_weights;
+    auto& balanced_layer  = model.getWeights().layers[result.layer_id].ffn_weights;
     auto  exchange_weight = [&](ConstBufferPtr& old_weight, BufferPtr& new_weight) {
         new_weight = const_pointer_cast<Buffer>(exchange(old_weight, new_weight));
     };

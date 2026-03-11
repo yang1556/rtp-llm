@@ -10,9 +10,6 @@
 
 namespace rtp_llm {
 
-// Forward declarations
-class GptModel;
-
 struct EplbPlanBuffers {
     int       layer_id = -1;
     BufferPtr layer_id_buf;      // [1]
@@ -109,7 +106,7 @@ public:
 private:
     void syncController();
     void reportStats(OverallExpertStats& stats);
-    void excuteEplbPlan(OverallExpertStats& stats, GptModel& model);
+    void excuteEplbPlan(OverallExpertStats& stats, IGptModel& model);
 
     void           setPlanStatus(EplbPlanStatus status);
     EplbPlanStatus getPlanStatus() const;
@@ -120,7 +117,7 @@ private:
     void loadPlanWeights();
     bool syncPlanWeightsLoadStatus();
     void processPlanWeights();
-    void applyPlanWeights(GptModel& model);
+    void applyPlanWeights(IGptModel& model);
 
     // helpful functions
     void copyFromTensor(torch::Tensor& tensor, BufferPtr& buffer);
