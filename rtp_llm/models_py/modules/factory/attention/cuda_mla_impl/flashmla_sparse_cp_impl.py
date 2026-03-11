@@ -142,6 +142,16 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
         )
         self.total_local_ids = torch.cat([self.q0_idx, self.q1_idx], dim=0)
 
+        # attention_inputs.cu_kv_seqlens is based on local CP chunk lengths
+        # (input_lengths is overwritten by ContextParallelProcessor), but the
+        # gather kernel needs cumulative lengths covering the full (global) sequence.
+        actual_input_lengths = cp_info.prefill_actual_input_lengths_cpu
+        prefix_lengths = self.attn_inputs.prefix_lengths
+        kv_lengths = actual_input_lengths.int() + prefix_lengths.int()
+        cu_kv_seqlens_cpu = torch.zeros(kv_lengths.shape[0] + 1, dtype=torch.int32)
+        cu_kv_seqlens_cpu[1:] = torch.cumsum(kv_lengths, dim=0)
+        self.cu_kv_seqlens_global = cu_kv_seqlens_cpu.to(self.device)
+
         # get_mla_metadata: num_q_tokens_per_head_k = num_q_tokens * num_heads_q // num_heads_k (for tile scheduling).
         # For q0 and q1 we need separate metadata since each part has different q token count (use filtered counts).
         n_q = self.total_global_ids.size(0)
@@ -346,6 +356,7 @@ class SparseMlaCpImpl(SparseMlaImpl):
             q1_idx_global=self.fmha_impl.q1_idx_global,
             total_global_ids=self.fmha_impl.total_global_ids,
             total_local_ids=self.fmha_impl.total_local_ids,
+            cu_kv_seqlens_global=self.fmha_impl.cu_kv_seqlens_global,
         )
 
     @classmethod

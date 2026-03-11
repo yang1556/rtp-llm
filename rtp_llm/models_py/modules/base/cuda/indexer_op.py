@@ -114,6 +114,7 @@ class IndexerOp(nn.Module):
         self.kv_restore_unpad_indices = None
         self.total_global_ids = None
         self.total_local_ids = None
+        self.cu_kv_seqlens_global = None
 
     def apply_rope_and_rotate_q_k(
         self,
@@ -594,7 +595,7 @@ class IndexerOp(nn.Module):
             k_fp8,
             k_scale,
             attention_inputs.kv_cache_block_id_device,
-            attention_inputs.cu_kv_seqlens,
+            self.cu_kv_seqlens_global,
         )
         kv_fp8_full = (k_fp8, k_scale.view(torch.float32))
         assert (
