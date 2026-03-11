@@ -30,11 +30,8 @@ public:
     void enqueue(int64_t request_id, const GenerateStreamPtr& stream) {
         std::unique_lock<std::shared_mutex> lock(read_write_lock_);
         version_.fetch_add(1, std::memory_order_relaxed);
-        running_streams_[request_id] = EngineScheduleInfo::TaskInfo({request_id,
-                                                                     stream->interRequestId(),
-                                                                     stream->prefixLength(),
-                                                                     stream->inputLength(),
-                                                                     stream->getTimeInfo().wait_time_us});
+        running_streams_[request_id] = EngineScheduleInfo::TaskInfo(
+            {request_id, stream->prefixLength(), stream->inputLength(), stream->getTimeInfo().wait_time_us});
     }
 
     void dequeue(int64_t request_id, const GenerateStreamPtr& stream) {
@@ -47,13 +44,12 @@ public:
         if (finished_streams_.size() >= finished_capacity_) {
             finished_streams_.pop_front();
         }
-        int64_t current            = autil::TimeUtility::currentTimeInMilliSeconds();
-        task_info.end_time_ms      = current;
-        task_info.inter_request_id = stream->interRequestId();
-        task_info.prefix_length    = stream->prefixLength();
-        task_info.input_length     = stream->inputLength();
-        task_info.waiting_time_ms  = stream->getTimeInfo().wait_time_us / 1000;
-        task_info.iterate_count    = stream->iterCount();
+        int64_t current           = autil::TimeUtility::currentTimeInMilliSeconds();
+        task_info.end_time_ms     = current;
+        task_info.prefix_length   = stream->prefixLength();
+        task_info.input_length    = stream->inputLength();
+        task_info.waiting_time_ms = stream->getTimeInfo().wait_time_us / 1000;
+        task_info.iterate_count   = stream->iterCount();
 
         int64_t version = version_.fetch_add(1, std::memory_order_relaxed);
         finished_streams_.push_back(std::make_pair(version, task_info));
