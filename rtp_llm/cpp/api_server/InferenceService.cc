@@ -258,6 +258,11 @@ InferenceService::fillGenerateInput(int64_t                                reque
             (*input->extra_input_ids)->data(), result.extra_input_ids->data(), (*input->extra_input_ids)->sizeBytes());
         // Store location information (relative to single sequence; later converted to global index)
         input->extra_input_ids_loc = result.extra_input_ids_loc;
+        RTP_LLM_LOG_INFO("[InferenceService] Stored extra_input_ids: size=%zu, loc=%d",
+                         result.extra_input_ids->size(),
+                         result.extra_input_ids_loc);
+    } else {
+        RTP_LLM_LOG_INFO("[InferenceService] No extra_input_ids to store");
     }
 
     if (metric_reporter_) {
@@ -272,7 +277,9 @@ InferenceService::fillGenerateInput(int64_t                                reque
 }
 
 InferenceService::ProcessExtraInputResult InferenceService::processExtraInput(const std::vector<int>& input_ids) {
+    RTP_LLM_LOG_INFO("[InferenceService] processExtraInput called: input_ids_size=%zu", input_ids.size());
     if (py_model_.is_none()) {
+        RTP_LLM_LOG_INFO("[InferenceService] py_model_ is none, returning original input_ids");
         return {input_ids, std::nullopt, -1};
     }
 
@@ -280,12 +287,18 @@ InferenceService::ProcessExtraInputResult InferenceService::processExtraInput(co
     try {
         // Check if py_model has process_extra_input method
         if (!py::hasattr(py_model_, "process_extra_input")) {
+            RTP_LLM_LOG_INFO(
+                "[InferenceService] py_model_ has no process_extra_input method, returning original input_ids");
             return {input_ids, std::nullopt, -1};
         }
 
         // Prepare parameters
         py::list   py_input_ids = py::cast(input_ids);
         py::object ckpt_path    = model_config_.ckpt_path.empty() ? py::none() : py::cast(model_config_.ckpt_path);
+
+        RTP_LLM_LOG_INFO("[InferenceService] Calling Python process_extra_input: input_ids_size=%zu, ckpt_path=%s",
+                         input_ids.size(),
+                         model_config_.ckpt_path.empty() ? "empty" : model_config_.ckpt_path.c_str());
 
         // Call Python method
         py::tuple result = py_model_.attr("process_extra_input")(py_input_ids, ckpt_path);
@@ -298,6 +311,16 @@ InferenceService::ProcessExtraInputResult InferenceService::processExtraInput(co
         std::optional<std::vector<int>> extra_input_ids;
         if (!extra_input_obj.is_none()) {
             extra_input_ids = py::cast<std::vector<int>>(extra_input_obj);
+            RTP_LLM_LOG_INFO(
+                "[InferenceService] Python process_extra_input returned: processed_ids_len=%zu, extra_input_ids_len=%zu, loc=%d",
+                processed_input_ids.size(),
+                extra_input_ids->size(),
+                extra_input_ids_loc);
+        } else {
+            RTP_LLM_LOG_INFO(
+                "[InferenceService] Python process_extra_input returned: processed_ids_len=%zu, extra_input_ids=None, loc=%d",
+                processed_input_ids.size(),
+                extra_input_ids_loc);
         }
 
         return {processed_input_ids, extra_input_ids, extra_input_ids_loc};

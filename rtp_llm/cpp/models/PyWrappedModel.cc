@@ -292,9 +292,18 @@ GptModelOutputs PyWrappedModel::forwardMicroBatched(const GptModelInputs& inputs
             inputs.last_hidden_states ? Buffer2torchTensor(inputs.last_hidden_states, false) : torch::empty({0});
 
         // Convert extra_input_ids for micro batch
+        // Note: extra_input_ids is batch-level data, shared across all micro batches
+        // Use inputs.extra_input_ids (original batch-level data) instead of micro_inputs.extra_input_ids
         PyExtraInputIds extra_input_ids;
         if (inputs.extra_input_ids.combo_extra_input_ids != nullptr
             && inputs.extra_input_ids.extra_input_ids_lengths != nullptr) {
+            size_t combo_size   = inputs.extra_input_ids.combo_extra_input_ids->shape()[0];
+            size_t lengths_size = inputs.extra_input_ids.extra_input_ids_lengths->shape()[0];
+            RTP_LLM_LOG_INFO(
+                "[PyWrappedModel] Converting extra_input_ids: combo_size=%zu, lengths_size=%zu, micro_batch_idx=%zu",
+                combo_size,
+                lengths_size,
+                i);
             extra_input_ids.combo_extra_input_ids =
                 tensorHoldHostAndToCuda(Buffer2torchTensor(inputs.extra_input_ids.combo_extra_input_ids, false));
             extra_input_ids.extra_input_ids_lengths =
@@ -305,10 +314,43 @@ GptModelOutputs PyWrappedModel::forwardMicroBatched(const GptModelInputs& inputs
             } else {
                 extra_input_ids.extra_input_ids_locs = torch::empty({0}, torch::kInt32);
             }
+            RTP_LLM_LOG_INFO(
+                "[PyWrappedModel] Converted extra_input_ids: combo_tensor_size=%ld, lengths_tensor_size=%ld",
+                extra_input_ids.combo_extra_input_ids.size(0),
+                extra_input_ids.extra_input_ids_lengths.size(0));
         } else {
-            extra_input_ids.combo_extra_input_ids   = torch::empty({0}, torch::kInt32);
-            extra_input_ids.extra_input_ids_lengths = torch::empty({0}, torch::kInt32);
-            extra_input_ids.extra_input_ids_locs    = torch::empty({0}, torch::kInt32);
+            // Also check micro_inputs.extra_input_ids as fallback
+            if (micro_inputs.extra_input_ids.combo_extra_input_ids != nullptr
+                && micro_inputs.extra_input_ids.extra_input_ids_lengths != nullptr) {
+                size_t combo_size   = micro_inputs.extra_input_ids.combo_extra_input_ids->shape()[0];
+                size_t lengths_size = micro_inputs.extra_input_ids.extra_input_ids_lengths->shape()[0];
+                RTP_LLM_LOG_INFO(
+                    "[PyWrappedModel] Using micro_inputs.extra_input_ids: combo_size=%zu, lengths_size=%zu, micro_batch_idx=%zu",
+                    combo_size,
+                    lengths_size,
+                    i);
+                extra_input_ids.combo_extra_input_ids = tensorHoldHostAndToCuda(
+                    Buffer2torchTensor(micro_inputs.extra_input_ids.combo_extra_input_ids, false));
+                extra_input_ids.extra_input_ids_lengths = tensorHoldHostAndToCuda(
+                    Buffer2torchTensor(micro_inputs.extra_input_ids.extra_input_ids_lengths, false));
+                if (micro_inputs.extra_input_ids.extra_input_ids_locs != nullptr) {
+                    extra_input_ids.extra_input_ids_locs = tensorHoldHostAndToCuda(
+                        Buffer2torchTensor(micro_inputs.extra_input_ids.extra_input_ids_locs, false));
+                } else {
+                    extra_input_ids.extra_input_ids_locs = torch::empty({0}, torch::kInt32);
+                }
+            } else {
+                RTP_LLM_LOG_WARNING(
+                    "[PyWrappedModel] extra_input_ids is null or empty: inputs.combo_ptr=%p, inputs.lengths_ptr=%p, micro_inputs.combo_ptr=%p, micro_inputs.lengths_ptr=%p, micro_batch_idx=%zu",
+                    inputs.extra_input_ids.combo_extra_input_ids.get(),
+                    inputs.extra_input_ids.extra_input_ids_lengths.get(),
+                    micro_inputs.extra_input_ids.combo_extra_input_ids.get(),
+                    micro_inputs.extra_input_ids.extra_input_ids_lengths.get(),
+                    i);
+                extra_input_ids.combo_extra_input_ids   = torch::empty({0}, torch::kInt32);
+                extra_input_ids.extra_input_ids_lengths = torch::empty({0}, torch::kInt32);
+                extra_input_ids.extra_input_ids_locs    = torch::empty({0}, torch::kInt32);
+            }
         }
 
         PyModelInputs py_model_input   = PyModelInputs{token_ids, input_hiddens, py_attn_inputs, bert_embedding_inputs};
@@ -415,6 +457,11 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         // Convert extra_input_ids
         if (inputs.extra_input_ids.combo_extra_input_ids != nullptr
             && inputs.extra_input_ids.extra_input_ids_lengths != nullptr) {
+            size_t combo_size   = inputs.extra_input_ids.combo_extra_input_ids->shape()[0];
+            size_t lengths_size = inputs.extra_input_ids.extra_input_ids_lengths->shape()[0];
+            RTP_LLM_LOG_INFO("[PyWrappedModel::forward] Converting extra_input_ids: combo_size=%zu, lengths_size=%zu",
+                             combo_size,
+                             lengths_size);
             // Convert Buffer to torch::Tensor
             py_model_inputs.extra_input_ids.combo_extra_input_ids =
                 tensorHoldHostAndToCuda(Buffer2torchTensor(inputs.extra_input_ids.combo_extra_input_ids, false));
@@ -428,7 +475,15 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
             } else {
                 py_model_inputs.extra_input_ids.extra_input_ids_locs = torch::empty({0}, torch::kInt32);
             }
+            RTP_LLM_LOG_INFO(
+                "[PyWrappedModel::forward] Converted extra_input_ids: combo_tensor_size=%ld, lengths_tensor_size=%ld",
+                py_model_inputs.extra_input_ids.combo_extra_input_ids.size(0),
+                py_model_inputs.extra_input_ids.extra_input_ids_lengths.size(0));
         } else {
+            RTP_LLM_LOG_WARNING(
+                "[PyWrappedModel::forward] extra_input_ids is null or empty: combo_ptr=%p, lengths_ptr=%p",
+                inputs.extra_input_ids.combo_extra_input_ids.get(),
+                inputs.extra_input_ids.extra_input_ids_lengths.get());
             // If no extra_input_ids, set to empty tensors
             py_model_inputs.extra_input_ids.combo_extra_input_ids   = torch::empty({0}, torch::kInt32);
             py_model_inputs.extra_input_ids.extra_input_ids_lengths = torch::empty({0}, torch::kInt32);
