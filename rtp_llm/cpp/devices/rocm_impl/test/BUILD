@@ -44,7 +44,6 @@ test_deps = [
     "//rtp_llm/cpp/cuda:nccl_util",
     "//rtp_llm/cpp/devices/rocm_impl:rocm_impl",
     "//rtp_llm/cpp/devices/testing:device_test_utils",
-    "//rtp_llm/cpp/devices/base_tests:base_tests",
 ] + torch_deps()
 
 cc_test(

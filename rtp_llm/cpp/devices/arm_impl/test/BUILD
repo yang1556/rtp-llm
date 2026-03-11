@@ -30,7 +30,6 @@ cc_library(
 test_deps = [
     "//rtp_llm/cpp/devices/arm_impl:arm_cpu_impl",
     "//rtp_llm/cpp/devices/testing:device_test_utils",
-    "//rtp_llm/cpp/devices/base_tests:base_tests",
     ":arm_test_util",
 ] + torch_deps()
 

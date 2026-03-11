@@ -9,7 +9,6 @@ test_copts = [
 test_deps = [
     "//rtp_llm/cpp/devices/cpu_impl:cpu_impl",
     "//rtp_llm/cpp/devices/testing:device_test_utils",
-    "//rtp_llm/cpp/devices/base_tests:base_tests",
 ] + torch_deps()
 
 cc_test(

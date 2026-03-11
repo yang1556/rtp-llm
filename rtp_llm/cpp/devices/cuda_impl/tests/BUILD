@@ -1,31 +1,13 @@
-load("//:def.bzl", "cc_test_wrapper", "copts")
+load("//:def.bzl", "copts")
 load("//bazel:arch_select.bzl", "torch_deps")
-
-cc_test = cc_test_wrapper
 
 test_envs = {
     "DEVICE_RESERVE_MEMORY_BYTES": "0",
 }
 
-cc_library(
-    name = "cuda_test_util",
-    hdrs = [
-        "CudaTestUtils.h",
-    ],
-    srcs = [],
-    deps = [
-        "@com_google_googletest//:gtest",
-        "@local_config_cuda//cuda:cuda_headers",
-    ],
-    visibility = ["//visibility:public"],
-    copts = copts(),
-)
-
 test_deps = [
     "//rtp_llm/cpp/devices/cuda_impl:cuda_impl",
     "//rtp_llm/cpp/devices/testing:device_test_utils",
-    "//rtp_llm/cpp/devices/base_tests:base_tests",
-    ":cuda_test_util",
 ] + torch_deps()
 
 
