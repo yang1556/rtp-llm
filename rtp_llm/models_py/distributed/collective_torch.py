@@ -115,7 +115,7 @@ def init_distributed_environment(
     _create_process_groups(parallelism_config, backend, timeout)
     _parallelism_config = parallelism_config
     _initialized = True
-    init_user_buffers_environment(parallelism_config)
+    # init_user_buffers_environment(parallelism_config)
 
 
 def _create_process_groups(
