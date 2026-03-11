@@ -46,10 +46,7 @@ filegroup(
 
 copy_files(
     name = "copy_acclep_libs",
-    srcs = select({
-        "//rtp_llm/cpp/devices/cuda_impl:use_accl_ep": ["//3rdparty/accl_ep:accl_ep_shared"],
-        "//conditions:default": [],
-    }),
+    srcs = [],
     visibility = ["//visibility:public"],
 )
 

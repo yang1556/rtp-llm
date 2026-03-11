@@ -133,22 +133,6 @@ CudaDevice::CudaDevice(const DeviceInitParams& params): DeviceBase(params) {
     auto allocator_ptr = new Allocator<AllocatorType::CUDA>(device_id_);
     allocator_ptr->setStream(stream_);
 
-// cuda12_9_arm use python
-#ifndef USE_CUDA_ARM
-    if (init_params_.use_deepep_moe && !init_params_.model_specific_config.load_python_model) {
-        // init deepep buffer before buffer manager init to avoid out of mem
-        buffer_manager_.reset(
-            new BufferManager(allocator_ptr, host_allocator_ptr, init_params_.profile_debug_logging_config));
-        if (!initDeepEPBuffer()) {
-            RTP_LLM_CHECK_WITH_INFO(false, "init deepep buffer failed");
-        } else {
-            RTP_LLM_LOG_INFO("init deepep buffer success");
-        }
-        printDeviceMemoryUsage("after init deepep buffer");
-        buffer_manager_.reset();
-    }
-#endif
-
     if (params.device_reserve_memory_bytes) {
         size_t free_bytes, total_bytes;
         check_cuda_value(cudaMemGetInfo(&free_bytes, &total_bytes));

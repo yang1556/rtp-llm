@@ -21,35 +21,6 @@ config_setting(
 )
 
 cc_library(
-    name = "deep_ep_buffer",
-    hdrs = [
-        "DeepEPDefs.h",
-        "DeepEPBuffer.h",
-    ],
-    srcs = [
-        "DeepEPBuffer.cc",
-    ],
-    deps = [
-        "//rtp_llm/cpp/devices:devices_base",
-        "//rtp_llm/cpp/devices:device_utils",
-        "//rtp_llm/cpp/core:torch_cuda_allocator",
-        "//rtp_llm/cpp/core:torch_event",
-        "//rtp_llm/cpp/pybind:th_utils",
-        "//rtp_llm/cpp/config:model_config",
-    ] + select({
-        ":use_accl_ep": [
-            "//3rdparty/accl_ep:accl_ep",
-        ],
-        "//conditions:default": [":deep_ep",],
-    }) + torch_deps(),
-    copts = cuda_copts() + select({
-        ":use_accl_ep": ["-DUSE_ACCL_EP=1"],
-        "//conditions:default": ["-DUSE_ACCL_EP=0"],
-    }),
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
     name = "gpu_base",
     hdrs = [
         "CudaDevice.h",
@@ -97,11 +68,6 @@ cc_library(
         "//3rdparty/flashinfer:flashinfer",
         ":flashmla",
     ] + select({
-        ":enable_deep_ep": [
-            ":deep_ep_buffer",
-        ],
-        "//conditions:default": [],
-    }) + select({
         "@//:using_cuda12": [
             "//3rdparty/xqa:xqa"
         ],

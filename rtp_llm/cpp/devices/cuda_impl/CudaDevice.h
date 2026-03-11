@@ -12,9 +12,6 @@
 #include "rtp_llm/cpp/cuda/comm_buffer/comm_buffer.h"
 #include "rtp_llm/cpp/model_utils/AttentionConfig.h"
 #include <type_traits>
-#ifdef ENABLE_DEEP_EP
-#include "rtp_llm/cpp/devices/cuda_impl/DeepEPBuffer.h"
-#endif
 #include "trt_plugins/weightOnlyQuantMatmulPlugin/weightOnlyQuantMatmulPlugin.h"
 #include "trt_plugins/smoothQuantGemmPlugin/smoothQuantGemmPlugin.h"
 #include "trt_plugins/weightOnlyGroupwiseQuantMatmulPlugin/weightOnlyGroupwiseQuantMatmulPlugin.h"
@@ -106,7 +103,6 @@ private:
                                NcclParam&         nccl_param);
     void         commBarrier(const NcclParam& nccl_param);
     void         printDeviceMemoryUsage(std::string stage);
-    bool         initDeepEPBuffer();
     void         updateCurrentTorchStream() override;
     void         checkUseGroupGemm();
     NcclParam    getNcclParam(ParallelMode mode);
@@ -247,10 +243,6 @@ protected:
                         const MoeConfigs&          moe_conf,
                         const FfnLayerWeights&     weights);
 
-#ifdef ENABLE_DEEP_EP
-    size_t initDeepEPLLMaxTokenPerRank(const DeviceInitParams& params);
-#endif
-
 protected:
     std::unique_ptr<at::cuda::CUDAStream> torch_default_stream_;
     std::unique_ptr<at::cuda::CUDAStream> torch_comm_stream_;
@@ -301,10 +293,6 @@ private:
     std::unique_ptr<CommBuffer> ffn_ag_comm_buffer_        = nullptr;
     std::unique_ptr<CommBuffer> ffn_ag_scale_comm_buffer_  = nullptr;
     std::unique_ptr<CommBuffer> ffn_rs_comm_buffer_        = nullptr;
-
-#ifdef ENABLE_DEEP_EP
-    std::unique_ptr<DeepEPBuffer> deepep_buffer_ = nullptr;  // for deep_ep use
-#endif
 
     std::vector<BufferPtr> moe_hold_host_buffers_;
 
