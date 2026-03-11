@@ -8,7 +8,6 @@ namespace rtp_llm {
 struct EngineScheduleInfo {
     struct TaskInfo {
         int64_t request_id;
-        int64_t inter_request_id;
         int64_t prefix_length;
         int64_t input_length;
         int64_t waiting_time_ms;
