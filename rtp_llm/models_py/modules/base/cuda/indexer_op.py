@@ -179,6 +179,14 @@ class IndexerOp(nn.Module):
         k_pe = k[:, :pe_dim]
 
         if self.cos_sin_cache is not None and self.total_local_ids.size(0) > 0:
+            if self.total_global_ids.numel() > 0:
+                max_gid = self.total_global_ids.max().item()
+                if max_gid >= positions.size(0):
+                    raise ValueError(
+                        f"total_global_ids out of range for positions: "
+                        f"max(total_global_ids)={max_gid}, positions.size(0)={positions.size(0)}. "
+                        "Likely padded-to-unpadded coordinate conversion is missing in plan()."
+                    )
             q_pe_local = q_pe[self.total_local_ids]  # element wise
             k_pe_local = k_pe[self.total_local_ids]  # element wise
             k_rope = k_pe_local.unsqueeze(1)

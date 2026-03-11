@@ -137,6 +137,14 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
         self.q1_idx_global = self.q1_idx_global[valid_mask_q1]
         self.q0_idx = self.q0_idx[valid_mask_q0]
         self.q1_idx = self.q1_idx[valid_mask_q1]
+
+        # Convert from padded to unpadded coordinate space.
+        # inv_restore yields indices in the padded global space (0..padded_total-1),
+        # but positions_d / ks / ke / batch_indice_d are sized by unpadded_total.
+        pad_to_unpad = torch.cumsum(padding_mask_d, dim=0).long() - 1
+        self.q0_idx_global = pad_to_unpad[self.q0_idx_global]
+        self.q1_idx_global = pad_to_unpad[self.q1_idx_global]
+
         self.total_global_ids = torch.cat(
             [self.q0_idx_global, self.q1_idx_global], dim=0
         )
