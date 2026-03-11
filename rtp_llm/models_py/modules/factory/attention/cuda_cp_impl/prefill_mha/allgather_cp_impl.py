@@ -186,7 +186,7 @@ class PCPAllGatherAttnOp:
             positions=params.positions_d,
             paged_kv_cache=kv_cache_tensor,
             kv_indices=params.page_indice_d,
-            kv_indptr=params.prefill_ragged_kv_len_indptr_d,
+            kv_indptr=params.decode_page_indptr_d,
             kv_last_page_len=params.paged_kv_last_page_len_d,
             kv_layout="HND",
         )
@@ -198,8 +198,8 @@ class PCPAllGatherAttnOp:
         v0 = torch.index_select(all_values, 0, self.kv0_idx).contiguous()
         v1 = torch.index_select(all_values, 0, self.kv1_idx).contiguous()
 
-        attn_output_part0 = self.prefill_wrappers["part0"].run(q0, k0, v0)
-        attn_output_part1 = self.prefill_wrappers["part1"].run(q1, k1, v1)
+        output = torch.empty_like(q_reshaped)
+        output[self.q0_idx] = self.prefill_wrappers["part0"].run(q0, k0, v0)
+        output[self.q1_idx] = self.prefill_wrappers["part1"].run(q1, k1, v1)
 
-        out = torch.cat([attn_output_part0, attn_output_part1], dim=0)
-        return out
+        return output
