@@ -255,7 +255,7 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
                     metadata.tile_scheduler_metadata = None
                     metadata.num_splits = None
 
-        q0 = torch.index_select(q, 0, self.total_local_ids).contiguous()
+        q0 = q[self.total_local_ids].contiguous()
 
         def run_part(
             q_part: torch.Tensor,

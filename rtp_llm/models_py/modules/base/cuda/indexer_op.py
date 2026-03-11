@@ -575,12 +575,8 @@ class IndexerOp(nn.Module):
         device = q_fp8.device
         weights_sq = weights.squeeze(-1)
 
-        q0 = torch.index_select(
-            q_fp8, 0, self.total_local_ids
-        ).contiguous()  # element wise
-        weights_sq0 = torch.index_select(
-            weights_sq, 0, self.total_local_ids
-        ).contiguous()  # element wise
+        q0 = q_fp8[self.total_local_ids].contiguous()
+        weights_sq0 = weights_sq[self.total_local_ids].contiguous()
 
         # Full KV from cache (KV not split).
         k_fp8 = torch.empty(
@@ -605,26 +601,40 @@ class IndexerOp(nn.Module):
             fmha_params.ks is not None and fmha_params.ke is not None
         ), "ks/ke must be prepared in prefill"
 
+        n_tokens_fmha = fmha_params.ks.shape[0]
+        if self.total_global_ids.numel() > 0:
+            max_idx = self.total_global_ids.max().item()
+            if max_idx >= n_tokens_fmha:
+                raise ValueError(
+                    f"total_global_ids out of range for fmha_params.ks: "
+                    f"max(total_global_ids)={max_idx}, fmha_params.ks.shape[0]={n_tokens_fmha}. "
+                    "Check that attn_inputs used for fill_params use global (prefill_actual_input_lengths_cpu) lengths."
+                )
+
         def run_part_logits_topk(
             q_part: torch.Tensor,
             q_idx_global: torch.Tensor,
             weights_part: torch.Tensor,
         ) -> torch.Tensor:
             assert q_idx_global.size(0) > 0, "q_idx_global must be set"
+            ks = fmha_params.ks[q_idx_global]
+            ke = fmha_params.ke[q_idx_global]
+            lengths = fmha_params.expanded_seq_lens[q_idx_global]
+            topk_off = fmha_params.topk_indices_offset[q_idx_global]
             logits_p = deep_gemm.fp8_mqa_logits(
                 q_part,
                 kv_fp8_full,
                 weights_part,
-                fmha_params.ks[q_idx_global],
-                fmha_params.ke[q_idx_global],
+                ks,
+                ke,
                 clean_logits=False,
             )
             return fast_topk_transform_ragged_fused(
                 score=logits_p,
-                lengths=fmha_params.expanded_seq_lens[q_idx_global],
-                topk_indices_offset=fmha_params.topk_indices_offset[q_idx_global],
+                lengths=lengths,
+                topk_indices_offset=topk_off,
                 topk=self.index_topk,
-                row_starts=fmha_params.ks[q_idx_global],
+                row_starts=ks,
             )
 
         if self.total_local_ids.size(0) > 0:
