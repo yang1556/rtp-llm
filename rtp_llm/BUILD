@@ -125,6 +125,7 @@ requirement([
     "aiter",
     "fastsafetensors",
     "pybind11_stubgen",
+    "lm-eval",
 ] + tensorrt + deep + flashinfer_with_cache + flashmla)
 
 filegroup(
