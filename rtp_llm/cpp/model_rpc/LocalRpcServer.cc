@@ -199,7 +199,6 @@ grpc::Status LocalRpcServer::GetWorkerStatus(grpc::ServerContext*   context,
     for (const auto& task : engine_schedule_info.running_task_info_list) {
         TaskInfoPB* task_info = response->add_running_task_info();
         task_info->set_request_id(task.request_id);
-        task_info->set_inter_request_id(task.inter_request_id);
         task_info->set_prefix_length(task.prefix_length);
         task_info->set_input_length(task.input_length);
         task_info->set_waiting_time_ms(task.waiting_time_ms);
@@ -212,7 +211,6 @@ grpc::Status LocalRpcServer::GetWorkerStatus(grpc::ServerContext*   context,
     for (const auto& task : engine_schedule_info.finished_task_info_list) {
         TaskInfoPB* task_info = response->add_finished_task_list();
         task_info->set_request_id(task.request_id);
-        task_info->set_inter_request_id(task.inter_request_id);
         task_info->set_prefix_length(task.prefix_length);
         task_info->set_input_length(task.input_length);
         task_info->set_waiting_time_ms(task.waiting_time_ms);
@@ -321,7 +319,7 @@ EngineScheduleInfo LocalRpcServer::getEngineScheduleInfo(int64_t latest_finished
     std::vector<EngineScheduleInfo::TaskInfo> running_task_info_list = engine_->getScheduler().runningTaskList();
     for (auto& task_info : info.running_task_info_list) {
         for (auto& running_task : running_task_info_list) {
-            if (task_info.inter_request_id == running_task.inter_request_id) {
+            if (task_info.request_id == running_task.request_id) {
                 task_info.is_waiting = false;
             }
         }
