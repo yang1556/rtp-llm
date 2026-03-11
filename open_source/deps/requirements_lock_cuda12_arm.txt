@@ -9,9 +9,8 @@
 --extra-index-url https://artlab.alibaba-inc.com/1/PYPI/simple/
 --trusted-host artlab.alibaba-inc.com
 
-accelerate==0.25.0 \
-    --hash=sha256:c7bb817eb974bba0ff3ea1ba0f24d55afb86d50e3d4fe98d6922dc69cf2ccff1 \
-    --hash=sha256:ecf55b0ab278a1dac8539dde0d276977aff04683f07ede73eaf02478538576a1
+accelerate==0.26.0 \
+    --hash=sha256:fec56ee3f934fb441a75486e43d50ca2639d94f752baaa92799f1ff494c3dd1b
     # via -r internal_source/deps/../../open_source/deps/requirements_base.txt
 aiohappyeyeballs==2.6.1 \
     --hash=sha256:c3f9d0113123803ccadfdf3f0faa505bc78e6a72d1cc4806cbd719826e943558 \
