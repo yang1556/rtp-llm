@@ -12,7 +12,6 @@ class WorkerStatusRequest(BaseModel):
 
 class TaskInfo(BaseModel):
     request_id: int
-    inter_request_id: int
     prefix_length: int  # cache hit len
     input_length: int
     waiting_time_ms: int  # for master check server is hang or not
@@ -84,7 +83,6 @@ class ServerStatus(BaseModel):
 class ScheduleMeta(BaseModel):
     server_status: List[ServerStatus]
     cache_local: int = 0  # 0: LOCAL, 1: REMOTE
-    inter_request_id: int
     code: int = 200  # 200: OK
     error_message: Optional[str] = None
     success: Optional[bool] = True
