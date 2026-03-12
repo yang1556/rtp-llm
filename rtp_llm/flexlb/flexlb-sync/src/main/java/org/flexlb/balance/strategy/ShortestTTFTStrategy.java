@@ -367,22 +367,38 @@ public class ShortestTTFTStrategy implements LoadBalancer {
     }
 
     /**
-     * Select worker based on scheduling fairness
-     * Among workers with similar TTFT, prioritize recently unscheduled workers
+     * Select worker based on scheduling fairness.
+     * Among workers with similar TTFT, prefer the least recently scheduled one.
+     * CAS on lastSelectedTime ensures concurrent requests are spread across different workers
+     * rather than all landing on the same one.
      *
-     * @param similarWorkers List of workers with similar TTFT
-     * @param fallbackCandidates Fallback candidate worker list
-     * @return Finally selected worker
+     * @param similarWorkers workers with similar TTFT
+     * @param fallbackCandidates fallback candidate list
+     * @return selected worker
      */
     private ScoredWorker selectWorkerByScheduleFairness(List<ScoredWorker> similarWorkers, List<ScoredWorker> fallbackCandidates) {
         if (similarWorkers.isEmpty()) {
             return fallbackCandidates.getFirst();
         }
 
-        return similarWorkers.stream()
-                // Prioritize recently unscheduled worker
-                .min(Comparator.comparingLong(ScoredWorker::lastSelectedTime))
-                .orElse(fallbackCandidates.getFirst());
+        // Sort ascending by lastSelectedTime so the least recently used worker is tried first
+        List<ScoredWorker> sorted = similarWorkers.stream()
+                .sorted(Comparator.comparingLong(ScoredWorker::lastSelectedTime))
+                .toList();
+
+        long now = System.nanoTime() / 1000;
+        for (ScoredWorker candidate : sorted) {
+            long expected = candidate.lastSelectedTime();
+            // CAS: claim this worker only if lastSelectedTime hasn't changed since we read it.
+            // A failed CAS means another concurrent request already claimed this worker.
+            if (candidate.worker().getLastSelectedTime().compareAndSet(expected, now)) {
+                return candidate;
+            }
+            // Another request claimed this worker; try the next candidate
+        }
+
+        // All candidates were claimed concurrently; fall back to the first candidate
+        return fallbackCandidates.getFirst();
     }
 
     /**
