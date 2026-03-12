@@ -27,6 +27,7 @@ public:
         params.is_prefill_cuda_graph_mode   = true;
         params.max_seq_len                  = static_cast<int>(max_seq_len);
         params.tokens_per_block             = static_cast<int>(tokens_per_block);
+        params.kernel_tokens_per_block      = static_cast<int>(tokens_per_block);
         params.num_tokens_per_bs            = static_cast<int>(max_seq_len);
         params.max_context_batch_size       = static_cast<size_t>(max_context_batch_size);
         params.hidden_size                  = static_cast<size_t>(hidden_size);
@@ -50,6 +51,7 @@ public:
         params.is_prefill_cuda_graph_mode   = false;
         params.max_seq_len                  = static_cast<int>(max_seq_len);
         params.tokens_per_block             = static_cast<int>(tokens_per_block);
+        params.kernel_tokens_per_block      = static_cast<int>(tokens_per_block);
         params.num_tokens_per_bs            = 1;
         params.hidden_size                  = static_cast<size_t>(hidden_size);
         params.model_data_type              = c10::ScalarType::Half;

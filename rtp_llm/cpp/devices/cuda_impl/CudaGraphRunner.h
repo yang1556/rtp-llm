@@ -22,7 +22,9 @@ public:
         enable_cuda_graph_debug_mode_(graph_params.enable_cuda_graph_debug_mode),
         num_tokens_per_bs_(graph_params.num_tokens_per_bs),
         max_seq_len_(graph_params.max_seq_len),
-        seq_size_per_block_(graph_params.tokens_per_block),
+        kernel_seq_size_per_block_(graph_params.kernel_tokens_per_block > 0 ?
+                                       graph_params.kernel_tokens_per_block :
+                                       (graph_params.tokens_per_block > 0 ? graph_params.tokens_per_block : 1)),
         hidden_size_(graph_params.hidden_size),
         prefill_capture_seq_lens_(graph_params.prefill_capture_seq_lens),
         decode_capture_batch_sizes_(graph_params.decode_capture_batch_sizes),
@@ -44,13 +46,13 @@ public:
         options_cpu_int32_    = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU).requires_grad(false);
         options_cuda_float_ = torch::TensorOptions().dtype(model_data_type_).device(torch::kCUDA).requires_grad(false);
         RTP_LLM_LOG_INFO("Initialize CudaGraphRunner with parameters below: \n \
-            enable_cuda_graph_: %d, max_bs_: %d, enable_cuda_graph_debug_mode_: %d, max_seq_len_: %d, seq_size_per_block_: %d, \
+            enable_cuda_graph_: %d, max_bs_: %d, enable_cuda_graph_debug_mode_: %d, max_seq_len_: %d, kernel_seq_size_per_block_: %d, \
             hidden_size_: %d, num_tokens_per_bs_: %d, is_prefill_cuda_graph_mode_: %d",
                          enable_cuda_graph_,
                          max_bs_,
                          enable_cuda_graph_debug_mode_,
                          max_seq_len_,
-                         seq_size_per_block_,
+                         kernel_seq_size_per_block_,
                          hidden_size_,
                          num_tokens_per_bs_,
                          is_prefill_cuda_graph_mode_);
@@ -114,7 +116,7 @@ private:
     int                  max_num_token_{1};
     int                  max_perfill_cuda_graph_len_{160};
     int                  max_seq_len_{0};
-    int                  seq_size_per_block_{0};
+    int                  kernel_seq_size_per_block_{0};
     int                  hidden_size_{0};
     std::vector<int>     capture_range_;
     std::vector<int>     prefill_capture_seq_lens_;    // Pre-configured sequence lengths from Python
