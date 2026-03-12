@@ -294,7 +294,7 @@ public class ShortestTTFTStrategy implements LoadBalancer {
         }
 
         long minTTFT = candidates.getFirst().ttft();
-        double threshold = calculateTTFTThreshold(candidates);
+        double threshold = calculateTTFTThreshold(candidates, minTTFT);
 
         List<ScoredWorker> similarWorkers = filterSimilarWorkers(candidates, minTTFT, threshold);
 
@@ -334,7 +334,7 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      * @param candidates Candidate worker list
      * @return TTFT threshold
      */
-    private double calculateTTFTThreshold(List<ScoredWorker> candidates) {
+    private double calculateTTFTThreshold(List<ScoredWorker> candidates, long minTTFT) {
         double avgTTFT = candidates.stream().mapToLong(ScoredWorker::ttft).average().orElse(0.0);
 
         double stdDev = Math.sqrt(
@@ -343,10 +343,11 @@ public class ShortestTTFTStrategy implements LoadBalancer {
                         .mapToDouble(v -> Math.pow(v - avgTTFT, 2))
                         .average()
                         .orElse(0.0));
-        double percentageAvgTTFT = avgTTFT * TTFT_THRESHOLD_PERCENTAGE;
+        double percentageMinTTFT = minTTFT * TTFT_THRESHOLD_PERCENTAGE;
         double factoredStdDev = stdDev * STDDEV_THRESHOLD_FACTOR;
-        Logger.debug("Calculate TTFT threshold, avgTTFT: {}, stdDev: {}, percentageAvgTTFT: {}, factoredStdDev: {}", avgTTFT, stdDev, percentageAvgTTFT, factoredStdDev);
-        return Math.max(percentageAvgTTFT, factoredStdDev);
+        Logger.debug("Calculate TTFT threshold, minTTFT: {}, avgTTFT: {}, stdDev: {}, percentageMinTTFT: {}, factoredStdDev: {}",
+                minTTFT, avgTTFT, stdDev, percentageMinTTFT, factoredStdDev);
+        return Math.max(percentageMinTTFT, factoredStdDev);
     }
 
     /**
