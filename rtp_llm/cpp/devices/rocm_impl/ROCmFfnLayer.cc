@@ -611,8 +611,7 @@ FfnLayerOutput ROCmDevice::moeFfn(const FfnLayerParams& params, const MoeGateSel
             /*activation*/ static_cast<int>(::ActivationType::Silu),
             /*splitk*/ 1,
             /*nt*/ false,
-            /*dst_type*/ std::nullopt
-        );
+            /*dst_type*/ std::nullopt);
     }
     return {moe_out_final};
 }
