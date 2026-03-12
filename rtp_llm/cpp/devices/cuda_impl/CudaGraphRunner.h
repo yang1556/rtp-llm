@@ -22,9 +22,7 @@ public:
         enable_cuda_graph_debug_mode_(graph_params.enable_cuda_graph_debug_mode),
         num_tokens_per_bs_(graph_params.num_tokens_per_bs),
         max_seq_len_(graph_params.max_seq_len),
-        kernel_seq_size_per_block_(graph_params.kernel_tokens_per_block > 0 ?
-                                       graph_params.kernel_tokens_per_block :
-                                       (graph_params.tokens_per_block > 0 ? graph_params.tokens_per_block : 1)),
+        kernel_seq_size_per_block_(graph_params.kernel_tokens_per_block),
         hidden_size_(graph_params.hidden_size),
         prefill_capture_seq_lens_(graph_params.prefill_capture_seq_lens),
         decode_capture_batch_sizes_(graph_params.decode_capture_batch_sizes),
@@ -34,6 +32,9 @@ public:
         py::gil_scoped_acquire gil;
         if (!py_instance_ || py_instance_.is_none()) {
             throw std::runtime_error("CudaGraphRunner constructor: Python instance is null or none.");
+        }
+        if (kernel_seq_size_per_block_ <= 0) {
+            throw std::runtime_error("CudaGraphRunner constructor: kernel_tokens_per_block must be > 0.");
         }
         if (graph_params.is_prefill_cuda_graph_mode) {
             max_bs_ = graph_params.max_context_batch_size;
