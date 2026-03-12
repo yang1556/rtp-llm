@@ -256,6 +256,15 @@ public:
 private:
     void initializeFrom(const BatchKVCacheResource& other) {
         resetBatchSize(other.batchSize());
+        int layer_num = 0;
+        if (!other.batch_resource.empty() && !other.batch_resource[0].layerBlocks().empty()) {
+            layer_num = static_cast<int>(other.batch_resource[0].layerBlocks().size());
+        }
+
+        if (other.batchSize() > 0 && other.groupNums() > 0) {
+            initGroups(other.groupNums(), layer_num);
+        }
+
         for (int batch_id = 0; batch_id < other.batchSize(); ++batch_id) {
             for (int group_id = 0; group_id < other.groupNums(); ++group_id) {
                 batch_resource[batch_id].resizeBlocks(other.batch_resource[batch_id].blocksNum(group_id));
