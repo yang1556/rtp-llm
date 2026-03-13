@@ -158,6 +158,7 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
         kv_lengths = actual_input_lengths.int() + prefix_lengths.int()
         cu_kv_seqlens_cpu = torch.zeros(kv_lengths.shape[0] + 1, dtype=torch.int32)
         cu_kv_seqlens_cpu[1:] = torch.cumsum(kv_lengths, dim=0)
+        self.total_kv_len = int(cu_kv_seqlens_cpu[-1])
         self.cu_kv_seqlens_global = cu_kv_seqlens_cpu.to(self.device)
 
         # get_mla_metadata: num_q_tokens_per_head_k = num_q_tokens * num_heads_q // num_heads_k (for tile scheduling).
@@ -365,6 +366,7 @@ class SparseMlaCpImpl(SparseMlaImpl):
             total_global_ids=self.fmha_impl.total_global_ids,
             total_local_ids=self.fmha_impl.total_local_ids,
             cu_kv_seqlens_global=self.fmha_impl.cu_kv_seqlens_global,
+            total_kv_len=self.fmha_impl.total_kv_len,
         )
 
     @classmethod

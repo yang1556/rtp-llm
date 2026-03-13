@@ -597,10 +597,10 @@ class IndexerOp(nn.Module):
             fast_topk_transform_ragged_fused,
         )
 
-        total_kv_tokens = self.kv_len
+        total_kv_tokens = self.total_kv_len
         assert (
             total_kv_tokens is not None and total_kv_tokens > 0
-        ), "self.kv_len must be set by quant_q_k_cp before _get_topk_ragged_cp"
+        ), "total_kv_len must be set before _get_topk_ragged_cp"
 
         device = q_fp8.device
         weights_sq = weights.squeeze(-1)
