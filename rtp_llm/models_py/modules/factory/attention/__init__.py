@@ -103,24 +103,18 @@ try:
             except (ImportError, AttributeError, ValueError):
                 pass  # Skip SparseMlaImpl if CUDA < 12.9 or flash_mla not available
 
-            from rtp_llm.models_py.modules.factory.attention.cuda_impl.flash_infer import (
-                FlashInferDecodeImpl,
-                FlashInferPrefillImpl,
-            )
-
-            PREFILL_MHA_IMPS.append(FlashInferPrefillImpl)
-            DECODE_MHA_IMPS.append(FlashInferDecodeImpl)
-
         from rtp_llm.models_py.modules.factory.attention.cuda_impl.py_flashinfer_mha import (
             PyFlashinferDecodeImpl,
             PyFlashinferPrefillImpl,
         )
+
         PREFILL_MHA_IMPS.append(PyFlashinferPrefillImpl)
         DECODE_MHA_IMPS.append(PyFlashinferDecodeImpl)
-        
+
         from rtp_llm.models_py.modules.factory.attention.cuda_cp_impl.prefill_cp_flashinfer import (
             CPFlashInferImpl,
         )
+
         PREFILL_MHA_IMPS.append(CPFlashInferImpl)
 except Exception as e:
     logging.warning(f"Failed to import Attention implementation: {e}")
