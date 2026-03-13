@@ -196,8 +196,6 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
     extra_input_ids_lengths_vec.reserve(total_context_batch_size);
     extra_input_ids_locs_vec.reserve(total_context_batch_size);
 
-    int decoder_token_offset = 0;  // Accumulated offset for decoder input_ids
-
     RTP_LLM_LOG_INFO("[NormalBatchStreamProcessor] Collecting extra_input_ids from %zu context streams",
                      context_streams.size());
     size_t stream_idx = 0;
@@ -209,29 +207,14 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
                 size_t len = generate_input->extra_input_ids.value()->size();
                 total_extra_input_ids_size += len;
                 extra_input_ids_lengths_vec.push_back(len);
-
-                // Get location from GenerateInput (relative to single sequence)
                 int extra_input_ids_loc = generate_input->extra_input_ids_loc;
-                if (extra_input_ids_loc >= 0) {
-                    // Convert to global index by adding decoder_token_offset
-                    extra_input_ids_locs_vec.push_back(decoder_token_offset + extra_input_ids_loc);
-                } else {
-                    extra_input_ids_locs_vec.push_back(-1);
-                }
-                RTP_LLM_LOG_INFO(
-                    "[NormalBatchStreamProcessor] Found extra_input_ids: stream_idx=%zu, batch_idx=%d, len=%zu, loc=%d",
-                    stream_idx,
-                    i,
-                    len,
-                    extra_input_ids_loc);
+                extra_input_ids_locs_vec.push_back(extra_input_ids_loc);
             } else {
                 extra_input_ids_lengths_vec.push_back(0);
                 extra_input_ids_locs_vec.push_back(-1);
                 RTP_LLM_LOG_INFO(
                     "[NormalBatchStreamProcessor] No extra_input_ids: stream_idx=%zu, batch_idx=%d", stream_idx, i);
             }
-            // Update decoder_token_offset (using processed input_ids length)
-            decoder_token_offset += generate_input->inputLength();
         }
         stream_idx++;
     }
@@ -366,7 +349,6 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
 
         int context_batch_idx      = 0;
         int extra_input_ids_offset = 0;
-        decoder_token_offset       = 0;
 
         RTP_LLM_LOG_INFO("[NormalBatchStreamProcessor] Filling extra_input_ids data: total_size=%zu",
                          total_extra_input_ids_size);
@@ -380,27 +362,21 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
                     memcpy(combo_extra_input_ids_ptr + extra_input_ids_offset, buffer->data(), len * sizeof(int32_t));
                     extra_input_ids_lengths_ptr[context_batch_idx] = len;
 
-                    // Get location from GenerateInput and convert to global index
-                    int extra_input_ids_loc = generate_input->extra_input_ids_loc;
-                    if (extra_input_ids_loc >= 0) {
-                        extra_input_ids_locs_ptr[context_batch_idx] = decoder_token_offset + extra_input_ids_loc;
-                    } else {
-                        extra_input_ids_locs_ptr[context_batch_idx] = -1;
-                    }
+                    // Get location from GenerateInput directly, no accumulation
+                    int extra_input_ids_loc                     = generate_input->extra_input_ids_loc;
+                    extra_input_ids_locs_ptr[context_batch_idx] = extra_input_ids_loc;
 
                     RTP_LLM_LOG_INFO(
                         "[NormalBatchStreamProcessor] Filled extra_input_ids: batch_idx=%d, len=%zu, offset=%d, loc=%d",
                         context_batch_idx,
                         len,
                         extra_input_ids_offset,
-                        extra_input_ids_locs_ptr[context_batch_idx]);
+                        extra_input_ids_loc);
                     extra_input_ids_offset += len;
                 } else {
                     extra_input_ids_lengths_ptr[context_batch_idx] = 0;
                     extra_input_ids_locs_ptr[context_batch_idx]    = -1;
                 }
-                // Update decoder_token_offset
-                decoder_token_offset += generate_input->inputLength();
                 context_batch_idx++;
             }
         }
