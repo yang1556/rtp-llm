@@ -41,6 +41,7 @@ public class WorkerStatus {
     private long iterateCount;
     private long dpSize;
     private long tpSize;
+    private boolean cpEnabled = false;
 
     private AtomicLong statusLastUpdateTime = new AtomicLong(-1); // Last status update time
     private AtomicLong cacheLastUpdateTime = new AtomicLong(-1); // Last cache status update time

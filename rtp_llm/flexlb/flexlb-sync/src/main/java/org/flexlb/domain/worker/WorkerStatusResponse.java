@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 import org.flexlb.dao.master.CacheStatus;
 import org.flexlb.dao.master.TaskInfo;
+import org.flexlb.engine.grpc.EngineRpcService;
 
 import java.util.Map;
 
@@ -67,5 +68,8 @@ public class WorkerStatusResponse {
 
     @JsonProperty("message")
     private String message;
+
+    @JsonProperty("cp_rotate_method")
+    private EngineRpcService.CPRotateMethodPB cpRotateMethod = EngineRpcService.CPRotateMethodPB.CP_DISABLED;
 
 }
