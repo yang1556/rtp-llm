@@ -22,6 +22,20 @@ import static org.flexlb.enums.ResourceMeasureIndicatorEnum.WAIT_TIME;
 public class FlexlbConfig {
 
     /**
+     * Prefill CP-aware routing: seqLen threshold (tokens).
+     * Queries with seqLen >= this value will prefer CP workers.
+     * 0 means disabled.
+     */
+    private long prefillCpSeqLenThreshold = 0;
+
+    /**
+     * Quota reserved for long queries on CP workers (percentage, 0-100).
+     * CP workers will reject short queries when their queue usage exceeds (100 - reserveRatio)%.
+     * Default 30 means 30% of CP worker capacity is reserved for long queries.
+     */
+    private long cpWorkerLongQueryReserveRatio = 30;
+
+    /**
      * Load balancing strategy
      */
     private LoadBalanceStrategyEnum loadBalanceStrategy = LoadBalanceStrategyEnum.SHORTEST_TTFT;

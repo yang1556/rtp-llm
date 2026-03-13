@@ -33,6 +33,7 @@ public class EngineStatusConverter {
         response.setStatusVersion(workerStatusPB.getStatusVersion());
         response.setLatestFinishedVersion(workerStatusPB.getLatestFinishedVersion());
         response.setAlive(workerStatusPB.getAlive());
+        response.setCpRotateMethod(workerStatusPB.getCpRotateMethod());
 
         List<EngineRpcService.TaskInfoPB> srcRunningTaskInfoList = workerStatusPB.getRunningTaskInfoList();
         List<EngineRpcService.TaskInfoPB> waitingTaskInfoList = srcRunningTaskInfoList.stream().filter(taskInfoPB -> taskInfoPB.getIsWaiting()).toList();
