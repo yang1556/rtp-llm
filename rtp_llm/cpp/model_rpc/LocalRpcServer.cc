@@ -225,6 +225,7 @@ grpc::Status LocalRpcServer::GetWorkerStatus(grpc::ServerContext*   context,
     response->set_latest_finished_version(status_info.latest_finished_version);
     response->set_alive(status_info.alive);
     response->set_precision(status_info.precision);
+    response->set_cp_rotate_method(static_cast<CPRotateMethodPB>(static_cast<int>(status_info.cp_rotate_method)));
     reportWorkerStatusTime(request_begin_time_us, request_after_ws_time_us);
     return grpc::Status::OK;
 }
@@ -254,6 +255,7 @@ WorkerStatusInfo LocalRpcServer::getWorkerStatusInfo(int64_t latest_finished_ver
     status_info.dp_size                 = maga_init_params_.parallelism_config.dp_size;
     status_info.tp_size                 = maga_init_params_.parallelism_config.tp_size;
     status_info.dp_rank                 = maga_init_params_.parallelism_config.dp_rank;
+    status_info.cp_rotate_method        = maga_init_params_.parallelism_config.prefill_cp_config.method;
     status_info.status_version          = currentTimeUs();
     status_info.latest_finished_version = status_info.engine_schedule_info.latest_finished_version;
     status_info.alive                   = true;
