@@ -114,7 +114,7 @@ public class ShortestTTFTStrategy implements LoadBalancer {
 
         // Get available worker list
         FlexlbConfig config = balanceContext.getConfig();
-        List<WorkerStatus> availableWorkers = getAvailableWorkers(roleType, group, config.getResourceMeasureIndicator(roleType));
+        List<WorkerStatus> availableWorkers = getAvailableWorkers(roleType, group, config.getResourceMeasureIndicator(roleType), seqLen, config);
         if (CollectionUtils.isEmpty(availableWorkers)) {
             Logger.warn("No available workers for role: {}", roleType.getCode());
             return ServerStatus.code(StrategyErrorType.NO_AVAILABLE_WORKER);
@@ -135,15 +135,16 @@ public class ShortestTTFTStrategy implements LoadBalancer {
     }
 
     /**
-     * Get available worker list
+     * Get available worker list with CP-aware quota group filtering.
      *
-     * @param roleType Worker role type
-     * @param group Worker group
-     * @param indicator ResourceMeasureIndicatorEnum
-     * @return Available worker list
+     * For PREFILL role when CP threshold is configured:
+     * - Long queries (seqLen >= threshold): prefer CP workers; fallback to all if none available
+     * - Short queries (seqLen < threshold): prefer non-CP workers, or CP workers that still have
+     *   capacity below the reserved quota; fallback to all if none available
      */
-    private List<WorkerStatus> getAvailableWorkers(RoleType roleType, String group, ResourceMeasureIndicatorEnum indicator) {
-
+    private List<WorkerStatus> getAvailableWorkers(RoleType roleType, String group,
+                                                    ResourceMeasureIndicatorEnum indicator,
+                                                    long seqLen, FlexlbConfig config) {
         Map<String, WorkerStatus> workerStatusMap = engineWorkerStatus.selectModelWorkerStatus(roleType, group);
         if (MapUtils.isEmpty(workerStatusMap)) {
             return new ArrayList<>();
@@ -151,11 +152,49 @@ public class ShortestTTFTStrategy implements LoadBalancer {
 
         ResourceMeasure resourceMeasure = resourceMeasureFactory.getMeasure(indicator);
 
-        return new ArrayList<>(workerStatusMap.values()).stream()
-                .filter(WorkerStatus::isAlive)                   // Check if resource is available
-                .filter(resourceMeasure::isResourceAvailable)    // Check if worker has available resources
+        List<WorkerStatus> allAvailable = workerStatusMap.values().stream()
+                .filter(WorkerStatus::isAlive)
+                .filter(resourceMeasure::isResourceAvailable)
                 .toList();
+
+        long cpThreshold = config.getPrefillCpSeqLenThreshold();
+        if (cpThreshold <= 0 || !RoleType.PREFILL.matches(roleType.getCode())) {
+            return new ArrayList<>(allAvailable);
+        }
+
+        boolean isLongQuery = seqLen >= cpThreshold;
+        if (isLongQuery) {
+            // Long query: prefer CP workers
+            List<WorkerStatus> cpWorkers = allAvailable.stream()
+                    .filter(WorkerStatus::isCpEnabled)
+                    .toList();
+            Logger.debug("Long query seqLen={}, CP workers={}, all workers={}", seqLen, cpWorkers.size(), allAvailable.size());
+            return cpWorkers.isEmpty() ? new ArrayList<>(allAvailable) : new ArrayList<>(cpWorkers);
+        } else {
+            // Short query: prefer non-CP workers, or CP workers with spare capacity below reserved quota
+            long reserveRatio = config.getCpWorkerLongQueryReserveRatio();
+            List<WorkerStatus> preferred = allAvailable.stream()
+                    .filter(w -> !w.isCpEnabled() || isCpWorkerAvailableForShortQuery(w, reserveRatio))
+                    .toList();
+            Logger.debug("Short query seqLen={}, preferred workers={}, all workers={}", seqLen, preferred.size(), allAvailable.size());
+            return preferred.isEmpty() ? new ArrayList<>(allAvailable) : new ArrayList<>(preferred);
+        }
     }
+
+    /**
+     * Check if CP worker has spare capacity for short queries.
+     */
+    private boolean isCpWorkerAvailableForShortQuery(WorkerStatus worker, long reserveRatio) {
+        long available = worker.getAvailableKvCacheTokens().get();
+        long used = worker.getUsedKvCacheTokens().get();
+        long total = available + used;
+        if (total <= 0) return true;
+        long usedPercent = used * 100 / total;
+        long shortQueryLimit = 100 - reserveRatio;
+        return usedPercent < shortQueryLimit;
+    }
+
+
 
     /**
      * Get cache match results

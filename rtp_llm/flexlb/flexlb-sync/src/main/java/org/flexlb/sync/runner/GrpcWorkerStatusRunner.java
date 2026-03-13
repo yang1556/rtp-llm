@@ -119,6 +119,7 @@ public class GrpcWorkerStatusRunner implements Runnable {
                 workerStatus.setAlive(newWorkerStatus.isAlive());
                 workerStatus.setDpSize(newWorkerStatus.getDpSize());
                 workerStatus.setTpSize(newWorkerStatus.getTpSize());
+                workerStatus.setCpEnabled(isCpEnabled(newWorkerStatus.getCpRotateMethod()));
 
                 // Set expiration time to 3 seconds from now
                 workerStatus.getStatusLastUpdateTime().set(System.nanoTime() / 1000);
@@ -144,6 +145,7 @@ public class GrpcWorkerStatusRunner implements Runnable {
             workerStatus.setIterateCount(newWorkerStatus.getIterateCount());
             workerStatus.setDpSize(newWorkerStatus.getDpSize());
             workerStatus.setTpSize(newWorkerStatus.getTpSize());
+            workerStatus.setCpEnabled(isCpEnabled(newWorkerStatus.getCpRotateMethod()));
             workerStatus.setAlive(newWorkerStatus.isAlive());
             workerStatus.getStatusVersion().set(responseVersion != null ? responseVersion : -1L);
             workerStatus.getLatestFinishedTaskVersion().set(newWorkerStatus.getLatestFinishedVersion() != null ? newWorkerStatus.getLatestFinishedVersion() : -1L);
@@ -200,5 +202,11 @@ public class GrpcWorkerStatusRunner implements Runnable {
                 modelName,
                 System.nanoTime() / 1000 - startTime,
                 msg);
+    }
+
+    private boolean isCpEnabled(EngineRpcService.CPRotateMethodPB method) {
+        return method != null
+                && method != EngineRpcService.CPRotateMethodPB.CP_DISABLED
+                && method != EngineRpcService.CPRotateMethodPB.CP_UNKNOWN;
     }
 }
