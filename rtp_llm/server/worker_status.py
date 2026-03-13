@@ -48,6 +48,10 @@ class WorkStatus(BaseModel):
     status_version: Optional[int] = -1  # 时间戳
     latest_finished_version: Optional[int] = -1  # 最新完成任务的版本
 
+    cp_rotate_method: str = (
+        "CP_DISABLED"  # CP rotation method, matches CPRotateMethodPB enum name
+    )
+
     profile_meta: Optional[ProfileMeta] = None  # 统计的处理数据
 
 
