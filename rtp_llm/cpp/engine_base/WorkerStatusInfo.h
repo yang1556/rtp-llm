@@ -8,6 +8,7 @@
 #include <random>
 #include <chrono>
 #include "rtp_llm/cpp/engine_base/schedulers/EngineScheduleInfo.h"
+#include "rtp_llm/cpp/config/ConfigModules.h"
 
 namespace rtp_llm {
 
@@ -21,6 +22,7 @@ struct WorkerStatusInfo {
     int32_t            tp_size;
     int32_t            dp_rank;
     std::string        precision;
+    CPRotateMethod     cp_rotate_method = CPRotateMethod::DISABLED;
 };
 
 }  // namespace rtp_llm
