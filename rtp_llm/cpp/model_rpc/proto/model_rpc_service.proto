@@ -362,6 +362,15 @@ message UpdateWeightsRequestPB {
     string method = 3;
 }
 
+enum CPRotateMethodPB {
+    CP_DISABLED                = 0;
+    CP_ALL_GATHER              = 1;
+    CP_ALL_GATHER_WITH_OVERLAP = 2;
+    CP_ALLTOALL                = 3;
+    CP_PREFILL_CP              = 4;
+    CP_UNKNOWN                 = 5;
+}
+
 message WorkerStatusPB {
     string role = 1;
     int32 available_concurrency = 2;
@@ -377,6 +386,7 @@ message WorkerStatusPB {
     bool alive = 13;
     string precision = 14;
     int64 latest_finished_version = 15;
+    CPRotateMethodPB cp_rotate_method = 16;
 }
 
 message EmbeddingInputPB {
