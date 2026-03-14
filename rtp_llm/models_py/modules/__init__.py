@@ -4,6 +4,7 @@ from rtp_llm.models_py.modules.base import (
     AddBiasResLayerNormTorch,
     Embedding,
     EmbeddingBert,
+    FakeBalanceExpert,
     FusedQKRMSNorm,
     FusedSiluAndMul,
     GroupTopK,
@@ -47,6 +48,7 @@ __all__ = [
     "RMSResNorm",
     "SelectTopk",
     "GroupTopK",
+    "FakeBalanceExpert",
     "FusedSiluAndMul",
     "IndexerOp",
     # Factory modules
