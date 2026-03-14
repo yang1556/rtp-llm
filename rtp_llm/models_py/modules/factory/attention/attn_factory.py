@@ -44,7 +44,6 @@ def get_mla_impl(
         use_fast_path = (
             attn_inputs.is_prefill
             and attn_inputs.cu_kv_seqlens.max().item() <= attn_configs.indexer_topk
-            and False
         )
 
         if not use_fast_path and not impl.support_parallelism_config(

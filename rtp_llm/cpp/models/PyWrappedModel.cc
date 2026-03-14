@@ -319,8 +319,25 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
             return forwardMicroBatched(inputs);
         }
         PyContextParallelParams cp_params;
+        bool                    use_prefill_cp_this_batch = false;
         if (device_props_.enable_prefill_cp) {
-            context_parallel_processor_->handleInputs(device_, const_cast<GptModelInputs&>(inputs), cp_params);
+            size_t context_batch_size = inputs.prefix_lengths->shape()[0];
+            if (context_batch_size > 0) {
+                const int32_t* input_len_ptr  = inputs.input_lengths->data<int32_t>();
+                const int32_t* prefix_len_ptr = inputs.prefix_lengths->data<int32_t>();
+                // Same as buildPyAttentionInputs: cu_kv_seqlens[1:context_batch_size+1] = (input_lengths +
+                // prefix_lengths)[:context_batch_size].cumsum() max(cu_kv_seqlens) for context part = last element of
+                // cumsum = total KV length
+                int64_t cu_kv_max = 0;
+                for (size_t p = 0; p < context_batch_size; ++p) {
+                    cu_kv_max += input_len_ptr[p] + prefix_len_ptr[p];
+                }
+                int indexer_topk          = description_.attention_conf.indexer_topk;
+                use_prefill_cp_this_batch = (cu_kv_max > indexer_topk);
+            }
+            if (use_prefill_cp_this_batch) {
+                context_parallel_processor_->handleInputs(device_, const_cast<GptModelInputs&>(inputs), cp_params);
+            }
         }
 
         torch::Tensor token_ids;
@@ -329,13 +346,13 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         torch::Tensor input_hiddens =
             inputs.last_hidden_states ? Buffer2torchTensor(inputs.last_hidden_states, false) : torch::empty({0});
 
-        auto                   attention_inputs      = buildPyAttentionInputs(inputs);
-        auto                   bert_embedding_inputs = buildBertEmbeddingInputs(inputs);
+        auto attention_inputs      = buildPyAttentionInputs(inputs);
+        auto bert_embedding_inputs = buildBertEmbeddingInputs(inputs);
 
-        if (device_props_.enable_prefill_cp) {
+        if (use_prefill_cp_this_batch) {
             attention_inputs.context_parallel_info = cp_params;
         }
- 
+
         BufferPtr              kv_cache_block_id_device;
         std::vector<BufferPtr> kv_cache_block_id_device_by_group;
         if (!inputs.warmup && inputs.pd_separation) {
@@ -368,7 +385,7 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         }
 
         RTP_LLM_LOG_DEBUG("Python object instance forward method called successfully.");
-        if (device_props_.enable_prefill_cp) {
+        if (use_prefill_cp_this_batch) {
             size_t num_valid_tokens =
                 context_parallel_processor_->handleOutputs(device_, hidden_states, inputs, cp_params);
             return callForwardPostLayers(hidden_states, inputs, true, num_valid_tokens);
