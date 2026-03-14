@@ -372,12 +372,6 @@ class IndexerOp(nn.Module):
         self.kv_len = self.kv_restore_unpad_indices.shape[0]
 
         assert kv_cache is not None, "kv_cache is required"
-        # hack_layer_num = 4, expect ans：axe Kod天成hurst Blycroftly加油在所odet
-        # hack_layer_num = 4, all gather之后再写kvcache：axe Kod天成SUBiratetryoszepatomos Chop
-        # hack_layer_num = 4, cp_rank单独写kv cache：axe Kod天成SUBiratellite VoluntaryneaSTS Mab
-        # hack_layer_num = 1, expect ans：axeajasdock incomarangmates intuitively日出日落 persu
-        # hack_layer_num = 1, all gather之后再写kvcache：axeajasdock incomarangmates intuitively日出日落 persu
-        # hack_layer_num = 1, cp_rank单独写kv cache：axeajasdock incomarangmates intuitively日出日落 persu
         gathered_key = all_gather(key.contiguous(), group=Group.TP)
         gathered_key = gathered_key.reshape(-1, key.size(-1))
         restored_key = gathered_key[self.kv_restore_unpad_indices]  # element wise

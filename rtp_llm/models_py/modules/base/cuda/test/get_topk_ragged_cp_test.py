@@ -74,8 +74,16 @@ class GetTopkRaggedCPTest(TestCase):
             block_size=block_size,
         )
         op.kv_len = total_tokens
+        op.total_kv_len = total_tokens
 
         device = self.device
+        op.total_local_ids = torch.arange(total_tokens, device=device, dtype=torch.long)
+        op.total_global_ids = torch.arange(
+            total_tokens, device=device, dtype=torch.long
+        )
+        op.cu_kv_seqlens_global = torch.tensor(
+            [0, total_tokens], dtype=torch.int32, device=device
+        )
         q_fp8 = torch.randn(
             total_tokens,
             index_n_heads,
@@ -136,7 +144,7 @@ class GetTopkRaggedCPTest(TestCase):
         op.q0_idx_global = cp_rank * local_tokens + op.q0_idx
         op.q1_idx_global = cp_rank * local_tokens + op.q1_idx
 
-        topk0, topk1 = op._get_topk_ragged_cp(
+        topk_result = op._get_topk_ragged_cp(
             q_fp8,
             weights,
             kv_cache,
@@ -145,6 +153,9 @@ class GetTopkRaggedCPTest(TestCase):
             cp_rank,
             cp_size,
         )
+        n0 = op.q0_idx.size(0)
+        topk0 = topk_result[:n0]
+        topk1 = topk_result[n0:]
 
         self.assertIsInstance(topk0, torch.Tensor)
         self.assertIsInstance(topk1, torch.Tensor)
