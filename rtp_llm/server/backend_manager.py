@@ -89,6 +89,11 @@ class BackendManager(object):
             model_config=model_config,
         )
 
+        # Initialize swap_ab once, must be called before init_deepep_wrapper
+        from rtp_llm.models_py.kernels.cuda.deepgemm_wrapper import init_swapab_once
+
+        init_swapab_once(engine_config.hw_kernel_config)
+
         # Initialize DeepEP wrapper if MOE model and DeepEP is enabled
         if (
             engine_config.model_specific_config.load_python_model
