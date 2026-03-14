@@ -44,6 +44,7 @@ public:
             // 需配合 GRPC_CLIENT_CHANNEL_BACKUP_POLL_INTERVAL_MS 使用，例如 500
             args.SetInt(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, 5000);
             args.SetInt(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);
+            args.SetInt(GRPC_ARG_MAX_METADATA_SIZE, 4 * 1024 * 1024);
             auto grpc_channel = grpc::CreateCustomChannel(peer, grpc::InsecureChannelCredentials(), args);
             if (!grpc_channel) {
                 std::string error_msg = "create grpc channel for " + peer + " failed";
