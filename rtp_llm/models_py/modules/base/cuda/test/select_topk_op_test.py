@@ -8,7 +8,7 @@ from torch.profiler import ProfilerActivity, profile
 
 from rtp_llm.config.model_config import ModelConfig
 
-from rtp_llm.ops.compute_ops import SelectTopkOp  # isort:skip
+from rtp_llm.ops.compute_ops import SelectTopkOp, FakeBalanceExpertOp  # isort:skip
 
 
 class SelectTopkOpTest(TestCase):
@@ -40,8 +40,7 @@ class SelectTopkOpTest(TestCase):
         model_config.expert_num = num_expert
         model_config.moe_k = top_k
         model_config.has_moe_norm = True
-        # Use default values for fake_balance_expert and dp_rank
-        select_topk_op = SelectTopkOp(model_config, fake_balance_expert=False, dp_rank=0)
+        select_topk_op = SelectTopkOp(model_config)
 
         router_logits = torch.randn(num_tokens, num_expert, dtype=dtype).to("cuda")
         router_logits_fp32 = router_logits.float()
@@ -102,6 +101,96 @@ class SelectTopkOpTest(TestCase):
                 dtype=params[3],
             ):
                 self._run_select_topk_op_test(*params)
+
+    def test_select_topk_fake_balance_expert(self):
+        torch.manual_seed(1)
+
+        NUM_EXPERTS = [128]
+        EP_SIZES = [1, 2, 4, 8, 16, 32, 64]
+        TP_SIZES = [1, 2, 4, 8]
+        BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+        NUM_TOPK = [4, 8, 16]
+
+        # Validate basic constraints first (so misconfigurations fail loudly).
+        for num_expert, ep_size in itertools.product(NUM_EXPERTS, EP_SIZES):
+            self.assertEqual(
+                num_expert % ep_size,
+                0,
+                msg=f"num_expert={num_expert} must be divisible by ep_size={ep_size}",
+            )
+
+        # Cache ops by (num_expert, ep_size, tp_size, top_k) to avoid rebuilding them per batch_size.
+        op_cache = {}
+
+        for num_expert, ep_size, tp_size, top_k in itertools.product(
+            NUM_EXPERTS, EP_SIZES, TP_SIZES, NUM_TOPK
+        ):
+            if ep_size % tp_size != 0:
+                continue
+            dp_size = ep_size // tp_size
+
+            cache_key = (num_expert, ep_size, tp_size, top_k)
+            select_topk_ops = op_cache.get(cache_key)
+            if select_topk_ops is None:
+                model_config = ModelConfig()
+                model_config.attn_config.head_num = 1
+                model_config.attn_config.size_per_head = 128
+                model_config.num_layers = 1
+                model_config.max_seq_len = 1
+                model_config.vocab_size = 5120
+                model_config.expert_num = num_expert
+                model_config.moe_k = top_k
+                model_config.has_moe_norm = True
+
+                select_topk_op = SelectTopkOp(model_config)
+                fake_balance_ops = [
+                    FakeBalanceExpertOp(
+                        expert_num=num_expert,
+                        moe_k=top_k,
+                        dp_rank=dp_rank,
+                        dp_size=dp_size,
+                        ep_size=ep_size,
+                    )
+                    for dp_rank in range(dp_size)
+                ]
+                select_topk_ops = (select_topk_op, fake_balance_ops)
+                op_cache[cache_key] = select_topk_ops
+
+            for batch_size in BATCH_SIZES:
+                with self.subTest(
+                    num_expert=num_expert,
+                    ep_size=ep_size,
+                    tp_size=tp_size,
+                    dp_size=dp_size,
+                    batch_size=batch_size,
+                    top_k=top_k,
+                ):
+                    # fake_balance_expert overwrites expert_ids / expert_scales;
+                    # SelectTopkOp.forward still requires a router_logits input.
+                    router_logits_fp32 = torch.zeros(
+                        (batch_size, num_expert), dtype=torch.float32
+                    )
+
+                    select_topk_op, fake_balance_ops = select_topk_ops
+                    global_counts = torch.zeros((num_expert,), dtype=torch.int64)
+                    topk_idx = torch.empty((batch_size, top_k), dtype=torch.int32)
+                    topk_w = torch.empty((batch_size, top_k), dtype=torch.float32)
+                    for fake_op in fake_balance_ops:
+                        select_topk_op.forward(router_logits_fp32, topk_idx, topk_w)
+                        fake_op.forward(topk_idx, topk_w)
+
+                        # fake_balance_expert is expected to set weights to 1.0
+                        self.assertTrue(bool(torch.all(topk_w == 1.0).item()))
+
+                        # Aggregate token -> expert assignment counts across all dp_rank
+                        global_counts += self._bincount_compat(
+                            topk_idx.reshape(-1), minlength=num_expert
+                        )
+
+                    total_assignments = batch_size * top_k * dp_size
+                    self._assert_token_distribution_balanced(
+                        global_counts, total_assignments
+                    )
 
 
 if __name__ == "__main__":
