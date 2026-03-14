@@ -53,7 +53,7 @@ def auto_configure_deepep(
     - PD separation + Decode node + Multi-node multi-GPU (>=9 GPUs): 1, 1, 1
     """
 
-    tp_size = parallelism_config.tp_size
+    tp_size = parallelism_config.get_attn_tp_size()
     ep_size = parallelism_config.ep_size
     moe_config.ll_num_max_token = ll_num_max_token
     moe_config.use_all_gather = (
