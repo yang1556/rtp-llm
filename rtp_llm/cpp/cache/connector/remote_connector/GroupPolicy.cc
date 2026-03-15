@@ -143,6 +143,8 @@ bool DefaultLayerGroupPolicy::genBlockBuffers(const std::vector<int32_t>&     gr
                                               const std::vector<int32_t>&     block_ids,
                                               kv_cache_manager::BlockBuffers& block_buffers) const {
     // yemu : pace_enable_gs is ugly adapter code, delete in the future
+    // fengfei: try pace size group. remove same iov size check
+#if 0
     static bool pace_enable_gs = autil::EnvUtil::getEnv("PACE_ENABLE_GATHERSCATTER", std::string("OFF")) == "ON";
     static auto push_iov       = [](std::vector<kv_cache_manager::Iov>& iovs, const BlockInfo& block_info) {
         iovs.push_back({kv_cache_manager::MemoryType::GPU, block_info.addr, block_info.size_bytes, false});
@@ -150,13 +152,18 @@ bool DefaultLayerGroupPolicy::genBlockBuffers(const std::vector<int32_t>&     gr
     static auto push_iov_raw = [](std::vector<kv_cache_manager::Iov>& iovs, void* addr, size_t sz) {
         iovs.push_back({kv_cache_manager::MemoryType::GPU, addr, sz, false});
     };
+#endif
+    static auto push_iov = [](std::vector<kv_cache_manager::Iov>& iovs, const BlockInfo& block_info) {
+        iovs.push_back({kv_cache_manager::MemoryType::GPU, block_info.addr, block_info.size_bytes, false});
+    };
     block_buffers.reserve(block_ids.size());
     for (size_t i = 0; i < block_ids.size(); ++i) {
         block_buffers.push_back({});
         const auto& layer_ids = group_to_layer_ids_.at(group_ids[i]);
         auto&       iovs      = block_buffers.back().iovs;
         iovs.reserve(layer_ids.size() * 2);
-        size_t iov_size = 0;
+        // fengfei: try pace size group. remove same iov size check
+        // size_t iov_size = 0;
 
         for (size_t j = 0; j < layer_ids.size(); ++j) {
             // if support scale, block_infos: {kv_info, scale_info}
@@ -165,6 +172,18 @@ bool DefaultLayerGroupPolicy::genBlockBuffers(const std::vector<int32_t>&     gr
                 RTP_LLM_LOG_WARNING(
                     "convertIndexToBuffer returned empty for layer_id [%d] block_id[%d]", layer_ids[j], block_ids[i]);
             }
+// TODO fengfei update, try pace size group. remove same iov size check
+#if 1
+            for (size_t idx = 0; idx < block_infos.size(); ++idx) {
+                CHECK_BLOCK_INFO_VALID(
+                    block_infos[idx],
+                    "convertIndexToBuffer failed layer_id [%d] block_id[%d], block_info.addr or block_info.size_bytes is invalid",
+                    j,
+                    i);
+                push_iov(iovs, block_infos[idx]);
+            }
+
+#else
             if (!pace_enable_gs) {
                 for (size_t idx = 0; idx < block_infos.size(); ++idx) {
                     CHECK_BLOCK_INFO_VALID(
@@ -200,6 +219,7 @@ bool DefaultLayerGroupPolicy::genBlockBuffers(const std::vector<int32_t>&     gr
                     }
                 }
             }
+#endif
         }
     }
     return true;
