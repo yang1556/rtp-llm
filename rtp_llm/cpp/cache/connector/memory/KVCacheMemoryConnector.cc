@@ -7,6 +7,7 @@
 #include "rtp_llm/cpp/cache/KVCacheAllocator.h"
 #include "rtp_llm/cpp/devices/DeviceBase.h"
 #include "rtp_llm/cpp/utils/Logger.h"
+#include "rtp_llm/cpp/utils/ProfilingScope.h"
 
 namespace rtp_llm {
 
@@ -94,6 +95,7 @@ void KVCacheMemoryConnector::initBlockPool() {
 
 std::shared_ptr<AsyncMatchContext> KVCacheMemoryConnector::asyncMatch(const std::shared_ptr<KVCacheResource>& resource,
                                                                       const std::shared_ptr<Meta>&            meta) {
+    RTP_LLM_PROFILE_FUNCTION();
     RTP_LLM_CHECK_WITH_INFO(meta != nullptr, "async match failed, meta is null");
     RTP_LLM_CHECK_WITH_INFO(resource != nullptr, "async match failed, resource is null");
     if (!meta->enableMemoryCache()) {
@@ -169,6 +171,7 @@ std::shared_ptr<AsyncContext> KVCacheMemoryConnector::asyncRead(const std::share
                                                                 const std::shared_ptr<AsyncMatchContext>& match_context,
                                                                 int start_read_block_index,
                                                                 int read_block_num) {
+    RTP_LLM_PROFILE_FUNCTION();
     RTP_LLM_CHECK_WITH_INFO(resource != nullptr, "async read failed, resource is null");
     const auto& cache_keys      = resource->cacheKeys();
     const auto  cache_keys_size = cache_keys.empty() ? 0 : cache_keys.size() - 1;
@@ -266,6 +269,7 @@ std::shared_ptr<KVCacheMemoryConnector::CopyPlan> KVCacheMemoryConnector::buildC
 
 std::shared_ptr<AsyncContext> KVCacheMemoryConnector::asyncWrite(const std::shared_ptr<KVCacheResource>& resource,
                                                                  const std::shared_ptr<Meta>&            meta) {
+    RTP_LLM_PROFILE_FUNCTION();
     RTP_LLM_CHECK_WITH_INFO(meta != nullptr, "async write failed, meta is null");
     RTP_LLM_CHECK_WITH_INFO(resource != nullptr, "async write failed, resource is null");
     if (!meta->enableMemoryCache()) {
@@ -493,6 +497,7 @@ void KVCacheMemoryConnector::printCopyPlan(const std::shared_ptr<CopyPlan>& copy
 }
 
 bool KVCacheMemoryConnector::copyCache(const MemoryOperationRequestPB& request, MemoryOperationResponsePB& response) {
+    RTP_LLM_PROFILE_FUNCTION();
     autil::ScopedTime2 timer;
     const auto         copy_direction =
         (request.copy_direction() == MemoryOperationRequestPB::H2D) ? CopyDirection::H2D : CopyDirection::D2H;
@@ -672,6 +677,7 @@ bool KVCacheMemoryConnector::checkLayerBlocks(const LayerBlockIds& layer_block_i
 }
 
 bool KVCacheMemoryConnector::mallocBlocks(size_t need_blocks, std::vector<BlockIdxType>& malloced_blocks) {
+    RTP_LLM_PROFILE_FUNCTION();
     if (need_blocks == 0) {
         RTP_LLM_LOG_WARNING("malloc memory blocks failed, need blocks cannot be 0");
         return false;
@@ -701,6 +707,7 @@ bool KVCacheMemoryConnector::mallocBlocks(size_t need_blocks, std::vector<BlockI
 }
 
 bool KVCacheMemoryConnector::freeBlocks(const std::vector<BlockIdxType>& blocks, bool cache_free) {
+    RTP_LLM_PROFILE_FUNCTION();
     std::vector<int> need_free_blocks;
     need_free_blocks.reserve(blocks.size());
     for (const auto& block : blocks) {
@@ -758,6 +765,7 @@ std::string KVCacheMemoryConnector::blockPoolDebugString() const {
 }
 
 void KVCacheMemoryConnector::putToCache(const MemoryBlockCache::CacheItem& item) {
+    RTP_LLM_PROFILE_FUNCTION();
     if (auto [success, popped_item_opt] = block_cache_->put(item); success) {
         RTP_LLM_LOG_DEBUG("write cache, cache key: %ld, block index: %d, block size: %zu",
                           item.cache_key,
@@ -773,6 +781,7 @@ void KVCacheMemoryConnector::putToCache(const MemoryBlockCache::CacheItem& item)
 
 // this function is called under lock
 bool KVCacheMemoryConnector::ensureEnoughFreeBlocks(size_t need_blocks) {
+    RTP_LLM_PROFILE_FUNCTION();
     auto free_blocks = block_pool_->freeBlocksNum();
     if (free_blocks >= need_blocks) {
         return true;
