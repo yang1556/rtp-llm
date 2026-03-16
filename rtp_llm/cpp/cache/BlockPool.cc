@@ -4,6 +4,7 @@
 #include "rtp_llm/cpp/disaggregate/cache_store/MemoryUtil.h"
 #include "rtp_llm/cpp/disaggregate/cache_store/NormalCacheStore.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
+#include "rtp_llm/cpp/utils/ProfilingScope.h"
 
 namespace rtp_llm {
 
@@ -204,6 +205,7 @@ std::vector<torch::Tensor> BlockPool::allLayerScaleCacheBase() const {
 }
 
 BlockIndicesType BlockPool::malloc(int num_blocks) {
+    RTP_LLM_PROFILE_FUNCTION();
     if (num_blocks <= 0) {
         return {};
     }
@@ -233,6 +235,7 @@ void BlockPool::requestFree(BlockIdxType block_idx) {
 }
 
 void BlockPool::requestFree(const BlockIndicesType& block_ids) {
+    RTP_LLM_PROFILE_FUNCTION();
     freeImpl(block_ids);
     {
         std::lock_guard<std::mutex> lock(req_con_mu_);
@@ -247,6 +250,7 @@ void BlockPool::connectorFree(BlockIdxType block_idx) {
 }
 
 void BlockPool::connectorFree(const BlockIndicesType& block_indices) {
+    RTP_LLM_PROFILE_FUNCTION();
     freeImpl(block_indices);
     {
         std::lock_guard<std::mutex> lock(req_con_mu_);
@@ -265,6 +269,7 @@ void BlockPool::blockCacheFree(const BlockIndicesType& block_ids) {
 }
 
 void BlockPool::freeImpl(const BlockIndicesType& block_ids) {
+    RTP_LLM_PROFILE_FUNCTION();
     std::scoped_lock lock(all_mu_, free_mu_);
     all_ref_counter_.decrementRefCounter(block_ids);
     for (auto& block_id : block_ids) {
@@ -280,6 +285,7 @@ void BlockPool::requestReference(BlockIdxType block_idx) {
 }
 
 void BlockPool::requestReference(const BlockIndicesType& block_ids) {
+    RTP_LLM_PROFILE_FUNCTION();
     {
         std::lock_guard<std::mutex> lock(req_con_mu_);
         request_ref_counter_.incrementRefCounter(block_ids);
@@ -297,6 +303,7 @@ void BlockPool::connectorReference(BlockIdxType block_idx) {
 }
 
 void BlockPool::connectorReference(const BlockIndicesType& block_indices) {
+    RTP_LLM_PROFILE_FUNCTION();
     {
         std::lock_guard<std::mutex> lock(req_con_mu_);
         connector_ref_counter_.incrementRefCounter(block_indices);
@@ -314,6 +321,7 @@ void BlockPool::blockCacheReference(BlockIdxType block_idx) {
 }
 
 void BlockPool::blockCacheReference(const BlockIndicesType& block_ids) {
+    RTP_LLM_PROFILE_FUNCTION();
     std::lock_guard<std::mutex> lock(all_mu_);
     all_ref_counter_.incrementRefCounter(block_ids);
 }
