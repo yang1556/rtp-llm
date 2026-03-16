@@ -457,11 +457,6 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         // Convert extra_input_ids
         if (inputs.extra_input_ids.combo_extra_input_ids != nullptr
             && inputs.extra_input_ids.extra_input_ids_lengths != nullptr) {
-            size_t combo_size   = inputs.extra_input_ids.combo_extra_input_ids->shape()[0];
-            size_t lengths_size = inputs.extra_input_ids.extra_input_ids_lengths->shape()[0];
-            RTP_LLM_LOG_INFO("[PyWrappedModel::forward] Converting extra_input_ids: combo_size=%zu, lengths_size=%zu",
-                             combo_size,
-                             lengths_size);
             // Convert Buffer to torch::Tensor
             py_model_inputs.extra_input_ids.combo_extra_input_ids =
                 tensorHoldHostAndToCuda(Buffer2torchTensor(inputs.extra_input_ids.combo_extra_input_ids, false));

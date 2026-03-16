@@ -196,8 +196,6 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
     extra_input_ids_lengths_vec.reserve(total_context_batch_size);
     extra_input_ids_locs_vec.reserve(total_context_batch_size);
 
-    RTP_LLM_LOG_INFO("[NormalBatchStreamProcessor] Collecting extra_input_ids from %zu context streams",
-                     context_streams.size());
     size_t stream_idx = 0;
     for (const auto& stream : context_streams) {
         auto current_batch_size = stream->currentBatchSize();
@@ -212,13 +210,10 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
             } else {
                 extra_input_ids_lengths_vec.push_back(0);
                 extra_input_ids_locs_vec.push_back(-1);
-                RTP_LLM_LOG_INFO(
-                    "[NormalBatchStreamProcessor] No extra_input_ids: stream_idx=%zu, batch_idx=%d", stream_idx, i);
             }
         }
         stream_idx++;
     }
-    RTP_LLM_LOG_INFO("[NormalBatchStreamProcessor] Total extra_input_ids_size=%zu", total_extra_input_ids_size);
 
     // Allocate buffers for extra_input_ids
     if (total_extra_input_ids_size > 0) {
@@ -350,8 +345,6 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
         int context_batch_idx      = 0;
         int extra_input_ids_offset = 0;
 
-        RTP_LLM_LOG_INFO("[NormalBatchStreamProcessor] Filling extra_input_ids data: total_size=%zu",
-                         total_extra_input_ids_size);
         for (const auto& stream : context_streams) {
             auto current_batch_size = stream->currentBatchSize();
             for (auto i = 0; i < current_batch_size; ++i) {
@@ -366,12 +359,6 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
                     int extra_input_ids_loc                     = generate_input->extra_input_ids_loc;
                     extra_input_ids_locs_ptr[context_batch_idx] = extra_input_ids_loc;
 
-                    RTP_LLM_LOG_INFO(
-                        "[NormalBatchStreamProcessor] Filled extra_input_ids: batch_idx=%d, len=%zu, offset=%d, loc=%d",
-                        context_batch_idx,
-                        len,
-                        extra_input_ids_offset,
-                        extra_input_ids_loc);
                     extra_input_ids_offset += len;
                 } else {
                     extra_input_ids_lengths_ptr[context_batch_idx] = 0;
@@ -380,12 +367,7 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
                 context_batch_idx++;
             }
         }
-        RTP_LLM_LOG_INFO(
-            "[NormalBatchStreamProcessor] Completed filling extra_input_ids: final_offset=%d, context_batch_size=%zu",
-            extra_input_ids_offset,
-            total_context_batch_size);
     } else {
-        RTP_LLM_LOG_INFO("[NormalBatchStreamProcessor] No extra_input_ids to fill (total_size=0)");
     }
 
     return model_input;
