@@ -2,6 +2,8 @@ from typing import Optional
 
 import flashinfer
 import torch
+import triton
+import triton.language as tl
 
 from rtp_llm.models_py.modules.factory.attention import common
 from rtp_llm.models_py.modules.factory.attention.cuda_impl.utils import is_sm_100
@@ -81,6 +83,66 @@ class FlashInferTRTLLMParams(object):
         self.block_tables = block_tables
         self.cu_seqlens = cu_seqlens
         self.cu_kv_seqlens = cu_kv_seqlens
+
+
+@triton.jit
+def _prepare_cuda_graph_kernel(
+    src1_ptr,
+    src2_ptr,
+    seq_lens_out_ptr,
+    cu_kv_seqlens_out_ptr,
+    block_id_ptr,
+    kv_offset_ptr,
+    page_size,
+    N,
+    M,
+    total_bm,
+    MODE: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Unified kernel for prepare_cuda_graph across all Impl classes.
+
+    MODE=0: decode   — seq_lens = copy(src1)
+    MODE=1: spec-dec — seq_lens = src1 + src2[0]
+    MODE=2: prefill  — seq_lens = src1 + src2, cu_kv_seqlens = [0, cumsum(ceil_div(…))]
+    All modes also convert block_id[B,M] -> kv_offset[B,1,2,M].
+    """
+    pid = tl.program_id(0)
+
+    if pid == 0:
+        offsets_n = tl.arange(0, BLOCK_SIZE)
+        mask_n = offsets_n < N
+
+        if MODE == 0:
+            vals = tl.load(src1_ptr + offsets_n, mask=mask_n)
+            tl.store(seq_lens_out_ptr + offsets_n, vals, mask=mask_n)
+        elif MODE == 1:
+            q_len = tl.load(src2_ptr)
+            prefix = tl.load(src1_ptr + offsets_n, mask=mask_n)
+            tl.store(seq_lens_out_ptr + offsets_n, prefix + q_len, mask=mask_n)
+        else:
+            input_lens = tl.load(src1_ptr + offsets_n, mask=mask_n, other=0)
+            prefix_lens = tl.load(src2_ptr + offsets_n, mask=mask_n, other=0)
+            seq_lens = input_lens + prefix_lens
+            tl.store(seq_lens_out_ptr + offsets_n, seq_lens, mask=mask_n)
+            page_per_seq = (seq_lens + page_size - 1) // page_size
+            cu_kv = tl.cumsum(page_per_seq, axis=0)
+            tl.store(cu_kv_seqlens_out_ptr + offsets_n + 1, cu_kv, mask=mask_n)
+            first_mask = offsets_n == 0
+            tl.store(
+                cu_kv_seqlens_out_ptr + offsets_n,
+                tl.zeros([BLOCK_SIZE], dtype=tl.int32),
+                mask=first_mask,
+            )
+
+    bm_offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    bm_mask = bm_offsets < total_bm
+    batch_idx = bm_offsets // M
+    col_idx = bm_offsets % M
+    block_id = tl.load(block_id_ptr + bm_offsets, mask=bm_mask)
+    out_base = batch_idx * 2 * M + col_idx
+    tl.store(kv_offset_ptr + out_base, block_id * 2, mask=bm_mask)
+    tl.store(kv_offset_ptr + out_base + M, block_id * 2 + 1, mask=bm_mask)
 
 
 class FlashInferTRTLLMPrefillOp(object):
@@ -353,16 +415,23 @@ class FlashInferTRTLLMPrefillImpl(FMHAImplBase):
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
-        new_fmha_params = self.fmha_impl.prepare(attn_inputs)
-        self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
-        self.fmha_params.cu_kv_seqlens.copy_(
-            new_fmha_params.cu_kv_seqlens, non_blocking=True
+        N = self.fmha_params.batch_size
+        M = attn_inputs.kv_cache_block_id_device.shape[1]
+        total_bm = N * M
+        BLOCK_SIZE = max(triton.next_power_of_2(N), 1024)
+        grid = (triton.cdiv(total_bm, BLOCK_SIZE),)
+        _prepare_cuda_graph_kernel[grid](
+            attn_inputs.input_lengths_d,
+            attn_inputs.prefix_lengths_d,
+            self.fmha_params.seq_lens,
+            self.fmha_params.cu_kv_seqlens,
+            attn_inputs.kv_cache_block_id_device,
+            self.rope_params.kv_cache_offset,
+            self.fmha_impl.seq_size_per_block,
+            N, M, total_bm,
+            MODE=2,
+            BLOCK_SIZE=BLOCK_SIZE,
         )
-
-        new_rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
-        new_offset = new_rope_params.kv_cache_offset
-        old_offset = self.rope_params.kv_cache_offset
-        common.copy_kv_cache_offset(old_offset, new_offset)
 
 
 class FlashInferTRTLLMSpecDecodeImpl(FMHAImplBase):
@@ -418,13 +487,37 @@ class FlashInferTRTLLMSpecDecodeImpl(FMHAImplBase):
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
-        new_fmha_params = self.fmha_impl.prepare(attn_inputs)
-        self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
-
-        new_rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
-        new_offset = new_rope_params.kv_cache_offset
-        old_offset = self.rope_params.kv_cache_offset
-        common.copy_kv_cache_offset(old_offset, new_offset)
+        N = self.fmha_params.batch_size
+        M = attn_inputs.kv_cache_block_id_device.shape[1]
+        total_bm = N * M
+        BLOCK_SIZE = max(triton.next_power_of_2(N), 1024)
+        grid = (triton.cdiv(total_bm, BLOCK_SIZE),)
+        if not attn_inputs.is_prefill:
+            _prepare_cuda_graph_kernel[grid](
+                attn_inputs.sequence_lengths_plus_1_d,
+                attn_inputs.sequence_lengths_plus_1_d,
+                self.fmha_params.seq_lens,
+                self.fmha_params.seq_lens,
+                attn_inputs.kv_cache_block_id_device,
+                self.rope_params.kv_cache_offset,
+                0,
+                N, M, total_bm,
+                MODE=0,
+                BLOCK_SIZE=BLOCK_SIZE,
+            )
+        else:
+            _prepare_cuda_graph_kernel[grid](
+                attn_inputs.prefix_lengths_d,
+                attn_inputs.input_lengths_d,
+                self.fmha_params.seq_lens,
+                self.fmha_params.seq_lens,
+                attn_inputs.kv_cache_block_id_device,
+                self.rope_params.kv_cache_offset,
+                0,
+                N, M, total_bm,
+                MODE=1,
+                BLOCK_SIZE=BLOCK_SIZE,
+            )
 
 
 class FlashInferTRTLLMDecodeImpl(FMHAImplBase):
@@ -480,10 +573,20 @@ class FlashInferTRTLLMDecodeImpl(FMHAImplBase):
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
-        new_fmha_params = self.fmha_impl.prepare(attn_inputs)
-        self.fmha_params.seq_lens.copy_(new_fmha_params.seq_lens, non_blocking=True)
-
-        new_rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
-        new_offset = new_rope_params.kv_cache_offset
-        old_offset = self.rope_params.kv_cache_offset
-        common.copy_kv_cache_offset(old_offset, new_offset)
+        N = self.fmha_params.batch_size
+        M = attn_inputs.kv_cache_block_id_device.shape[1]
+        total_bm = N * M
+        BLOCK_SIZE = max(triton.next_power_of_2(N), 1024)
+        grid = (triton.cdiv(total_bm, BLOCK_SIZE),)
+        _prepare_cuda_graph_kernel[grid](
+            attn_inputs.sequence_lengths_plus_1_d,
+            attn_inputs.sequence_lengths_plus_1_d,
+            self.fmha_params.seq_lens,
+            self.fmha_params.seq_lens,
+            attn_inputs.kv_cache_block_id_device,
+            self.rope_params.kv_cache_offset,
+            0,
+            N, M, total_bm,
+            MODE=0,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
