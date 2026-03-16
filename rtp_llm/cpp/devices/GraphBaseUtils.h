@@ -1,16 +1,10 @@
 #pragma once
 
 #include "ATen/core/TensorBody.h"
+#include "rtp_llm/cpp/devices/GraphRunnerDeviceShims.h"
 #include "rtp_llm/cpp/utils/Logger.h"
 #include "rtp_llm/models_py/bindings/OpDefs.h"
-
-#if USING_ROCM
-#include <ATen/hip/HIPGraph.h>
-#include "rtp_llm/cpp/devices/GraphRunnerDeviceShims.h"
-#else
-#include <ATen/cuda/CUDAGraph.h>
-#include "rtp_llm/cpp/cuda/cuda_host_utils.h"
-#endif
+#include <torch/version.h>
 
 #include <string>
 
@@ -71,47 +65,26 @@ public:
 
 class GraphInstance {
 public:
-    at::cuda::CUDAGraph graph_;
-    CaptureMemoryHold   mem_hold_;
-};
-
-#if USING_ROCM
-
-class CudaGraphStreamLife {
-public:
-    CudaGraphStreamLife(at::hip::HIPStream capture_stream):
-        origin_stream_(at::hip::getCurrentHIPStream(at::hip::current_device())) {
-        at::hip::setCurrentHIPStream(capture_stream);
-        RTP_LLM_LOG_INFO("Set HIP Stream: capture_stream -> %d, origin_stream -> %d",
-                         capture_stream.stream(),
-                         origin_stream_.stream());
-    }
-    ~CudaGraphStreamLife() {
-        at::hip::setCurrentHIPStream(origin_stream_);
-    }
-
-    CudaGraphStreamLife(const CudaGraphStreamLife&)            = delete;
-    CudaGraphStreamLife& operator=(const CudaGraphStreamLife&) = delete;
-    CudaGraphStreamLife(CudaGraphStreamLife&&)                 = delete;
-    CudaGraphStreamLife& operator=(CudaGraphStreamLife&&)      = delete;
-
-private:
-    at::hip::HIPStream origin_stream_;
-};
-
+#if (TORCH_VERSION_MAJOR > 2) || (TORCH_VERSION_MAJOR == 2 && TORCH_VERSION_MINOR >= 8)
+    explicit GraphInstance(bool keep_graph = false): graph_(keep_graph) {}
 #else
+    explicit GraphInstance(bool keep_graph = false): graph_() {
+        (void)keep_graph;
+    }
+#endif
+    rtp_llm::graph_runner::GraphType graph_;
+    CaptureMemoryHold                mem_hold_;
+};
 
 class CudaGraphStreamLife {
 public:
-    CudaGraphStreamLife(at::cuda::CUDAStream capture_stream):
-        origin_stream_(at::cuda::getCurrentCUDAStream(at::cuda::current_device())) {
-        at::cuda::setCurrentCUDAStream(capture_stream);
-        RTP_LLM_LOG_INFO("Set Cuda Stream: capture_stream -> %d, origin_stream -> %d",
-                         capture_stream.stream(),
-                         origin_stream_.stream());
+    explicit CudaGraphStreamLife(rtp_llm::graph_runner::GraphStream capture_stream):
+        origin_stream_(rtp_llm::graph_runner::graphGetCurrentStream()) {
+        rtp_llm::graph_runner::graphSetCurrentStream(capture_stream);
+        RTP_LLM_LOG_INFO("Set graph stream for capture.");
     }
     ~CudaGraphStreamLife() {
-        at::cuda::setCurrentCUDAStream(origin_stream_);
+        rtp_llm::graph_runner::graphSetCurrentStream(origin_stream_);
     }
 
     CudaGraphStreamLife(const CudaGraphStreamLife&)            = delete;
@@ -120,29 +93,17 @@ public:
     CudaGraphStreamLife& operator=(CudaGraphStreamLife&&)      = delete;
 
 private:
-    at::cuda::CUDAStream origin_stream_;
+    rtp_llm::graph_runner::GraphStream origin_stream_;
 };
-
-#endif
 
 class CudaGraphCaptureGuard {
 public:
-#if USING_ROCM
     explicit CudaGraphCaptureGuard(rtp_llm::graph_runner::GraphNcclCaptureContext* ctx = nullptr): ctx_(ctx) {
         rtp_llm::graph_runner::enter_graph_capture(ctx_);
     }
-#else
-    CudaGraphCaptureGuard() {
-        rtp_llm::CaptureCheck::in_cuda_graph_capture = true;
-    }
-#endif
 
     ~CudaGraphCaptureGuard() {
-#if USING_ROCM
         rtp_llm::graph_runner::exit_graph_capture(ctx_);
-#else
-        rtp_llm::CaptureCheck::in_cuda_graph_capture = false;
-#endif
     }
 
     CudaGraphCaptureGuard(const CudaGraphCaptureGuard&)            = delete;
@@ -151,7 +112,5 @@ public:
     CudaGraphCaptureGuard& operator=(CudaGraphCaptureGuard&&)      = delete;
 
 private:
-#if USING_ROCM
     rtp_llm::graph_runner::GraphNcclCaptureContext* ctx_{nullptr};
-#endif
 };

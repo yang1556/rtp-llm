@@ -5,14 +5,13 @@
 #include "rtp_llm/cpp/utils/Logger.h"
 
 #if USING_ROCM
+#include <ATen/hip/HIPGraph.h>
 #include <ATen/hip/HIPContext.h>
 #define GRAPH_DEVICE_TYPE c10::DeviceType::HIP
-#define GRAPH_GET_STREAM() at::hip::getCurrentHIPStream()
 #else
+#include <ATen/cuda/CUDAGraph.h>
 #include <ATen/cuda/CUDAContext.h>
-#include "rtp_llm/cpp/cuda/cuda_host_utils.h"
 #define GRAPH_DEVICE_TYPE c10::DeviceType::CUDA
-#define GRAPH_GET_STREAM() at::cuda::getCurrentCUDAStream()
 #endif
 
 namespace py = pybind11;
@@ -30,6 +29,43 @@ struct GraphNcclCaptureContext {
     int     rank{0};
     int     world_size{1};
 };
+
+#if USING_ROCM
+using GraphStream = at::hip::HIPStream;
+// In ROCm builds, PyTorch still exposes graph object under at::cuda namespace.
+using GraphType = at::cuda::CUDAGraph;
+#else
+using GraphStream = at::cuda::CUDAStream;
+using GraphType   = at::cuda::CUDAGraph;
+#endif
+
+inline GraphStream graphGetStreamFromPool(bool is_high_priority) {
+#if USING_ROCM
+    return at::hip::getStreamFromPool(is_high_priority);
+#else
+    return at::cuda::getStreamFromPool(is_high_priority);
+#endif
+}
+
+inline GraphStream graphGetCurrentStream() {
+#if USING_ROCM
+    return at::hip::getCurrentHIPStream(at::hip::current_device());
+#else
+    return at::cuda::getCurrentCUDAStream(at::cuda::current_device());
+#endif
+}
+
+inline void graphSetCurrentStream(GraphStream stream) {
+#if USING_ROCM
+    at::hip::setCurrentHIPStream(stream);
+#else
+    at::cuda::setCurrentCUDAStream(stream);
+#endif
+}
+
+inline torch::Event makeGraphEvent() {
+    return torch::Event(GRAPH_DEVICE_TYPE);
+}
 
 inline void register_graph_capture_nccl_comm(void* nccl_comm, int world_size, int rank) {
 #if USING_ROCM

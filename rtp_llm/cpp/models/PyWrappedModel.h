@@ -49,6 +49,7 @@ private:
 
     GraphBase*                                 graph_runner_{nullptr};
     py::object                                 py_model_;
+    py::object                                 held_attn_pyobj_;
     bool                                       enable_cuda_graph_{false};
     bool                                       is_prefill_cuda_graph_mode_{false};
     std::unique_ptr<IContextParallelProcessor> context_parallel_processor_{nullptr};

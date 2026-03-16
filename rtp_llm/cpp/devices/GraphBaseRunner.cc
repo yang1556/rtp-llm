@@ -34,7 +34,7 @@ void optimizedCopyAsync(const torch::Tensor& src, torch::Tensor& dst, size_t siz
         return;
     }
 
-    cudaStream_t stream = GRAPH_GET_STREAM().stream();
+    cudaStream_t stream = graph_runner::graphGetCurrentStream().stream();
     if (src.is_cuda() && dst.is_cuda()) {
         check_cuda_value(cudaMemcpyAsync(dst.data_ptr(), src.data_ptr(), size, cudaMemcpyDeviceToDevice, stream));
     } else if (!src.is_cuda() && !dst.is_cuda()) {
@@ -203,7 +203,7 @@ PyModelOutputs CudaGraphRunner::forward(const PyModelInputs& inputs, CudaGraphSt
                 0, 0, state.seq_len_sum);
     }
     // record forward done event
-    forward_event_.record(GRAPH_GET_STREAM());
+    forward_event_.record(graph_runner::graphGetCurrentStream());
     RTP_LLM_LOG_DEBUG("Replay End");
     return outputs;
 }
@@ -433,8 +433,6 @@ void CudaGraphRunner::initCapture() {
             RTP_LLM_LOG_INFO("CUDA graph capture for embedding, num_tokens_per_bs_: %d", num_tokens_per_bs_);
         }
         max_num_token_ = max_bs_ * num_tokens_per_bs_;
-        // Capture
-        at::cuda::CUDAGraph graph;
         if (is_prefill_cuda_graph_mode_) {
             capture_range_ = getPrefillSequenceLengthsToCapture();
             // Set max_perfill_cuda_graph_len_ to the maximum value from capture_range_
@@ -518,9 +516,9 @@ void CudaGraphRunner::captureOneGraphInstance(int key, const char* key_type) {
         // sync before capture
         check_cuda_value(cudaDeviceSynchronize());
 
-        CudaGraphStreamLife  stream_life(capture_stream_);
-        at::cuda::CUDAGraph& graph               = graph_instances_[key].graph_;
-        std::string          output_dot_filename = "";
+        CudaGraphStreamLife stream_life(capture_stream_);
+        auto&               graph               = graph_instances_[key].graph_;
+        std::string         output_dot_filename = "";
         if (enable_cuda_graph_debug_mode_) {
             graph.enable_debug_mode();
             // Generate unique filename with num_tokens_per_bs, key_type and key
@@ -542,7 +540,9 @@ void CudaGraphRunner::captureOneGraphInstance(int key, const char* key_type) {
             graph.capture_end();
         }
         if (enable_cuda_graph_debug_mode_) {
+            RTP_LLM_LOG_INFO("Calling debug_dump to generate: %s", output_dot_filename.c_str());
             graph.debug_dump(output_dot_filename.c_str());
+            RTP_LLM_LOG_INFO("debug_dump completed for: %s", output_dot_filename.c_str());
         }
     }
 }
