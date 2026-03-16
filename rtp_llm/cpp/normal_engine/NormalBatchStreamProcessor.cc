@@ -367,7 +367,6 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
                 context_batch_idx++;
             }
         }
-    } else {
     }
 
     return model_input;

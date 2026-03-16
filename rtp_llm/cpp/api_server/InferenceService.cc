@@ -258,7 +258,6 @@ InferenceService::fillGenerateInput(int64_t                                reque
             (*input->extra_input_ids)->data(), result.extra_input_ids->data(), (*input->extra_input_ids)->sizeBytes());
         // Store location information (relative to single sequence; later converted to global index)
         input->extra_input_ids_loc = result.extra_input_ids_loc;
-    } else {
     }
 
     if (metric_reporter_) {
