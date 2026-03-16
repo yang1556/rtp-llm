@@ -103,7 +103,7 @@ absl::Status EmbeddingEngine::step() {
         return absl::OkStatus();
     }
     if (gen_timeline_ && nullptr == profiler_) {
-        profiler_ = std::make_shared<CudaProfiler>("embedding_profiler_");
+        profiler_ = std::make_shared<TorchProfile>("embedding_profiler_");
         profiler_->start();
     }
     try {
