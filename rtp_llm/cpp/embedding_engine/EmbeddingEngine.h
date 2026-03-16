@@ -61,7 +61,7 @@ private:
     std::unique_ptr<EmbeddingScheduler> scheduler_;
     ResourceContext                     resource_context_;
     kmonitor::MetricsReporterPtr        metrics_reporter_ = nullptr;
-    std::shared_ptr<CudaProfiler>       profiler_;
+    std::shared_ptr<TorchProfile>       profiler_;
     bool                                gen_timeline_ = false;
 };
 
