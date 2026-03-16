@@ -145,6 +145,20 @@ def _prepare_cuda_graph_kernel(
     tl.store(kv_offset_ptr + out_base + M, block_id * 2 + 1, mask=bm_mask)
 
 
+def _init_cg_launch_params(batch_size, kv_cache_block_id_device, *extra_tensors):
+    """Pre-compute all CUDA graph launch parameters once.
+
+    Avoids per-call triton.next_power_of_2/cdiv, arithmetic, and chained
+    attribute lookups. Returns a flat tuple for fast local-variable unpacking.
+    """
+    N = batch_size
+    M = kv_cache_block_id_device.shape[1]
+    total_bm = N * M
+    BS = max(triton.next_power_of_2(N), 1024)
+    grid = (triton.cdiv(total_bm, BS),)
+    return (grid, *extra_tensors, N, M, total_bm, BS)
+
+
 class FlashInferTRTLLMPrefillOp(object):
     def __init__(
         self,
@@ -374,24 +388,27 @@ class FlashInferTRTLLMPrefillImpl(FMHAImplBase):
         attn_inputs: PyAttentionInputs,
         parallelism_config: Optional[ParallelismConfig] = None,
     ) -> None:
-        # Create implementations
         self.need_rope_kv_cache = attn_configs.need_rope_kv_cache
         self.fmha_impl = FlashInferTRTLLMPrefillOp(attn_configs)
         self.rope_kvcache_impl = FusedRopeKVCachePrefillOpQOut(attn_configs)
-
-        # Store input info
         self.attn_inputs = attn_inputs
-
-        # Create params
         self.fmha_params = self.fmha_impl.prepare(attn_inputs)
         self.rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
         self.write_cache_store_impl = common.create_write_cache_store_impl(attn_inputs)
+
+        self._cg = _init_cg_launch_params(
+            self.fmha_params.batch_size,
+            attn_inputs.kv_cache_block_id_device,
+            self.fmha_params.seq_lens,
+            self.fmha_params.cu_kv_seqlens,
+            self.rope_params.kv_cache_offset,
+            self.fmha_impl.seq_size_per_block,
+        )
 
     @classmethod
     def support(
         cls, attn_configs: AttentionConfigs, attn_inputs: PyAttentionInputs
     ) -> bool:
-        # Create temporary instance to check support
         fmha_impl = FlashInferTRTLLMPrefillOp(attn_configs)
         return fmha_impl.support(attn_inputs)
 
@@ -400,37 +417,25 @@ class FlashInferTRTLLMPrefillImpl(FMHAImplBase):
         qkv: torch.Tensor,
         kv_cache: Optional[LayerKVCache],
     ) -> torch.Tensor:
-        # Apply RoPE and KV Cache processing
         if self.need_rope_kv_cache:
             fmha_input = self.rope_kvcache_impl.forward(qkv, kv_cache, self.rope_params)
         else:
             fmha_input = qkv
 
-        # Apply write cache store if needed
         common.apply_write_cache_store(
             self.write_cache_store_impl, self.attn_inputs, kv_cache
         )
-
-        # Execute FMHA forward
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
-        N = self.fmha_params.batch_size
-        M = attn_inputs.kv_cache_block_id_device.shape[1]
-        total_bm = N * M
-        BLOCK_SIZE = max(triton.next_power_of_2(N), 1024)
-        grid = (triton.cdiv(total_bm, BLOCK_SIZE),)
+        grid, sl, cu, kvo, ps, N, M, tbm, BS = self._cg
         _prepare_cuda_graph_kernel[grid](
             attn_inputs.input_lengths_d,
             attn_inputs.prefix_lengths_d,
-            self.fmha_params.seq_lens,
-            self.fmha_params.cu_kv_seqlens,
+            sl, cu,
             attn_inputs.kv_cache_block_id_device,
-            self.rope_params.kv_cache_offset,
-            self.fmha_impl.seq_size_per_block,
-            N, M, total_bm,
-            MODE=2,
-            BLOCK_SIZE=BLOCK_SIZE,
+            kvo, ps, N, M, tbm,
+            MODE=2, BLOCK_SIZE=BS,
         )
 
 
@@ -442,28 +447,28 @@ class FlashInferTRTLLMSpecDecodeImpl(FMHAImplBase):
         attn_inputs: PyAttentionInputs,
         parallelism_config: Optional[ParallelismConfig] = None,
     ) -> None:
-        # Create implementations
         self.need_rope_kv_cache = attn_configs.need_rope_kv_cache
         self.fmha_impl = FlashInferTRTLLMDecodeOp(attn_configs)
         self.rope_kvcache_impl = FusedRopeKVCachePrefillOpQOut(attn_configs)
         self.attn_configs = attn_configs
-
-        # Store input info
         self.attn_inputs = attn_inputs
-
-        # Create params
         self.fmha_params = self.fmha_impl.prepare(attn_inputs)
         self.rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
         self.write_cache_store_impl = common.create_write_cache_store_impl(attn_inputs)
+
+        self._cg = _init_cg_launch_params(
+            self.fmha_params.batch_size,
+            attn_inputs.kv_cache_block_id_device,
+            self.fmha_params.seq_lens,
+            self.rope_params.kv_cache_offset,
+        )
 
     @classmethod
     def support(
         cls, attn_configs: AttentionConfigs, attn_inputs: PyAttentionInputs
     ) -> bool:
-        # Check MLA is not enabled
         if attn_configs.use_mla:
             return False
-        # Create temporary instance to check support
         fmha_impl = FlashInferTRTLLMDecodeOp(attn_configs)
         return fmha_impl.support(attn_inputs)
 
@@ -472,51 +477,34 @@ class FlashInferTRTLLMSpecDecodeImpl(FMHAImplBase):
         qkv: torch.Tensor,
         kv_cache: Optional[LayerKVCache],
     ) -> torch.Tensor:
-        # Apply RoPE and KV Cache processing
         if self.need_rope_kv_cache:
             fmha_input = self.rope_kvcache_impl.forward(qkv, kv_cache, self.rope_params)
         else:
             fmha_input = qkv
 
-        # Apply write cache store if needed
         common.apply_write_cache_store(
             self.write_cache_store_impl, self.attn_inputs, kv_cache
         )
-
-        # Execute FMHA forward
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
-        N = self.fmha_params.batch_size
-        M = attn_inputs.kv_cache_block_id_device.shape[1]
-        total_bm = N * M
-        BLOCK_SIZE = max(triton.next_power_of_2(N), 1024)
-        grid = (triton.cdiv(total_bm, BLOCK_SIZE),)
+        grid, sl, kvo, N, M, tbm, BS = self._cg
         if not attn_inputs.is_prefill:
+            s = attn_inputs.sequence_lengths_plus_1_d
             _prepare_cuda_graph_kernel[grid](
-                attn_inputs.sequence_lengths_plus_1_d,
-                attn_inputs.sequence_lengths_plus_1_d,
-                self.fmha_params.seq_lens,
-                self.fmha_params.seq_lens,
+                s, s, sl, sl,
                 attn_inputs.kv_cache_block_id_device,
-                self.rope_params.kv_cache_offset,
-                0,
-                N, M, total_bm,
-                MODE=0,
-                BLOCK_SIZE=BLOCK_SIZE,
+                kvo, 0, N, M, tbm,
+                MODE=0, BLOCK_SIZE=BS,
             )
         else:
             _prepare_cuda_graph_kernel[grid](
                 attn_inputs.prefix_lengths_d,
                 attn_inputs.input_lengths_d,
-                self.fmha_params.seq_lens,
-                self.fmha_params.seq_lens,
+                sl, sl,
                 attn_inputs.kv_cache_block_id_device,
-                self.rope_params.kv_cache_offset,
-                0,
-                N, M, total_bm,
-                MODE=1,
-                BLOCK_SIZE=BLOCK_SIZE,
+                kvo, 0, N, M, tbm,
+                MODE=1, BLOCK_SIZE=BS,
             )
 
 
@@ -528,28 +516,28 @@ class FlashInferTRTLLMDecodeImpl(FMHAImplBase):
         attn_inputs: PyAttentionInputs,
         parallelism_config: Optional[ParallelismConfig] = None,
     ) -> None:
-        # Create implementations
         self.need_rope_kv_cache = attn_configs.need_rope_kv_cache
         self.fmha_impl = FlashInferTRTLLMDecodeOp(attn_configs)
         self.rope_kvcache_impl = FusedRopeKVCacheDecodeOp(attn_configs)
         self.attn_configs = attn_configs
-
-        # Store input info
         self.attn_inputs = attn_inputs
-
-        # Create params
         self.fmha_params = self.fmha_impl.prepare(attn_inputs)
         self.rope_params = self.rope_kvcache_impl.prepare(attn_inputs)
         self.write_cache_store_impl = common.create_write_cache_store_impl(attn_inputs)
+
+        self._cg = _init_cg_launch_params(
+            self.fmha_params.batch_size,
+            attn_inputs.kv_cache_block_id_device,
+            self.fmha_params.seq_lens,
+            self.rope_params.kv_cache_offset,
+        )
 
     @classmethod
     def support(
         cls, attn_configs: AttentionConfigs, attn_inputs: PyAttentionInputs
     ) -> bool:
-        # Check MLA is not enabled
         if attn_configs.use_mla:
             return False
-        # Create temporary instance to check support
         fmha_impl = FlashInferTRTLLMDecodeOp(attn_configs)
         return fmha_impl.support(attn_inputs)
 
@@ -558,35 +546,22 @@ class FlashInferTRTLLMDecodeImpl(FMHAImplBase):
         qkv: torch.Tensor,
         kv_cache: Optional[LayerKVCache],
     ) -> torch.Tensor:
-        # Apply RoPE and KV Cache processing
         if self.need_rope_kv_cache:
             fmha_input = self.rope_kvcache_impl.forward(qkv, kv_cache, self.rope_params)
         else:
             fmha_input = qkv
 
-        # Apply write cache store if needed
         common.apply_write_cache_store(
             self.write_cache_store_impl, self.attn_inputs, kv_cache
         )
-
-        # Execute FMHA forward
         return self.fmha_impl.forward(fmha_input, kv_cache, self.fmha_params)
 
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs):
-        N = self.fmha_params.batch_size
-        M = attn_inputs.kv_cache_block_id_device.shape[1]
-        total_bm = N * M
-        BLOCK_SIZE = max(triton.next_power_of_2(N), 1024)
-        grid = (triton.cdiv(total_bm, BLOCK_SIZE),)
+        grid, sl, kvo, N, M, tbm, BS = self._cg
+        s = attn_inputs.sequence_lengths_plus_1_d
         _prepare_cuda_graph_kernel[grid](
-            attn_inputs.sequence_lengths_plus_1_d,
-            attn_inputs.sequence_lengths_plus_1_d,
-            self.fmha_params.seq_lens,
-            self.fmha_params.seq_lens,
+            s, s, sl, sl,
             attn_inputs.kv_cache_block_id_device,
-            self.rope_params.kv_cache_offset,
-            0,
-            N, M, total_bm,
-            MODE=0,
-            BLOCK_SIZE=BLOCK_SIZE,
+            kvo, 0, N, M, tbm,
+            MODE=0, BLOCK_SIZE=BS,
         )
