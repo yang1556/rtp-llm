@@ -148,7 +148,13 @@ void DeviceBase::updateCurrentTorchStream() {
 }
 
 void DeviceBase::setCacheStore(std::shared_ptr<rtp_llm::CacheStore> cache_store) {
+    if (cache_store_) {
+        throw OpException(OpStatus::make(OpErrorType::ERROR_INTERNAL, "CacheStore already set"));
+    }
     cache_store_ = cache_store;
+    if (cache_store_) {
+        cache_store_async_writer_ = std::make_unique<CacheStoreAsyncWriter>();
+    }
 }
 
 void DeviceBase::writeCacheStore(const WriteCacheParams& params) {
