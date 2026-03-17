@@ -214,6 +214,7 @@ class MasterClient:
         block_cache_keys: list[int],
         input: GenerateInput,
         request_id: int,
+        chat_id: Optinal[str] = None
     ) -> FlexlbResponse:
         """
         Resolve backend role addrs from FlexLB scheduler (master, then slave on connection failure).
@@ -254,6 +255,7 @@ class MasterClient:
             "generate_timeout": ttft_timeout_ms,
             "request_id": request_id,
             "request_time_ms": int(start * 1000),
+            "chat_id": chat_id
         }
 
         resp = await self._send_schedule_request(

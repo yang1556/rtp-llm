@@ -142,6 +142,7 @@ class BackendRPCServerVisitor:
                 block_cache_keys=block_cache_keys,
                 input=input,
                 request_id=input.request_id,
+                chat_id=input.generate_config.chat_id
             )
         except BaseException as e:
             exception_json = format_exception(e)
