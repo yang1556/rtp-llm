@@ -16,6 +16,7 @@
 #include "rtp_llm/cpp/cache/connector/memory/MemoryBlockCache.h"
 #include "rtp_llm/cpp/cache/connector/memory/test/mock/TestRpcService.h"
 #include "rtp_llm/cpp/cache/KVCacheAllocator.h"
+#include "rtp_llm/cpp/cache/MLAKVCacheSpec.h"
 #include "rtp_llm/cpp/cache/SingleTypeKVCacheAllocator.h"
 #include "rtp_llm/cpp/cuda/cuda_host_utils.h"
 #include "rtp_llm/cpp/devices/DeviceFactory.h"
@@ -137,7 +138,10 @@ private:
         RuntimeConfig               runtime_config;
         ModelSpecificConfig         model_specific_config;
 
-        device_resource_config.device_reserve_memory_bytes = 2ULL * 1024 * 1024 * 1024;  // 2 GiB
+        // TrackerAllocator GPU pool must cover the largest test allocations (e.g.
+        // copyCache_ReturnTrue_H2D_SplitKvScale_NoBlockCopyOpt: 78 layers x 81 blocks x (656+132)x512 bytes KV pool
+        // ~2.37 GiB) plus earlier allocs in the same process.
+        device_resource_config.device_reserve_memory_bytes = 4ULL * 1024 * 1024 * 1024;  // 4 GiB
         device_resource_config.host_reserve_memory_bytes   = 0;
 
         DeviceFactory::initDevices(parallelism_config,
@@ -157,7 +161,10 @@ private:
                                    rtp_llm::NcclCommConfig{});
         return DeviceFactory::getDefaultDevice();
     }
-    CacheConfig createMockCacheConfig(int layer_num = 4, int block_num = 10, int seq_size_per_block = 8) {
+    CacheConfig createMockCacheConfig(int               layer_num          = 4,
+                                      int               block_num          = 10,
+                                      int               seq_size_per_block = 8,
+                                      rtp_llm::DataType mha_dtype          = rtp_llm::DataType::TYPE_FP16) {
         constexpr int kTestMemoryCacheSizeMb      = 64;
         constexpr int kTestMemoryCacheSyncTimeout = 1000;
 
@@ -175,7 +182,7 @@ private:
         mha_spec->local_head_num_kv  = 8;
         mha_spec->size_per_head      = 128;
         mha_spec->seq_size_per_block = seq_size_per_block;
-        mha_spec->dtype              = rtp_llm::DataType::TYPE_FP16;
+        mha_spec->dtype              = mha_dtype;
         mha_spec->type               = KVCacheSpecType::MultiHeadAttention;
         config.cache_specs.push_back(mha_spec);
         // Keep CacheConfig sizes consistent with current business definition (see CacheConfig.h):
@@ -1782,6 +1789,109 @@ TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_SingleLayer) {
 
     // H2D, 验证数据是否拷贝成功
     verifyBlockInfosContent(gpu_bufs, 'a');
+}
+
+// MLA FP8 online-style: separate kv + kv-scale blobs per layer (656 + 132 bytes/token at seq_size_per_block=512).
+// copyCache uses noBlockCopyOpt when kv_scale_stride_bytes > 0 and block_size_ matches
+// (batch_size/2)*(kv_cache_size+kv_scale_size). ~40k prompt tokens => 79 full blocks in one request.
+TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_SplitKvScale_NoBlockCopyOpt) {
+    constexpr int      kLayerNum    = 78;
+    constexpr uint32_t kSeqPerBlock = 512;
+    constexpr int      kCopySeqLen  = 40000;
+    constexpr int kCopyBlockCount = (kCopySeqLen + static_cast<int>(kSeqPerBlock) - 1) / static_cast<int>(kSeqPerBlock);
+    constexpr int kGpuBlockBase   = 2;
+    // Block pool must include GPU indices [kGpuBlockBase, kGpuBlockBase + kCopyBlockCount - 1] (from kCopySeqLen).
+    constexpr int    kBlockNum         = kGpuBlockBase + kCopyBlockCount;
+    constexpr size_t kKvBytesPerTok    = 656;
+    constexpr size_t kScaleBytesPerTok = 132;
+
+    auto mla_spec                = std::make_shared<rtp_llm::MLAKVCacheSpec>();
+    mla_spec->type               = rtp_llm::KVCacheSpecType::MultiHeadLatentAttention;
+    mla_spec->layer_num          = static_cast<uint32_t>(kLayerNum);
+    mla_spec->local_head_num_kv  = 1;
+    mla_spec->seq_size_per_block = kSeqPerBlock;
+    mla_spec->kv_lora_rank       = 512;
+    mla_spec->rope_head_dim      = 64;
+    mla_spec->dtype              = rtp_llm::DataType::TYPE_FP8_E4M3;
+
+    cache_config_.layer_num             = static_cast<uint32_t>(kLayerNum);
+    cache_config_.layer_all_num         = static_cast<uint32_t>(kLayerNum);
+    cache_config_.block_num             = static_cast<uint32_t>(kBlockNum);
+    cache_config_.seq_size_per_block    = kSeqPerBlock;
+    cache_config_.use_mla               = true;
+    cache_config_.is_sparse             = false;
+    cache_config_.dtype                 = mla_spec->dtype;
+    cache_config_.cache_specs           = {mla_spec};
+    cache_config_.kv_block_stride_bytes = kKvBytesPerTok * kSeqPerBlock;
+    cache_config_.kv_scale_stride_bytes = kScaleBytesPerTok * kSeqPerBlock;
+    cache_config_.kv_block_size_bytes   = static_cast<size_t>(kLayerNum) * cache_config_.kv_block_stride_bytes;
+    cache_config_.kv_scale_size_bytes   = static_cast<size_t>(kLayerNum) * cache_config_.kv_scale_stride_bytes;
+    cache_config_.block_size_bytes      = cache_config_.kv_block_size_bytes + cache_config_.kv_scale_size_bytes;
+    const size_t kPerLayerStrideBytes   = cache_config_.kv_block_stride_bytes + cache_config_.kv_scale_stride_bytes;
+    cache_config_.layer_to_block_stride_bytes.assign(static_cast<size_t>(kLayerNum),
+                                                     static_cast<int>(kPerLayerStrideBytes));
+    std::vector<int> layer_ids(kLayerNum);
+    for (int i = 0; i < kLayerNum; ++i) {
+        layer_ids[i] = i;
+    }
+    cache_config_.layer_ids.clear();
+    cache_config_.global_layer_ids.clear();
+    cache_config_.layer_ids.push_back(layer_ids);
+    cache_config_.global_layer_ids.push_back(layer_ids);
+
+    ASSERT_EQ(mla_spec->block_size_bytes(), cache_config_.kv_block_stride_bytes);
+
+    const size_t merged_one_key = memoryCacheBlockBytes(cache_config_);
+    ASSERT_EQ(merged_one_key, static_cast<size_t>(kLayerNum) * kPerLayerStrideBytes);
+    const int pool_mb =
+        static_cast<int>((merged_one_key * static_cast<size_t>(kCopyBlockCount) + (1024ULL * 1024 - 1)) / (1024 * 1024))
+        + 256;
+    kv_cache_config_.memory_cache_size_mb = std::max(pool_mb, 512);
+
+    allocator_ = std::make_shared<SingleTypeKVCacheAllocator>(cache_config_, device_, AllocationType::DEVICE);
+    ASSERT_TRUE(allocator_->init());
+    connector_ =
+        std::make_shared<KVCacheMemoryConnector>(cache_config_, kv_cache_config_, allocator_, device_, server_addrs_);
+    ASSERT_TRUE(connector_->init());
+
+    auto pool = ensureBlockPool(merged_one_key);
+    ASSERT_NE(pool, nullptr);
+    std::vector<BlockIdxType> mem_block_indices;
+    mem_block_indices.reserve(static_cast<size_t>(kCopyBlockCount));
+    for (int i = 0; i < kCopyBlockCount; ++i) {
+        auto blocks = pool->malloc(1);
+        ASSERT_EQ(blocks.size(), 1u);
+        mem_block_indices.push_back(static_cast<BlockIdxType>(blocks[0]));
+        const auto mem_bufs = pool->convertIndexToBuffer(0, mem_block_indices.back());
+        ASSERT_EQ(mem_bufs.size(), 1u);
+        const auto& mem_buffer = mem_bufs[0];
+        ASSERT_NE(mem_buffer.addr, nullptr);
+        EXPECT_GE(mem_buffer.size_bytes, merged_one_key);
+        const char tag = static_cast<char>(0x21 + (i % 94));
+        setBlockBytes(mem_buffer, /*byte_offset=*/0, merged_one_key, tag);
+    }
+
+    MemoryOperationRequestPB req;
+    req.set_copy_direction(MemoryOperationRequestPB::H2D);
+    for (int i = 0; i < kCopyBlockCount; ++i) {
+        auto* item = req.add_copy_items();
+        for (int l = 0; l < kLayerNum; ++l) {
+            item->add_gpu_blocks(kGpuBlockBase + i);
+        }
+        item->set_mem_block(mem_block_indices[static_cast<size_t>(i)]);
+    }
+    MemoryOperationResponsePB resp;
+    ASSERT_TRUE(connector_->copyCache(req, resp));
+    EXPECT_TRUE(resp.success());
+
+    for (int i = 0; i < kCopyBlockCount; ++i) {
+        const char tag = static_cast<char>(0x21 + (i % 94));
+        for (int l = 0; l < kLayerNum; ++l) {
+            const auto gpu_bufs = allocator_->convertIndexToBuffer(l, kGpuBlockBase + i);
+            ASSERT_GE(gpu_bufs.size(), 2u);
+            verifyBlockInfosContent(gpu_bufs, tag);
+        }
+    }
 }
 
 TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_MultiLayer) {
