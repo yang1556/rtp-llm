@@ -13,6 +13,7 @@
 #include "rtp_llm/cpp/core/torch_utils/torch_cuda_allocator.h"
 #include "rtp_llm/cpp/core/torch_utils/TorchEvent.h"
 #include "rtp_llm/cpp/kernels/mask_logits.h"
+#include "rtp_llm/cpp/kernels/sm_utils/sm_copy_kernel.h"
 #include "rtp_llm/cpp/config/ConfigModules.h"
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
@@ -43,6 +44,10 @@ CudaDevice::CudaDevice(const DeviceInitParams& params): DeviceBase(params) {
     stream_               = torch_default_stream_->stream();
     communication_stream_ = torch_comm_stream_->stream();
     check_cuda_value(cudaStreamCreateWithFlags(&no_block_copy_stream_, cudaStreamNonBlocking));
+    // Pre-load gather/scatter-split kernels before NCCL init (mitigates first-launch stall / bad interaction).
+    if (!sDevMPS::warmup_sm_copy_split_kernels(no_block_copy_stream_)) {
+        RTP_LLM_LOG_WARNING("warmup_sm_copy_split_kernels failed on device %d", device_id_);
+    }
     check_cuda_value(cublasCreate(&cublas_handle_));
     check_cuda_value(cublasLtCreate(&cublaslt_handle_));
     check_cuda_value(cublasSetStream(cublas_handle_, stream_));

@@ -157,7 +157,10 @@ private:
                                    rtp_llm::NcclCommConfig{});
         return DeviceFactory::getDefaultDevice();
     }
-    CacheConfig createMockCacheConfig(int layer_num = 4, int block_num = 10, int seq_size_per_block = 8) {
+    CacheConfig createMockCacheConfig(int               layer_num          = 4,
+                                      int               block_num          = 10,
+                                      int               seq_size_per_block = 8,
+                                      rtp_llm::DataType mha_dtype          = rtp_llm::DataType::TYPE_FP16) {
         constexpr int kTestMemoryCacheSizeMb      = 64;
         constexpr int kTestMemoryCacheSyncTimeout = 1000;
 
@@ -175,7 +178,7 @@ private:
         mha_spec->local_head_num_kv  = 8;
         mha_spec->size_per_head      = 128;
         mha_spec->seq_size_per_block = seq_size_per_block;
-        mha_spec->dtype              = rtp_llm::DataType::TYPE_FP16;
+        mha_spec->dtype              = mha_dtype;
         mha_spec->type               = KVCacheSpecType::MultiHeadAttention;
         config.cache_specs.push_back(mha_spec);
         // Keep CacheConfig sizes consistent with current business definition (see CacheConfig.h):
@@ -1662,6 +1665,55 @@ TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_SingleLayer) {
 
     // H2D, 验证数据是否拷贝成功
     verifyBlockInfosContent(gpu_bufs, 'a');
+}
+
+// FP8 MHA has separate kv + scale blobs per layer; copyCache uses noBlockCopyOpt when
+// kv_scale_stride_bytes > 0 and block_size_ matches (batch_size/2)*(kv_cache_size+kv_scale_size).
+TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_SplitKvScale_NoBlockCopyOpt) {
+    constexpr int kLayerNum    = 2;
+    constexpr int kGpuBlockIdx = 2;
+    cache_config_              = createMockCacheConfig(kLayerNum, 10, 8, rtp_llm::DataType::TYPE_FP8_E4M3);
+    allocator_ = std::make_shared<SingleTypeKVCacheAllocator>(cache_config_, device_, AllocationType::DEVICE);
+    ASSERT_TRUE(allocator_->init());
+    connector_ =
+        std::make_shared<KVCacheMemoryConnector>(cache_config_, kv_cache_config_, allocator_, device_, server_addrs_);
+    ASSERT_TRUE(connector_->init());
+
+    size_t total = 0;
+    for (int l = 0; l < kLayerNum; ++l) {
+        const auto gpu_bufs = allocator_->convertIndexToBuffer(l, kGpuBlockIdx);
+        ASSERT_GE(gpu_bufs.size(), 2u) << "FP8 layout should expose kv + scale BlockInfo per layer";
+        total += sumBlockInfosBytes(gpu_bufs);
+    }
+    ASSERT_GT(total, 0u);
+
+    auto pool = ensureBlockPool(total);
+    ASSERT_NE(pool, nullptr);
+    auto mem_blocks = pool->malloc(1);
+    ASSERT_EQ(mem_blocks.size(), 1u);
+    const BlockIdxType mem_block_index = static_cast<BlockIdxType>(mem_blocks[0]);
+    const auto         mem_bufs        = pool->convertIndexToBuffer(0, mem_block_index);
+    ASSERT_EQ(mem_bufs.size(), 1u);
+    const auto& mem_buffer = mem_bufs[0];
+    ASSERT_NE(mem_buffer.addr, nullptr);
+    EXPECT_GE(mem_buffer.size_bytes, total);
+    setBlockBytes(mem_buffer, /*byte_offset=*/0, total, 'b');
+
+    MemoryOperationRequestPB req;
+    auto*                    item = req.add_copy_items();
+    for (int l = 0; l < kLayerNum; ++l) {
+        item->add_gpu_blocks(kGpuBlockIdx);
+    }
+    item->set_mem_block(mem_block_index);
+    req.set_copy_direction(MemoryOperationRequestPB::H2D);
+
+    MemoryOperationResponsePB resp;
+    ASSERT_TRUE(connector_->copyCache(req, resp));
+    EXPECT_TRUE(resp.success());
+
+    for (int l = 0; l < kLayerNum; ++l) {
+        verifyBlockInfosContent(allocator_->convertIndexToBuffer(l, kGpuBlockIdx), 'b');
+    }
 }
 
 TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_MultiLayer) {

@@ -258,8 +258,6 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
-
-
 cc_library(
     name = "cuda_fmha_utils",
     hdrs = [
