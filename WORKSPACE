@@ -18,6 +18,16 @@ load("//deps:git.bzl", "git_deps")
 
 git_deps()
 
+# rules_python is still needed by external deps
+load("@rules_python//python:repositories.bzl", "py_repositories")
+
+py_repositories()
+
+# Stub pip repos for external deps that still reference @pip_*_torch
+load("//deps:pip.bzl", "pip_deps")
+
+pip_deps()
+
 load("//:def.bzl", "read_release_version", "torch_local_repository")
 read_release_version(name = "release_version")
 

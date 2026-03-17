@@ -59,7 +59,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":grpcio",
-        "//rtp_llm/cpp/model_rpc/proto:model_rpc_service_py_proto",
     ],
 )
 

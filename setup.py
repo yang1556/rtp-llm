@@ -94,8 +94,7 @@ def generate_proto_files(project_root: Path = None) -> None:
 
     # Proto file locations
     proto_files = [
-        "rtp_llm/proto/model_rpc_service.proto",
-        "rtp_llm/proto/all_embedding_rpc_service.proto",
+        "rtp_llm/cpp/model_rpc/proto/model_rpc_service.proto",
     ]
     
     print(f"Generating protobuf files...")
@@ -441,7 +440,7 @@ def build_bazel_extensions(build_config: str) -> None:
     # Add output_user_root as startup option (before 'build')
     if not has_output_root:
         home_dir = os.path.expanduser("~")
-        cache_dir = os.path.join(home_dir, ".cache", f"bazel_{build_config}")
+        cache_dir = os.path.join(home_dir, ".cache", f"bazel_{build_config}_cache")
         cmd.append(f"--output_user_root={cache_dir}")
         print(f"Using platform-specific cache: {cache_dir}")
     
