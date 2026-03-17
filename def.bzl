@@ -290,3 +290,24 @@ read_release_version = repository_rule(
     implementation = _read_release_version_impl,
     attrs = {},
 )
+
+def _torch_repo_impl(ctx):
+    torch_path = ctx.os.environ.get("TORCH_ROOT")
+    if not torch_path:
+        fail("TORCH_ROOT environment variable is not set. " +
+             "Please set it to the root of your PyTorch installation " +
+             "(e.g., 'export TORCH_ROOT=$(python -c \"import os, torch; print(os.path.dirname(os.path.dirname(torch.utils.cmake_prefix_path)))\")')")
+
+    if not ctx.path(torch_path).exists:
+        fail("The path specified by TORCH_ROOT does not exist: " + torch_path)
+
+    ctx.file("BUILD", ctx.read(ctx.attr.build_file))
+    ctx.symlink(torch_path, "torch_root")
+
+torch_local_repository = repository_rule(
+    implementation = _torch_repo_impl,
+    attrs = {
+        "build_file": attr.label(mandatory = True, allow_single_file = True),
+    },
+    environ = ["TORCH_ROOT"],
+)

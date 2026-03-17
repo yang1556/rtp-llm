@@ -7,6 +7,8 @@ __pycache__/
 .cache
 *.npy
 *.pth
+.torch_bazelrc
+*.egg-info/
 !tests/data/**/*.npy
 /notebooks
 **/.ipynb_checkpoints/
