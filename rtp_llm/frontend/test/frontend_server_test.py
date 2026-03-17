@@ -84,4 +84,5 @@ class FrontendServerTest(TestCase):
         self.assertEqual(json.loads(res.body.decode("utf-8"))["error_code"], 514)
 
 
-main()
+if __name__ == "__main__":
+    main()

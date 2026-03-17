@@ -128,4 +128,5 @@ class FrontendAppTest(unittest.TestCase):
 
 if __name__ == "__main__":
     print(f"LD_LIBRARY_PATH: {os.environ['LD_LIBRARY_PATH']}")
+if __name__ == "__main__":
     unittest.main()
