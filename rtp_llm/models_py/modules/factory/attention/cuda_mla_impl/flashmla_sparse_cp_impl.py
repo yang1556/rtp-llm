@@ -150,6 +150,25 @@ class SparseMlaFp8CPOp(SparseMlaFp8Op):
         )
         self.total_local_ids = torch.cat([self.q0_idx, self.q1_idx], dim=0)
 
+        # --- Bounds checks (moved from forward hot-path to avoid device-host sync) ---
+        unpadded_total = int(padding_mask.sum().item())
+        if self.total_local_ids.numel() > 0:
+            max_lid = self.total_local_ids.max().item()
+            if max_lid >= local_tokens:
+                raise ValueError(
+                    f"[plan] total_local_ids out of range: "
+                    f"max(total_local_ids)={max_lid}, local_tokens={local_tokens}. "
+                    "Check CP plan() local chunk vs actual input size."
+                )
+        if self.total_global_ids.numel() > 0:
+            max_gid = self.total_global_ids.max().item()
+            if max_gid >= unpadded_total:
+                raise ValueError(
+                    f"[plan] total_global_ids out of range: "
+                    f"max(total_global_ids)={max_gid}, unpadded_total={unpadded_total}. "
+                    "Check padded-to-unpadded coordinate conversion."
+                )
+
         # attention_inputs.cu_kv_seqlens is based on local CP chunk lengths
         # (input_lengths is overwritten by ContextParallelProcessor), but the
         # gather kernel needs cumulative lengths covering the full (global) sequence.
