@@ -111,6 +111,9 @@ class GetTopkRaggedCPTest(TestCase):
         attn_inputs.kv_cache_block_id_device = torch.tensor(
             [[0]], dtype=torch.int32, device=device
         )
+        attn_inputs.kv_cache_kernel_block_id_device = (
+            attn_inputs.kv_cache_block_id_device
+        )
         attn_inputs.cu_kv_seqlens = torch.tensor(
             [0, total_tokens], dtype=torch.int32, device=device
         )
