@@ -23,8 +23,7 @@ cc_library(
         "//rtp_llm/cpp/disaggregate/cache_store:cache_store",
         "//rtp_llm/cpp/devices:devices_base",
         "@com_google_googletest//:gtest",
-        "//rtp_llm/cpp/devices/cuda_impl:cuda_impl",
-    ],
+    ] + device_impl_target(),
     visibility=['//visibility:public'],
 )
 

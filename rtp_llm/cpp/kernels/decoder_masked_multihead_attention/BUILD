@@ -26,10 +26,15 @@ preloaded_deps = any_cuda_deps + [
     ":mmha_hdrs",
     "//rtp_llm/cpp/kernels:attn_utils",
     "//rtp_llm/cpp/utils:core_utils",
-    "//rtp_llm/cpp/cuda:cuda_host_utils",
     "//rtp_llm/cpp/cuda:cuda_utils_cu",
     "//rtp_llm/cpp/cuda:launch_utils",
-]
+] + select({
+    "@//:using_cuda": [
+        "//rtp_llm/cpp/cuda:cuda_host_utils",
+    ],
+    "@//:using_rocm": [],
+    "//conditions:default": [],
+})
 
 # =============================================================================
 # MMHA (Multi-head Masked Attention) related targets
@@ -160,7 +165,7 @@ cc_library(
     deps = [":mmha_hdrs"],
     srcs = [
         ":mmha1",
-        ":mmha2", 
+        ":mmha2",
         ":dmmha",
     ],
     visibility = ["//visibility:public"],
