@@ -280,6 +280,8 @@ GptModelOutputs PyWrappedModel::forwardMicroBatched(const GptModelInputs& inputs
                             py_model_outputs.size(),
                             input_list.size());
 
+    device_->waitCacheStoreComplete();
+
     // TODO: merge hidden states in one buffer
     BufferPtr hidden_states = nullptr;
     if (!micro_batch_plan.enable) {
@@ -338,13 +340,13 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         torch::Tensor input_hiddens =
             inputs.last_hidden_states ? Buffer2torchTensor(inputs.last_hidden_states, false) : torch::empty({0});
 
-        auto                   attention_inputs      = buildPyAttentionInputs(inputs);
-        auto                   bert_embedding_inputs = buildBertEmbeddingInputs(inputs);
+        auto attention_inputs      = buildPyAttentionInputs(inputs);
+        auto bert_embedding_inputs = buildBertEmbeddingInputs(inputs);
 
         if (device_props_.enable_prefill_cp) {
             attention_inputs.context_parallel_info = cp_params;
         }
- 
+
         BufferPtr              kv_cache_block_id_device;
         std::vector<BufferPtr> kv_cache_block_id_device_by_group;
         if (!inputs.warmup && inputs.pd_separation) {
@@ -369,12 +371,14 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
             hidden_states = device_->clone({*torchTensor2Buffer(py_model_outputs.hidden_states)});
         } else {
             DevicePerfWrapper wrapper(device_, "normal forward");
-            held_attn_pyobj_                   = py_model_.attr("prepare_fmha_impl")(py_model_inputs, false);
-            auto              py_model_forward = py_model_.attr("forward");
-            auto              outputs          = py_model_forward(py_model_inputs, held_attn_pyobj_);
-            py_model_outputs                   = outputs.cast<PyModelOutputs>();
-            hidden_states                      = device_->clone({*torchTensor2Buffer(py_model_outputs.hidden_states)});
+            held_attn_pyobj_      = py_model_.attr("prepare_fmha_impl")(py_model_inputs, false);
+            auto py_model_forward = py_model_.attr("forward");
+            auto outputs          = py_model_forward(py_model_inputs, held_attn_pyobj_);
+            py_model_outputs      = outputs.cast<PyModelOutputs>();
+            hidden_states         = device_->clone({*torchTensor2Buffer(py_model_outputs.hidden_states)});
         }
+
+        device_->waitCacheStoreComplete();
 
         RTP_LLM_LOG_DEBUG("Python object instance forward method called successfully.");
         if (device_props_.enable_prefill_cp) {
