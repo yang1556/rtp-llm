@@ -19,6 +19,7 @@ public:
     ~MockKVCacheConnectorCoordinator() override = default;
 
 public:
+    MOCK_METHOD(bool, hasActiveConnectors, (), (const, override));
     MOCK_METHOD(std::shared_ptr<AsyncContext>,
                 asyncRead,
                 (const std::shared_ptr<KVCacheConnectorReadWriteContext>& connector_context),
@@ -29,7 +30,7 @@ public:
                 (override));
     MOCK_METHOD(std::shared_ptr<AsyncContext>,
                 asyncWriteByLayer,
-                (int layer_id, const std::shared_ptr<KVCacheConnectorReadWriteContext>& connector_context),
+                (int layer_id, const std::shared_ptr<KVCacheConnectorLayerContext>& layer_context),
                 (override));
     MOCK_METHOD(bool, executeFunction, (const FunctionRequestPB& request, FunctionResponsePB& response), (override));
 };
