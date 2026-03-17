@@ -261,6 +261,23 @@ cc_library(
 
 
 cc_library(
+    name = "cuda_copy_utils",
+    srcs = ["cuda_copy_utils.cc"],
+    hdrs = ["cuda_copy_utils.h"],
+    deps = [
+        ":cuda_host_utils",
+        "//rtp_llm/cpp/core:buffer",
+        "//rtp_llm/cpp/core:types",
+        "//rtp_llm/cpp/kernels:sm_copy_kernel",
+        "//rtp_llm/cpp/utils:core_utils",
+        "@local_config_cuda//cuda:cuda_headers",
+        "@local_config_cuda//cuda:cudart",
+    ],
+    copts = copts(),
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "cuda_fmha_utils",
     hdrs = [
         "cuda_fmha_utils.h",

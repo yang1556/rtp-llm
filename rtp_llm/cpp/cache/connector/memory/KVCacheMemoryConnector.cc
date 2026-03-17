@@ -85,10 +85,10 @@ void KVCacheMemoryConnector::initBlockPool() {
 
     // block_size here means "one cache-key across all layers" total bytes (kv + scale).
     // Use per-layer block strides so NULL_BLOCK_IDX layers still occupy space in merged layout.
-    size_t block_size = std::accumulate(layer_block_stride.begin(), layer_block_stride.end(), 0);
-    RTP_LLM_CHECK_WITH_INFO(block_size > 0, "block size is invalid: %zu", block_size);
+    block_size_ = std::accumulate(layer_block_stride.begin(), layer_block_stride.end(), 0);
+    RTP_LLM_CHECK_WITH_INFO(block_size_ > 0, "block size is invalid: %zu", block_size_);
 
-    block_pool_ = createBlockPool(block_size, memory_cache_size_mb);
+    block_pool_ = createBlockPool(block_size_, memory_cache_size_mb);
     RTP_LLM_CHECK_WITH_INFO(block_pool_ != nullptr, "init block pool failed, create block pool failed");
 }
 
@@ -515,7 +515,14 @@ bool KVCacheMemoryConnector::copyCache(const MemoryOperationRequestPB& request, 
     }
 
     if (!dst_buffers.empty()) {
-        device_->noBlockCopy(MultiCopyParams{dst_buffers, src_buffers});
+        // batch_size = buffers per block, from prepareCopyBuffers (layer_num × gpu_buffers per layer).
+        const size_t num_blocks = static_cast<size_t>(request.copy_items_size());
+        const size_t batch_size = dst_buffers.size() / num_blocks;
+        RTP_LLM_CHECK_WITH_INFO(dst_buffers.size() % num_blocks == 0,
+                                "copy buffers size %zu not divisible by copy_items_size %d",
+                                dst_buffers.size(),
+                                request.copy_items_size());
+        device_->noBlockCopyOpt(MultiCopyParams{dst_buffers, src_buffers, block_size_, batch_size});
     }
 
     response.set_success(true);
