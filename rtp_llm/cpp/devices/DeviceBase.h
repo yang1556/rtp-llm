@@ -8,6 +8,7 @@
 #include "rtp_llm/cpp/disaggregate/cache_store/CacheStore.h"
 #include "rtp_llm/cpp/models/eplb/stats/ExpertStats.h"
 #include "rtp_llm/cpp/devices/NativeGraphRunnerBase.h"
+#include "rtp_llm/cpp/devices/CacheStoreAsyncWriter.h"
 
 namespace rtp_llm {
 
@@ -203,6 +204,9 @@ private:
 private:
     virtual IAllocator* getAllocator()     = 0;
     virtual IAllocator* getHostAllocator() = 0;
+
+public:
+    std::unique_ptr<CacheStoreAsyncWriter> cache_store_async_writer_;
 
 protected:
     int                                  device_id_;
