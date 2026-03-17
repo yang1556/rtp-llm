@@ -3,10 +3,13 @@
 #include "rtp_llm/cpp/utils/Logger.h"
 
 #include <atomic>
+
+#if USING_CUDA
 #include <cuda.h>
 #include <cuda_runtime.h>
-
-#include <atomic>
+#elif USING_ROCM
+#include <hip/hip_runtime.h>
+#endif
 
 namespace rtp_llm {
 
@@ -57,8 +60,13 @@ std::vector<std::shared_ptr<RequestBlockBuffer>> BlockBufferUtil::makeRequestBlo
     size_t mem_len = layer_num * block_num * block_size * 2;  // for k/v block
 
     void* mem;
-    auto  ret = cudaMalloc(&mem, mem_len);
+#if USING_CUDA
+    auto ret = cudaMalloc(&mem, mem_len);
     if (ret != cudaSuccess) {
+#elif USING_ROCM
+    auto ret = hipMalloc(&mem, mem_len);
+    if (ret != hipSuccess) {
+#endif
         RTP_LLM_LOG_WARNING("block buffer util malloc gpu failed, len is %lu, ret is %d", mem_len, ret);
         return {};
     }
@@ -68,7 +76,11 @@ std::vector<std::shared_ptr<RequestBlockBuffer>> BlockBufferUtil::makeRequestBlo
         return {};
     }
 
+#if USING_CUDA
     cudaMemset(mem, 'a', mem_len);
+#elif USING_ROCM
+    hipMemset(mem, 'a', mem_len);
+#endif
 
     uint64_t k_block_start = reinterpret_cast<uint64_t>(mem);
     uint64_t v_block_start = reinterpret_cast<uint64_t>(mem) + mem_len / 2;
@@ -79,7 +91,11 @@ std::vector<std::shared_ptr<RequestBlockBuffer>> BlockBufferUtil::makeRequestBlo
         (*ref_count)--;
         if (ref_count->load() == 0) {
             memory_util->deregUserMr(mem, true);
+#if USING_CUDA
             cudaFree(mem);
+#elif USING_ROCM
+            hipFree(mem);
+#endif
         }
     };
 
