@@ -157,11 +157,7 @@ rtp-llm-server = "rtp_llm.start_server:main"
 
 [tool.setuptools]
 package-dir = {"" = "."}
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["rtp_llm*"]
-exclude = ["test", "tests"]
+packages = ["rtp_llm"]
 
 [tool.setuptools.package-data]
 rtp_llm = [

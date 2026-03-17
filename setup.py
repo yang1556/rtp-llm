@@ -50,9 +50,12 @@ def get_project_root() -> Path:
 
 def get_version_with_platform() -> str:
     """Get version string with platform suffix.
-    
+
     Returns version like: 0.1.0+ppu1.5.2 or 0.1.0+cu126
+    When RTP_SKIP_BAZEL_BUILD is set, returns base version without platform suffix.
     """
+    if should_skip_bazel_build():
+        return BASE_VERSION
     detected = detect_build_config()
     return f"{BASE_VERSION}+{PLATFORM_CONFIG_VERSIONS[detected]}"
 
@@ -809,10 +812,15 @@ def get_base_dependencies() -> list:
 
 def get_platform_dependencies() -> list:
     """Get platform-specific dependencies based on RTP_BAZEL_CONFIG.
-    
+
     This merges the optional dependencies into the main dependencies
     so the wheel has the correct platform-specific packages.
     """
+    # Skip platform detection when Bazel build is skipped (e.g. editable install for dev)
+    if should_skip_bazel_build():
+        print("Skipping platform dependency detection (RTP_SKIP_BAZEL_BUILD is set)")
+        return []
+
     # Extract platform from RTP_BAZEL_CONFIG
     build_config = detect_build_config()
     if not build_config:
