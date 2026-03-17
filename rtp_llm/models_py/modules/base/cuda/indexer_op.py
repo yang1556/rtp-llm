@@ -617,7 +617,7 @@ class IndexerOp(nn.Module):
             kv_cache.kv_scale_base,
             k_fp8,
             k_scale,
-            attention_inputs.kv_cache_block_id_device,
+            attention_inputs.kv_cache_kernel_block_id_device,
             self.cu_kv_seqlens_global,
         )
         kv_fp8_full = (k_fp8, k_scale.view(torch.float32))
