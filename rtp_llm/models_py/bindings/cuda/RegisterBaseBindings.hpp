@@ -22,7 +22,6 @@
 #include "rtp_llm/models_py/bindings/cuda/DebugKernelOp.h"
 #include "rtp_llm/models_py/bindings/cuda/UserBuffersOp.h"
 #include "rtp_llm/models_py/bindings/cuda/DeepGemmPluginOp.h"
-#include "rtp_llm/models_py/bindings/cuda/FakeBalanceExpertOp.h"
 
 #include "rtp_llm/cpp/kernels/mla_quant_kernel.h"
 
@@ -290,7 +289,6 @@ void registerBaseCudaBindings(py::module& rtp_ops_m) {
     registerTrtFp8QuantOp(rtp_ops_m);
     registerUserBuffersOp(rtp_ops_m);
     registerDeepGemmPluginOp(rtp_ops_m);
-    registerFakeBalanceExpertOp(rtp_ops_m);
 }
 
 }  // namespace torch_ext
