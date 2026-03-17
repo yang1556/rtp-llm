@@ -85,10 +85,10 @@ void KVCacheMemoryConnector::initBlockPool() {
 
     // block_size here means "one cache-key across all layers" total bytes (kv + scale).
     // Use per-layer block strides so NULL_BLOCK_IDX layers still occupy space in merged layout.
-    size_t block_size = std::accumulate(layer_block_stride.begin(), layer_block_stride.end(), 0);
-    RTP_LLM_CHECK_WITH_INFO(block_size > 0, "block size is invalid: %zu", block_size);
+    block_size_ = std::accumulate(layer_block_stride.begin(), layer_block_stride.end(), 0);
+    RTP_LLM_CHECK_WITH_INFO(block_size_ > 0, "block size is invalid: %zu", block_size_);
 
-    block_pool_ = createBlockPool(block_size, memory_cache_size_mb);
+    block_pool_ = createBlockPool(block_size_, memory_cache_size_mb);
     RTP_LLM_CHECK_WITH_INFO(block_pool_ != nullptr, "init block pool failed, create block pool failed");
 }
 
@@ -515,7 +515,27 @@ bool KVCacheMemoryConnector::copyCache(const MemoryOperationRequestPB& request, 
     }
 
     if (!dst_buffers.empty()) {
-        device_->noBlockCopy(MultiCopyParams{dst_buffers, src_buffers});
+        // batch_size = slices per copy_item when every item contributes the same count (typical). If counts differ
+        // (e.g. sparse layers per mem_block), total is not divisible by copy_items_size — skip noBlockCopyOpt and
+        // use plain noBlockCopy (per-pair memcpy; ignores batch_size).
+        const size_t num_blocks    = static_cast<size_t>(request.copy_items_size());
+        const size_t total_slices  = dst_buffers.size();
+        const bool   uniform_items = num_blocks > 0 && (total_slices % num_blocks == 0);
+        const size_t batch_size    = uniform_items ? (total_slices / num_blocks) : total_slices;
+        size_t       kv_cache_size = 0;
+        size_t       kv_scale_size = 0;
+        if (uniform_items && cache_config_.kv_scale_stride_bytes > 0 && batch_size >= 2 && (batch_size % 2) == 0) {
+            kv_cache_size = dst_buffers[0]->sizeBytes();
+            kv_scale_size = dst_buffers[1]->sizeBytes();
+        }
+        const bool use_split_no_block_copy_opt = uniform_items && kv_cache_size > 0 && kv_scale_size > 0
+                                                 && block_size_ == (batch_size / 2) * (kv_cache_size + kv_scale_size);
+        MultiCopyParams mcp{dst_buffers, src_buffers, block_size_, batch_size, kv_cache_size, kv_scale_size};
+        if (use_split_no_block_copy_opt) {
+            device_->noBlockCopyOpt(mcp);
+        } else {
+            device_->noBlockCopy(mcp);
+        }
     }
 
     response.set_success(true);

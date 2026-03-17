@@ -564,6 +564,15 @@ cc_library(
 )
 
 cc_library(
+    name = "sm_copy_kernel",
+    srcs = ["sm_utils/sm_copy_kernel.cu"],
+    hdrs = ["sm_utils/sm_copy_kernel.h"],
+    deps = any_cuda_deps,
+    copts = any_cuda_copts(),
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "kernels_custom_ar",
     srcs = [
         "custom_ar_kernels.cu",

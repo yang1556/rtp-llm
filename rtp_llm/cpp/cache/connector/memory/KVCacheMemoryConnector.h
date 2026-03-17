@@ -128,6 +128,7 @@ private:
     const std::vector<std::string>    tp_addrs_;
 
     std::shared_ptr<BlockPool>                 block_pool_;
+    size_t                                     block_size_{0};  // from initBlockPool, for gather/scatter
     mutable std::mutex                         malloc_mutex_;
     std::shared_ptr<MemoryBlockCache>          block_cache_;
     std::shared_ptr<BroadcastManager>          broadcast_manager_;
