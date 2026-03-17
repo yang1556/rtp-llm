@@ -13,17 +13,24 @@ TcpServer::~TcpServer() {
     stop();
 }
 
-bool TcpServer::init(uint32_t io_thread_count, uint32_t worker_thread_count, uint32_t listen_port, bool enable_metric) {
+bool TcpServer::init(uint32_t io_thread_count,
+                     uint32_t worker_thread_count,
+                     uint32_t listen_port,
+                     bool     enable_metric,
+                     uint32_t anet_rpc_thread_num,
+                     uint32_t anet_rpc_queue_num) {
     if (rpc_server_transport_ == nullptr) {
         rpc_server_transport_.reset(new anet::Transport(io_thread_count));
         if (!rpc_server_transport_ || !rpc_server_transport_->start()) {
             RTP_LLM_LOG_ERROR("TcpServer init failed: create or start transport failed");
+            stop();
             return false;
         }
         rpc_server_transport_->setName("TcpServer");
     }
 
-    rpc_server_.reset(new arpc::ANetRPCServer(rpc_server_transport_.get(), 3, 100));
+    rpc_server_.reset(
+        new arpc::ANetRPCServer(rpc_server_transport_.get(), anet_rpc_thread_num, anet_rpc_queue_num));
     if (enable_metric) {
         arpc::KMonitorANetMetricReporterConfig metricConfig;
         metricConfig.metricLevel                 = kmonitor::FATAL;
@@ -32,6 +39,7 @@ bool TcpServer::init(uint32_t io_thread_count, uint32_t worker_thread_count, uin
         auto metricReporter = std::make_shared<arpc::KMonitorANetServerMetricReporter>(metricConfig);
         if (!metricReporter->init(rpc_server_transport_.get())) {
             RTP_LLM_LOG_WARNING("init anet metric reporter failed");
+            stop();
             return false;
         }
         rpc_server_->SetMetricReporter(metricReporter);
@@ -41,8 +49,10 @@ bool TcpServer::init(uint32_t io_thread_count, uint32_t worker_thread_count, uin
         new autil::LockFreeThreadPool(worker_thread_count, 100, nullptr, "tcp_server_rpc_threadpool", false));
     if (!rpc_worker_threadpool_->start()) {
         RTP_LLM_LOG_WARNING("tcp server init failed, start rpc worker threadpool failed");
+        stop();
         return false;
     }
+    rpc_worker_pool_started_ = true;
 
     listen_port_ = listen_port;
 
@@ -85,7 +95,10 @@ void TcpServer::stop() {
     }
 
     if (rpc_worker_threadpool_) {
-        rpc_worker_threadpool_->stop();
+        if (rpc_worker_pool_started_) {
+            rpc_worker_threadpool_->stop();
+        }
+        rpc_worker_pool_started_ = false;
         rpc_worker_threadpool_.reset();
     }
 

@@ -16,7 +16,11 @@ TcpKVCacheReceiver::~TcpKVCacheReceiver() {
     transfer_service_.reset();
 }
 
-bool TcpKVCacheReceiver::init(uint32_t listen_port, int io_thread_count, int worker_thread_count) {
+bool TcpKVCacheReceiver::init(uint32_t listen_port,
+                              int      io_thread_count,
+                              int      worker_thread_count,
+                              uint32_t anet_rpc_thread_num,
+                              uint32_t anet_rpc_queue_num) {
     transfer_service_ = std::make_shared<TcpTransferService>(task_store_, metrics_reporter_);
     if (!transfer_service_->init(1000, worker_thread_count)) {
         RTP_LLM_LOG_WARNING("init transfer service failed");
@@ -24,7 +28,7 @@ bool TcpKVCacheReceiver::init(uint32_t listen_port, int io_thread_count, int wor
     }
 
     tcp_server_ = std::make_shared<transfer::TcpServer>();
-    if (!tcp_server_->init(io_thread_count, worker_thread_count, listen_port, true)) {
+    if (!tcp_server_->init(io_thread_count, worker_thread_count, listen_port, true, anet_rpc_thread_num, anet_rpc_queue_num)) {
         RTP_LLM_LOG_WARNING("create tcp server failed");
         return false;
     }

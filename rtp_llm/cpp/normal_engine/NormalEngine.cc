@@ -51,6 +51,7 @@ NormalEngine::NormalEngine(const EngineInitParams&                       params,
     pd_sep_config(params.pd_sep_config),
     profiling_debug_logging_config(params.profiling_debug_logging_config),
     kv_cache_config(params.kv_cache_config),
+    cache_store_config_(params.cache_store_config),
     ffn_disaggregate_config(params.ffn_disaggregate_config),
     model_specific_config(params.model_specific_config),
     sp_config(params.sp_config),
@@ -275,8 +276,11 @@ void NormalEngine::initCacheManager(std::optional<WarmUpResult> warm_up_result) 
                                                          isEagle());
 
         resource_context_.cache_manager = make_shared<KVCacheManager>(
-            config, device_, false, metrics_reporter_, kv_cache_config, parallelism_config, runtime_config, sp_config);
-        resource_context_.role_type = pd_sep_config.role_type;
+            config, device_, false, metrics_reporter_, kv_cache_config, parallelism_config, runtime_config, sp_config,
+            pd_sep_config, cache_store_config_);
+        resource_context_.role_type      = pd_sep_config.role_type;
+        resource_context_.decode_entrance = pd_sep_config.decode_entrance;
+        resource_context_.device          = device_;
         if (!resource_context_.cache_manager->init()) {
             RTP_LLM_FAIL("init kv cache manager failed");
         }
@@ -294,8 +298,11 @@ void NormalEngine::initCacheManager(std::optional<WarmUpResult> warm_up_result) 
                          result.block_size_bytes / 1024);
         RTP_LLM_LOG_INFO("create cache manager with linear step %d", result.linear_step);
         resource_context_.cache_manager = make_shared<KVCacheManager>(
-            result, device_, false, metrics_reporter_, kv_cache_config, parallelism_config, runtime_config);
-        resource_context_.role_type = pd_sep_config.role_type;
+            result, device_, false, metrics_reporter_, kv_cache_config, parallelism_config, runtime_config,
+            SpeculativeExecutionConfig{}, pd_sep_config, cache_store_config_);
+        resource_context_.role_type       = pd_sep_config.role_type;
+        resource_context_.decode_entrance = pd_sep_config.decode_entrance;
+        resource_context_.device          = device_;
         if (!resource_context_.cache_manager->init()) {
             RTP_LLM_FAIL("init kv cache manager failed");
         }

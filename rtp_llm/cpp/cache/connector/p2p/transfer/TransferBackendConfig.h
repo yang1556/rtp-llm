@@ -12,6 +12,8 @@ struct TransferBackendConfig {
     int     messager_worker_thread_count        = 16;
     int     rdma_max_block_pairs_per_connection = 0;
     int64_t cache_store_listen_port             = 0;
+    int cache_store_tcp_anet_rpc_thread_num = 3;
+    int cache_store_tcp_anet_rpc_queue_num  = 100;
 };
 
 }  // namespace transfer

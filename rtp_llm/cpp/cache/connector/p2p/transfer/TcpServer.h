@@ -14,7 +14,12 @@ public:
 
 public:
     /// @brief 初始化 transport 和 RPC server（未启动监听）
-    bool init(uint32_t io_thread_count, uint32_t worker_thread_count, uint32_t listen_port, bool enable_metric);
+    bool init(uint32_t io_thread_count,
+              uint32_t worker_thread_count,
+              uint32_t listen_port,
+              bool     enable_metric,
+              uint32_t anet_rpc_thread_num = 3,
+              uint32_t anet_rpc_queue_num  = 100);
     /// @brief 注册 RPC 服务（须在 start() 之前调用）
     bool registerService(RPCService* rpc_service);
     /// @brief 启动监听并开始处理请求
@@ -32,6 +37,7 @@ private:
 
 private:
     uint32_t                               listen_port_;
+    bool                                   rpc_worker_pool_started_ {false};
     std::unique_ptr<anet::Transport>       rpc_server_transport_;
     std::shared_ptr<arpc::ANetRPCServer>   rpc_server_;
     std::shared_ptr<autil::ThreadPoolBase> rpc_worker_threadpool_;

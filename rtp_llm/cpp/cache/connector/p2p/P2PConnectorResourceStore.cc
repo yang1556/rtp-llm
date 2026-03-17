@@ -19,8 +19,9 @@ std::chrono::system_clock::time_point deadlineToTimeoutPoint(int64_t deadline_ms
 
 namespace rtp_llm {
 
-P2PConnectorResourceStore::P2PConnectorResourceStore(const kmonitor::MetricsReporterPtr& metrics_reporter):
-    metrics_reporter_(metrics_reporter) {}
+P2PConnectorResourceStore::P2PConnectorResourceStore(const kmonitor::MetricsReporterPtr& metrics_reporter,
+                                                       int                                 timeout_check_interval_ms):
+    metrics_reporter_(metrics_reporter), timeout_check_interval_ms_(timeout_check_interval_ms) {}
 
 P2PConnectorResourceStore::~P2PConnectorResourceStore() {
     if (check_timeout_thread_) {
@@ -31,7 +32,7 @@ P2PConnectorResourceStore::~P2PConnectorResourceStore() {
 bool P2PConnectorResourceStore::init() {
     check_timeout_thread_ =
         autil::LoopThread::createLoopThread(std::bind(&P2PConnectorResourceStore::checkTimeout, this),
-                                            100,  // 100ms
+                                            timeout_check_interval_ms_,
                                             "P2PConnectorResourceStoreCheckTimeoutThread");
     if (!check_timeout_thread_) {
         RTP_LLM_LOG_ERROR("P2PConnectorResourceStore init failed: check_timeout_thread is null");

@@ -51,7 +51,10 @@ void WriteCacheStoreOp(const torch::Tensor&                         input_length
             (kv_cache.value().kv_scale_base.defined() && kv_cache.value().kv_scale_base.numel() > 0) ?
                 torchTensor2Buffer(kv_cache.value().kv_scale_base) :
                 nullptr;
-        DeviceFactory::getDefaultDevice()->writeCacheStore(inputs, kv_cache_info, cache_store_inputs.mla_kvcache);
+        std::optional<CacheStoreInputs> opt_inputs        = inputs;
+        std::optional<KvCacheInfo>      opt_kv_cache_info = kv_cache_info;
+        WriteCacheParams                params(opt_inputs, opt_kv_cache_info, cache_store_inputs.mla_kvcache);
+        DeviceFactory::getDefaultDevice()->writeCacheStore(params);
     }
 }
 

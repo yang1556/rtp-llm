@@ -36,7 +36,8 @@ private:
 
 class LayerCacheBufferStore {
 public:
-    LayerCacheBufferStore(uint64_t timeout_ms = 100 * 1000);
+    /// timeout_ms 建议与 CacheStoreConfig::p2p_layer_cache_buffer_store_timeout_ms 一致
+    explicit LayerCacheBufferStore(uint64_t timeout_ms);
     ~LayerCacheBufferStore() = default;
 
 public:

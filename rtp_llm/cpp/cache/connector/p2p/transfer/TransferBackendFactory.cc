@@ -22,7 +22,9 @@ TransferBackendPair createTcpBackend(const TransferBackendConfig&       config,
     auto receiver = std::make_shared<tcp::TcpKVCacheReceiver>(metrics_reporter);
     if (!receiver->init(config.cache_store_listen_port,
                         config.messager_io_thread_count,
-                        config.messager_worker_thread_count)) {
+                        config.messager_worker_thread_count,
+                        static_cast<uint32_t>(config.cache_store_tcp_anet_rpc_thread_num),
+                        static_cast<uint32_t>(config.cache_store_tcp_anet_rpc_queue_num))) {
         RTP_LLM_LOG_ERROR("createTcpBackend: TcpKVCacheReceiver init failed");
         return {};
     }

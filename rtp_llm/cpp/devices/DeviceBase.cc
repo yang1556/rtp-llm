@@ -9,9 +9,13 @@
 #include "rtp_llm/cpp/devices/OpData.h"
 #include "torch/extension.h"
 #include "torch/types.h"
+#include <limits>
 #include <numeric>
 #include "rtp_llm/cpp/config/ConfigModules.h"
 #include "rtp_llm/cpp/disaggregate/cache_store/ErrorCodeUtil.h"
+#include "rtp_llm/cpp/cache/BatchKVCacheResource.h"
+#include "rtp_llm/cpp/cache/connector/IKVCacheConnectorCoordinator.h"
+#include "rtp_llm/cpp/cache/connector/KVCacheConnectorLayerContext.h"
 
 using namespace std;
 using namespace rtp_llm;
@@ -153,7 +157,12 @@ void DeviceBase::setCacheStore(std::shared_ptr<rtp_llm::CacheStore> cache_store)
 
 void DeviceBase::writeCacheStore(const WriteCacheParams& params) {
     if (params.cache_store_inputs.has_value() && params.kv_cache.has_value()) {
-        writeCacheStore(params.cache_store_inputs.value(), params.kv_cache.value(), params.mla_kvcache);
+        if (cache_store_) {
+            writeCacheStore(params.cache_store_inputs.value(), params.kv_cache.value(), params.mla_kvcache);
+        }
+        if (connector_coordinator_) {
+            writeCacheToConnector(params);
+        }
     }
 }
 
@@ -212,8 +221,6 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
     RTP_LLM_CHECK_WITH_INFO(param.context_batch_size == param.request_pd_separation->size(), "size not same");
     RTP_LLM_CHECK_WITH_INFO(param.context_batch_size == param.request_id->size(),
                             "context batch size and request id size is not same");
-
-    RTP_LLM_LOG_DEBUG("write cache store, context_batch_size is %ld", param.context_batch_size);
 
     for (size_t batch_id = 0; batch_id < param.context_batch_size; batch_id++) {
         if (*(param.request_pd_separation->dataWithOffset<bool>(batch_id)) == false) {
@@ -307,6 +314,150 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
             }
         };
         cache_store_->store(request_blocks, storeCallback);
+    }
+}
+
+void DeviceBase::setConnectorCoordinator(std::shared_ptr<IKVCacheConnectorCoordinator> connector_coordinator) {
+    connector_coordinator_ = connector_coordinator;
+    RTP_LLM_LOG_INFO("DeviceBase setConnectorCoordinator, connector_coordinator_: %p", connector_coordinator_.get());
+}
+
+// KVCacheConnectorLayerContext implementation for write-by-layer (P2P) path.
+// Holds the per-layer GPU transfer metadata: resource, request_id, attention_event.
+class WriteCacheLayerContext: public KVCacheConnectorLayerContext {
+public:
+    WriteCacheLayerContext(std::shared_ptr<KVCacheResource> resource,
+                           int64_t                          request_id,
+                           DeviceEventPtr                   attention_event):
+        resource_(std::move(resource)), request_id_(request_id), attention_event_(std::move(attention_event)) {}
+
+    const KVCacheResource& kvCacheResource() const override {
+        return *resource_;
+    }
+    int64_t requestId() const override {
+        return request_id_;
+    }
+    DeviceEventPtr attentionEvent() const override {
+        return attention_event_;
+    }
+
+private:
+    std::shared_ptr<KVCacheResource> resource_;
+    int64_t                          request_id_;
+    DeviceEventPtr                   attention_event_;
+};
+
+void DeviceBase::writeCacheToConnector(const WriteCacheParams& params) {
+    auto& param = params.cache_store_inputs.value();
+    if (param.warmup) {
+        RTP_LLM_LOG_DEBUG("is warmup, so ignore writeCacheToConnector");
+        return;
+    }
+
+    if (!param.pd_separation || param.context_batch_size == 0) {
+        return;
+    }
+
+    auto seq_size_per_block = param.tokens_per_block;
+    auto global_layer_id    = connector_coordinator_->convertToGlobalLayerId(param.model_id, param.layer_id);
+    if (global_layer_id == std::numeric_limits<uint32_t>::max()) {
+        RTP_LLM_LOG_ERROR("writeCacheToConnector: convertToGlobalLayerId failed, model_id=%d, layer_id=%d",
+                          param.model_id,
+                          param.layer_id);
+        return;
+    }
+
+    const int group_num =
+        param.kv_cache_group_types_host ? static_cast<int>(param.kv_cache_group_types_host->shape()[0]) : 1;
+
+    int gid = 0;
+    if (param.host_kv_cache_offset->shape().size() == 3) {
+        gid = -1;
+        if (param.kv_cache_layer_to_group_host && param.layer_id >= 0
+            && static_cast<size_t>(param.layer_id) < param.kv_cache_layer_to_group_host->size()) {
+            gid = param.kv_cache_layer_to_group_host->data<int32_t>()[param.layer_id];
+        }
+        RTP_LLM_CHECK_WITH_INFO(gid >= 0 && gid < group_num,
+                                "writeCacheToConnector: invalid group id [%d], group_num=%d, layer_id=%d",
+                                gid,
+                                group_num,
+                                param.layer_id);
+    } else if (param.kv_cache_layer_to_group_host && param.layer_id >= 0
+               && static_cast<size_t>(param.layer_id) < param.kv_cache_layer_to_group_host->size()) {
+        gid = param.kv_cache_layer_to_group_host->data<int32_t>()[param.layer_id];
+    }
+
+    const int32_t* offset_addr          = nullptr;
+    size_t         max_blocks_per_batch = 0;
+    if (param.host_kv_cache_offset->shape().size() == 3) {
+        const auto group_offset_view = (*param.host_kv_cache_offset)[static_cast<size_t>(gid)];
+        max_blocks_per_batch         = group_offset_view.shape()[1];
+        offset_addr                  = group_offset_view.data<int32_t>();
+    } else {
+        max_blocks_per_batch = param.host_kv_cache_offset->shape()[1];
+        offset_addr          = param.host_kv_cache_offset->data<int32_t>();
+    }
+
+    RTP_LLM_CHECK_WITH_INFO(param.context_batch_size == param.request_pd_separation->size(), "size not same");
+    RTP_LLM_CHECK_WITH_INFO(param.context_batch_size == param.request_id->size(),
+                            "context batch size and request id size is not same");
+
+    for (size_t batch_id = 0; batch_id < param.context_batch_size; batch_id++) {
+        if (*(param.request_pd_separation->dataWithOffset<bool>(batch_id)) == false) {
+            RTP_LLM_LOG_DEBUG("DeviceBase writeKVCacheConnector ignore batch_id: %ld", batch_id);
+            continue;
+        }
+        auto request_id = *(param.request_id->dataWithOffset<int64_t>(batch_id));
+        RTP_LLM_CHECK_WITH_INFO(param.prefix_lengths_host && param.input_lengths_host,
+                                "failed to get prefix_length_host and input_length_host for cache store");
+        RTP_LLM_CHECK_WITH_INFO(param.prefix_lengths_host->data<int>()[batch_id] % seq_size_per_block == 0,
+                                "prefix_length \% seq_size_per_block != 0");
+
+        int block_num =
+            (param.input_lengths_host->data<int>()[param.decoder_batch_size + batch_id] + seq_size_per_block - 1)
+            / seq_size_per_block;
+        auto reuse_block_num = param.prefix_lengths_host->data<int>()[batch_id] / seq_size_per_block;
+        auto total_block_num = block_num + reuse_block_num;
+
+        auto kv_cache_resource = std::make_shared<KVCacheResource>();
+        for (size_t index = 0; index < total_block_num; index++) {
+            auto    str_cache_key = param.cache_keys[batch_id * max_blocks_per_batch + index];
+            int64_t cache_key     = 0;
+            if (!autil::StringUtil::strToInt64(str_cache_key.c_str(), cache_key)) {
+                RTP_LLM_LOG_WARNING(
+                    "DeviceBase writeKVCacheConnector failed to convert cache_key to int64_t, cache_key: %s",
+                    str_cache_key.c_str());
+                return;
+            }
+            kv_cache_resource->cacheKeys().push_back(cache_key);
+        }
+
+        std::vector<int> layer_to_group_id(global_layer_id + 1, 0);
+        layer_to_group_id[global_layer_id] = gid;
+        if (global_layer_id == 0) {
+            RTP_LLM_LOG_INFO("writeCacheToConnector [P2P]: request_id=%ld, batch_id=%zu, group_num=%d, gid=%d, "
+                             "total_blocks=%zu, block_num=%d, reuse=%d, max_blocks_per_batch=%zu",
+                             request_id,
+                             batch_id,
+                             group_num,
+                             gid,
+                             total_block_num,
+                             block_num,
+                             reuse_block_num,
+                             max_blocks_per_batch);
+        }
+        kv_cache_resource->initGroups(group_num, global_layer_id + 1, layer_to_group_id);
+
+        auto& block_ids = kv_cache_resource->blocks(gid);
+        block_ids.resize(total_block_num, -1);
+
+        for (size_t index = 0; index < total_block_num; index++) {
+            auto block_id    = *(offset_addr + (param.decoder_batch_size + batch_id) * max_blocks_per_batch + index);
+            block_ids[index] = block_id;
+        }
+
+        auto layer_context = std::make_shared<WriteCacheLayerContext>(kv_cache_resource, request_id, createEvent());
+        connector_coordinator_->asyncWriteByLayer(global_layer_id, layer_context);
     }
 }
 

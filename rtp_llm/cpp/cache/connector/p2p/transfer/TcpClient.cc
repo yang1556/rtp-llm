@@ -16,6 +16,7 @@ bool TcpClient::init(int io_thread_count) {
     if (rpc_channel_transport_ == nullptr) {
         rpc_channel_transport_.reset(new anet::Transport(io_thread_count));
         if (!rpc_channel_transport_ || !rpc_channel_transport_->start()) {
+            stop();
             return false;
         }
         rpc_channel_transport_->setName("MessagerClientRPCChannel");
@@ -30,6 +31,7 @@ bool TcpClient::init(int io_thread_count) {
         auto metricReporter = std::make_shared<arpc::KMonitorANetClientMetricReporter>(metricConfig);
         if (!metricReporter->init(rpc_channel_transport_.get())) {
             RTP_LLM_LOG_ERROR("anet metric reporter init failed");
+            stop();
             return false;
         }
         rpc_channel_manager_->SetMetricReporter(metricReporter);
@@ -46,6 +48,10 @@ void TcpClient::stop() {
         rpc_channel_manager_->Close();
         rpc_channel_manager_.reset();
 
+        rpc_channel_transport_.reset();
+    } else if (rpc_channel_transport_) {
+        rpc_channel_transport_->stop();
+        rpc_channel_transport_->wait();
         rpc_channel_transport_.reset();
     }
 }

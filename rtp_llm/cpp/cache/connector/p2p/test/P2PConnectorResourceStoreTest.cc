@@ -14,7 +14,7 @@ namespace rtp_llm {
 class P2PConnectorResourceStoreTest: public ::testing::Test {
 protected:
     void SetUp() override {
-        stream_store_ = std::make_unique<P2PConnectorResourceStore>(nullptr);
+        stream_store_ = std::make_unique<P2PConnectorResourceStore>(nullptr, 100);
         ASSERT_TRUE(stream_store_->init());
     }
 

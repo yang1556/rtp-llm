@@ -9,7 +9,8 @@
 
 namespace rtp_llm {
 
-P2PBroadcastClient::P2PBroadcastClient(const std::vector<std::string>& worker_addrs): worker_addrs_(worker_addrs) {}
+P2PBroadcastClient::P2PBroadcastClient(const std::vector<std::string>& worker_addrs, int64_t cancel_broadcast_timeout_ms):
+    worker_addrs_(worker_addrs), cancel_broadcast_timeout_ms_(cancel_broadcast_timeout_ms) {}
 
 bool P2PBroadcastClient::init() {
     rpc_pool_             = std::make_shared<RPCPool>();
@@ -157,8 +158,7 @@ std::shared_ptr<P2PBroadcastClient::Result> P2PBroadcastClient::cancel(const std
         requests.push_back(std::move(request));
     }
 
-    // 执行广播，使用短超时时间
-    int64_t timeout_ms = 1000;  // 1秒超时
+    int64_t timeout_ms = cancel_broadcast_timeout_ms_;
 
     // Define the RPC call lambda for ExecuteFunction
     auto rpc_call = [](std::shared_ptr<RpcService::Stub>&    stub,

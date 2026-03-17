@@ -17,7 +17,8 @@ class P2PBroadcastClient {
 public:
     using TpBroadcastResult = ::rtp_llm::BroadcastResult<FunctionRequestPB, FunctionResponsePB>;
 
-    explicit P2PBroadcastClient(const std::vector<std::string>& worker_addrs);
+    explicit P2PBroadcastClient(const std::vector<std::string>& worker_addrs,
+                              int64_t cancel_broadcast_timeout_ms = 1000);
     ~P2PBroadcastClient() = default;
 
 public:
@@ -77,6 +78,7 @@ private:
 
 private:
     std::vector<std::string>          worker_addrs_;
+    int64_t                           cancel_broadcast_timeout_ms_;
     std::shared_ptr<RPCPool>          rpc_pool_;
     std::shared_ptr<BroadcastManager> tp_broadcast_manager_;
 };

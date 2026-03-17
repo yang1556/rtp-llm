@@ -12,6 +12,8 @@ struct P2PConnectorSchedulerConfig {
     std::vector<std::string> worker_grpc_addrs;
     std::vector<std::string> worker_addrs;
     int64_t                  p2p_transfer_not_done_resource_hold_ms = 10 * 1000;
+    int                      p2p_resource_store_timeout_check_interval_ms = 100;
+    int64_t                  p2p_cancel_broadcast_timeout_ms               = 1000;
 
     static P2PConnectorSchedulerConfig create(const RuntimeConfig&    runtime_config,
                                               const CacheStoreConfig& cache_store_config,
@@ -20,6 +22,9 @@ struct P2PConnectorSchedulerConfig {
         config.worker_grpc_addrs                      = runtime_config.worker_grpc_addrs;
         config.worker_addrs                           = runtime_config.worker_addrs;
         config.p2p_transfer_not_done_resource_hold_ms = cache_store_config.p2p_transfer_not_done_resource_hold_ms;
+        config.p2p_resource_store_timeout_check_interval_ms =
+            cache_store_config.p2p_resource_store_timeout_check_interval_ms;
+        config.p2p_cancel_broadcast_timeout_ms = cache_store_config.p2p_cancel_broadcast_timeout_ms;
         return config;
     }
 };
@@ -29,6 +34,7 @@ struct P2PConnectorWorkerConfig {
 
     int64_t p2p_read_steal_before_deadline_ms  = 250;
     int64_t p2p_read_return_before_deadline_ms = 100;
+    int64_t p2p_layer_cache_buffer_store_timeout_ms = 100 * 1000;
 
     int64_t  tp_size       = 1;
     int64_t  tp_rank       = 0;
@@ -46,6 +52,11 @@ struct P2PConnectorWorkerConfig {
         config.transfer_backend_config.rdma_max_block_pairs_per_connection =
             cache_store_config.rdma_max_block_pairs_per_connection;
         config.transfer_backend_config.cache_store_listen_port = pd_sep_config.cache_store_listen_port;
+        config.transfer_backend_config.cache_store_tcp_anet_rpc_thread_num =
+            cache_store_config.cache_store_tcp_anet_rpc_thread_num;
+        config.transfer_backend_config.cache_store_tcp_anet_rpc_queue_num =
+            cache_store_config.cache_store_tcp_anet_rpc_queue_num;
+        config.p2p_layer_cache_buffer_store_timeout_ms = cache_store_config.p2p_layer_cache_buffer_store_timeout_ms;
         config.p2p_read_steal_before_deadline_ms               = cache_store_config.p2p_read_steal_before_deadline_ms;
         config.p2p_read_return_before_deadline_ms              = cache_store_config.p2p_read_return_before_deadline_ms;
         config.tp_size                                         = parallelism_config.tp_size;

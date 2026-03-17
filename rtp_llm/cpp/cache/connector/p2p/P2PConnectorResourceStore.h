@@ -31,7 +31,7 @@ struct P2PConnectorResourceEntry {
 // 需要将资源移除。unique_key 目前由 decode 生成, 后续可能由 master 统一生成保证全局唯一。
 class P2PConnectorResourceStore {
 public:
-    P2PConnectorResourceStore(const kmonitor::MetricsReporterPtr& metrics_reporter);
+    P2PConnectorResourceStore(const kmonitor::MetricsReporterPtr& metrics_reporter, int timeout_check_interval_ms);
     ~P2PConnectorResourceStore();
 
 public:
@@ -62,6 +62,7 @@ private:
     kmonitor::MetricsReporterPtr                                      metrics_reporter_;
 
     autil::LoopThreadPtr check_timeout_thread_;
+    int                    timeout_check_interval_ms_;
 };
 
 }  // namespace rtp_llm

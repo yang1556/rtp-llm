@@ -18,7 +18,8 @@ void P2PConnectorScheduler::stopChecker() {
 
 bool P2PConnectorScheduler::init(const std::string& process_id) {
     RTP_LLM_LOG_INFO("init start");
-    tp_broadcast_client_ = std::make_shared<P2PBroadcastClient>(config_.worker_grpc_addrs);
+    tp_broadcast_client_ = std::make_shared<P2PBroadcastClient>(config_.worker_grpc_addrs,
+                                                                  config_.p2p_cancel_broadcast_timeout_ms);
     if (!tp_broadcast_client_->init()) {
         RTP_LLM_LOG_ERROR("init failed: tp_broadcast_client init failed");
         return false;

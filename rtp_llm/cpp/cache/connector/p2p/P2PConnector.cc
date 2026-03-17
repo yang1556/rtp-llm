@@ -42,7 +42,8 @@ bool P2PConnector::init() {
     }
 
     // 创建 stream store（用于管理 stream）
-    stream_store_ = std::make_shared<P2PConnectorResourceStore>(metrics_reporter_);
+    stream_store_ = std::make_shared<P2PConnectorResourceStore>(
+        metrics_reporter_, config_.scheduler_config.p2p_resource_store_timeout_check_interval_ms);
     if (!stream_store_->init()) {
         RTP_LLM_LOG_ERROR("init failed: stream_store init failed");
         return false;

@@ -58,6 +58,8 @@ inline ErrorCode transRPCErrorCode(ErrorCodePB error_code) {
         {ErrorCodePB::P2P_CONNECTOR_WORKER_READ_FAILED, ErrorCode::P2P_CONNECTOR_WORKER_READ_FAILED},
         {ErrorCodePB::P2P_CONNECTOR_WORKER_READ_CANCELED, ErrorCode::P2P_CONNECTOR_WORKER_READ_CANCELLED},
         {ErrorCodePB::P2P_CONNECTOR_WORKER_READ_TIMEOUT, ErrorCode::P2P_CONNECTOR_WORKER_READ_TIMEOUT},
+        {ErrorCodePB::P2P_CONNECTOR_WORKER_READ_TRANSFER_NOT_DONE,
+         ErrorCode::P2P_CONNECTOR_WORKER_READ_TRANSFER_NOT_DONE},
     };
     auto it = error_code_map.find(error_code);
     if (it != error_code_map.end()) {
@@ -101,6 +103,8 @@ inline ErrorCodePB transErrorCodeToRPC(ErrorCode error_code) {
         {ErrorCode::P2P_CONNECTOR_WORKER_READ_FAILED, ErrorCodePB::P2P_CONNECTOR_WORKER_READ_FAILED},
         {ErrorCode::P2P_CONNECTOR_WORKER_READ_CANCELLED, ErrorCodePB::P2P_CONNECTOR_WORKER_READ_CANCELED},
         {ErrorCode::P2P_CONNECTOR_WORKER_READ_TIMEOUT, ErrorCodePB::P2P_CONNECTOR_WORKER_READ_TIMEOUT},
+        {ErrorCode::P2P_CONNECTOR_WORKER_READ_TRANSFER_NOT_DONE,
+         ErrorCodePB::P2P_CONNECTOR_WORKER_READ_TRANSFER_NOT_DONE},
     };
     auto it = error_code_map.find(error_code);
     if (it != error_code_map.end()) {

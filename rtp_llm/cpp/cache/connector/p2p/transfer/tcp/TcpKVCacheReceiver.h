@@ -18,7 +18,11 @@ public:
 
 public:
     /// @brief 启动 TCP server 并注册传输服务，开始监听
-    bool init(uint32_t listen_port, int io_thread_count, int worker_thread_count);
+    bool init(uint32_t listen_port,
+              int      io_thread_count,
+              int      worker_thread_count,
+              uint32_t anet_rpc_thread_num = 3,
+              uint32_t anet_rpc_queue_num  = 100);
 
     /// @brief No-op for TCP mode: memory registration is not required.
     bool regMem(const BlockInfo& block_info, uint64_t aligned_size = 0) override;
