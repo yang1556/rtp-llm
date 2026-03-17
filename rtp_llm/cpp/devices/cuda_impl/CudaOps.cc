@@ -11,7 +11,9 @@
 #include "rtp_llm/cpp/kernels/copy_utils.h"
 #include "rtp_llm/cpp/kernels/moe_kernels.h"
 #include "rtp_llm/cpp/kernels/tensor_ops_kernels.h"
+#include "rtp_llm/cpp/cuda/cuda_copy_utils.h"
 #include "rtp_llm/cpp/cuda/cuda_host_utils.h"
+#include "rtp_llm/cpp/utils/Logger.h"
 #include "rtp_llm/cpp/cuda/nccl/nccl_utils_torch.h"
 #include "rtp_llm/cpp/cuda/nccl/nccl_utils.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
@@ -19,6 +21,7 @@
 #include <cuda_profiler_api.h>
 #include <memory>
 #include <unistd.h>
+#include <vector>
 
 using namespace std;
 
@@ -193,6 +196,20 @@ void CudaDevice::noBlockCopy(const MultiCopyParams& params) {
     }
     cudaStreamSynchronize(no_block_copy_stream_);
     check_cuda_error();
+}
+
+void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
+    RUNTIME_ASSERT_OP_ARG(params.multi_src.size() == params.multi_dst.size(),
+                          "multi_src and multi_dst must have the same size");
+    if (params.multi_src.empty()) {
+        cudaStreamSynchronize(no_block_copy_stream_);
+        check_cuda_error();
+        return;
+    }
+    CudaCopyUtils::multiCopyWithGatherScatter(
+        params.multi_src, params.multi_dst, no_block_copy_stream_, params.block_size, params.batch_size);
+    check_cuda_error();
+    return;
 }
 
 TransposeOutput CudaDevice::transpose(const TransposeParams& params) {

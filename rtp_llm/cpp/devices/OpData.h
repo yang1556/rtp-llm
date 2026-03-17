@@ -228,6 +228,10 @@ struct MultiMergeCopyParams {
 struct MultiCopyParams {
     std::vector<BufferPtr> multi_dst;
     std::vector<BufferPtr> multi_src;
+    /// Optional: from initBlockPool (sum of layer_block_stride). When set with batch_size, used for gather/scatter.
+    size_t block_size = 0;
+    /// Optional: layer_all_num * 2 (mla + indexer per layer). When set with block_size, used for gather/scatter.
+    size_t batch_size = 0;
 };
 
 struct BatchCopyParams {

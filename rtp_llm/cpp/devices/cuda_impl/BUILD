@@ -153,6 +153,7 @@ cc_library(
     ],
     deps = [
         ":cuda_register",
+        "//rtp_llm/cpp/cuda:cuda_copy_utils",
         "//rtp_llm/cpp/devices/torch_impl:torch_beam_search_op_impl",
         "//rtp_llm/cpp/kernels:scaled_fp8_quant",
     ],
