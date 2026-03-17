@@ -142,6 +142,7 @@ public:
     void                          batchCopy(const BatchCopyParams& params) override;
     void                          noBlockCopy(const CopyParams& params) override;
     void                          noBlockCopy(const MultiCopyParams& params) override;
+    void                          noBlockCopyOpt(const MultiCopyParams& params) override;
     void                          bufMemset(Buffer& buf, int val, DeviceStream stream = DeviceStream::DEFAULT) override;
     TransposeOutput               transpose(const TransposeParams& params) override;
     AddBiasOutput                 addbias(const AddBiasParams& params) override;
