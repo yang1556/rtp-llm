@@ -539,7 +539,7 @@ class CustomChatRenderer:
         chat_logprob = ChatCompletionTokenLogprob(
             token=selected_token,
             bytes=list(selected_token.encode("utf-8", errors="replace")),
-            logprob=all_probs[output_id].log().item(),
+            logprob=all_probs[selected_id].log().item(),
             top_logprobs=[],
         )
         for i in range(prob_return_num):
@@ -1048,7 +1048,7 @@ class CustomChatRenderer:
         chat_logprob = ChatCompletionTokenLogprob(
             token=selected_token,
             bytes=list(selected_token.encode("utf-8", errors="replace")),
-            logprob=all_probs[output_id].log().item(),
+            logprob=all_probs[selected_id].log().item(),
             top_logprobs=[],
         )
         for i in range(prob_return_num):

@@ -459,6 +459,9 @@ void QueryConverter::transResponse(GenerateOutputsPB*     outputs,
     stackBuffersToTensorPB(
         flatten_output->mutable_all_hidden_states(), source_outputs, [](const auto& r) { return r.all_hidden_states; });
 
+    stackBuffersToTensorPB(
+        flatten_output->mutable_all_probs(), source_outputs, [](const auto& r) { return r.aux_info.all_probs; });
+
     RTP_LLM_LOG_DEBUG("transResponse done");
 }
 
