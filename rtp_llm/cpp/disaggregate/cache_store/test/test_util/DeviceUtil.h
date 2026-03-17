@@ -1,3 +1,5 @@
+#pragma once
+
 #include <vector>
 
 #include "rtp_llm/cpp/devices/DeviceBase.h"
