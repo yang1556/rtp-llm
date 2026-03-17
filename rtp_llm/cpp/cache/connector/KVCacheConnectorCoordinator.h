@@ -54,7 +54,7 @@ public:
     virtual bool              executeFunction(const FunctionRequestPB& request, FunctionResponsePB& response);
     std::vector<CacheKeyType> memoryCacheKeys() const;
 
-    int convertToGlobalLayerId(int model_id, int layer_id) const override {
+    uint32_t convertToGlobalLayerId(int model_id, int layer_id) const override {
         return allocator_->convertToGlobalLayerId(model_id, layer_id);
     }
 
@@ -85,9 +85,9 @@ private:
     kmonitor::MetricsReporterPtr      metrics_reporter_;
 
     // P2P connector 相关（运行时按 isPdInvertMode() 决定是否初始化）
-    PDSepConfig                       pd_sep_config_;
-    CacheStoreConfig                  cache_store_config_;
-    std::shared_ptr<P2PConnector>     p2p_connector_;
+    PDSepConfig                   pd_sep_config_;
+    CacheStoreConfig              cache_store_config_;
+    std::shared_ptr<P2PConnector> p2p_connector_;
 
     std::vector<std::shared_ptr<KVCacheConnector>>    connectors_;
     std::shared_ptr<KVCacheMemoryConnector>           memory_connector_;

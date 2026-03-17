@@ -16,8 +16,8 @@ public:
 
 public:
     virtual int64_t     deadlineMs() const = 0;
-    virtual std::string uniqueKey()  const = 0;
-    virtual int64_t     requestId()  const = 0;
+    virtual std::string uniqueKey() const  = 0;
+    virtual int64_t     requestId() const  = 0;
 
     virtual void             appendTokenId(int batch_id, int token_id) = 0;
     virtual std::vector<int> currentExecuteTokens(int batch_id)        = 0;
@@ -27,10 +27,12 @@ public:
                               const TensorPB&         propose_hidden)                             = 0;
     virtual std::optional<std::tuple<std::vector<int>, TensorPB, TensorPB>> getSPInfoPB() = 0;
 
-    virtual int                          reuseBlockNum()  = 0;
+    virtual int                            reuseBlockNum()  = 0;
     virtual std::tuple<int, int, int, int> getReuseLength() = 0;  // total, local, remote, memory
-    virtual void setPrefillReuseLength(int reuse_length, int local_reuse_length, int remote_reuse_length,
-                                       int memory_reuse_length) = 0;
+    virtual void                           setPrefillReuseLength(int reuse_length,
+                                                                 int local_reuse_length,
+                                                                 int remote_reuse_length,
+                                                                 int memory_reuse_length) = 0;
 
     virtual std::pair<std::string, uint32_t> getPrefillAddr() = 0;  // prefill_ip, prefill_port
 
@@ -44,7 +46,6 @@ public:
 
     // Set stream to stop with error code and message
     virtual void setStop(ErrorCode error_code, const std::string& error_msg) = 0;
-
 };
 using IGenerateStreamPtr = std::shared_ptr<IGenerateStream>;
 

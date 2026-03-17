@@ -15,7 +15,7 @@ void FusedAsyncContext::waitDone() {
             context->waitDone();
         }
     }
-    RTP_LLM_LOG_WARNING("fused async context wait done, success: %d", success());
+    RTP_LLM_LOG_DEBUG("fused async context wait done, success: %d", success());
 }
 
 bool FusedAsyncContext::done() const {
@@ -30,7 +30,8 @@ bool FusedAsyncContext::done() const {
 bool FusedAsyncContext::success() const {
     for (const auto& context : contexts_) {
         if (context && !context->success()) {
-            RTP_LLM_LOG_WARNING("fused async context success is false, context error info: %s", context->errorInfo().ToString().c_str());
+            RTP_LLM_LOG_DEBUG("fused async context success is false, context error info: %s",
+                              context->errorInfo().ToString().c_str());
             return false;
         }
     }

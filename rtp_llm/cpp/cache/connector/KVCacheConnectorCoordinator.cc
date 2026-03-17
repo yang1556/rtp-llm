@@ -13,7 +13,6 @@
 
 namespace rtp_llm {
 
-
 KVCacheConnectorCoordinator::KVCacheConnectorCoordinator(const CacheConfig&                       cache_config,
                                                          const KVCacheConfig&                     kv_cache_config,
                                                          const RuntimeConfig&                     runtime_config,
@@ -108,6 +107,7 @@ KVCacheConnectorCoordinator::asyncRead(const std::shared_ptr<KVCacheConnectorRea
         return nullptr;
     }
     const auto& kvcache_resource = connector_context->kvCacheResource();
+    // empty cache keys will not handled by coordinator.
     if (kvcache_resource.cacheKeys().empty()) {
         return nullptr;
     }
@@ -170,8 +170,9 @@ KVCacheConnectorCoordinator::asyncWrite(const std::shared_ptr<KVCacheConnectorRe
     return fused_write_context;
 }
 
-std::shared_ptr<AsyncContext> KVCacheConnectorCoordinator::asyncWriteByLayer(
-    int layer_id, const std::shared_ptr<KVCacheConnectorLayerContext>& layer_context) {
+std::shared_ptr<AsyncContext>
+KVCacheConnectorCoordinator::asyncWriteByLayer(int                                                  layer_id,
+                                               const std::shared_ptr<KVCacheConnectorLayerContext>& layer_context) {
     if (!p2p_connector_) {
         return nullptr;
     }
@@ -181,11 +182,11 @@ std::shared_ptr<AsyncContext> KVCacheConnectorCoordinator::asyncWriteByLayer(
     }
     if (layer_id == 0) {
         RTP_LLM_LOG_INFO("asyncWriteByLayer [P2P]: dispatching layer_id=%d, request_id=%ld to P2PConnector",
-                         layer_id, layer_context->requestId());
+                         layer_id,
+                         layer_context->requestId());
     }
     return p2p_connector_->asyncWriteByLayer(layer_id, layer_context);
 }
-
 
 std::shared_ptr<KVCacheMemoryConnector> KVCacheConnectorCoordinator::initMemoryConnector() {
     auto memory_connector = std::make_shared<KVCacheMemoryConnector>(
@@ -293,8 +294,8 @@ void KVCacheConnectorCoordinator::asyncReadAfterMatch(std::shared_ptr<FusedAsync
 }
 
 void KVCacheConnectorCoordinator::handleRead(const P2PConnectorStartLoadRequestPB& request,
-                                              P2PConnectorStartLoadResponsePB&      response,
-                                              std::function<bool()>                 is_cancelled) {
+                                             P2PConnectorStartLoadResponsePB&      response,
+                                             std::function<bool()>                 is_cancelled) {
     if (!p2p_connector_) {
         RTP_LLM_LOG_WARNING("handleRead called but P2P connector not initialized");
         return;
@@ -335,7 +336,7 @@ bool KVCacheConnectorCoordinator::initP2PConnectorInternal() {
     if (!isPdInvertMode()) {
         return true;
     }
-    const uint32_t layer_all_num        = static_cast<uint32_t>(cache_config_.layer_all_num);
+    const uint32_t layer_all_num         = static_cast<uint32_t>(cache_config_.layer_all_num);
     auto           layer_block_converter = std::make_shared<LayerBlockConverterImpl>(allocator_);
 
     auto p2p_config = P2PConnectorConfig::create(
