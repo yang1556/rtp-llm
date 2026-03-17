@@ -5,9 +5,9 @@ from unittest import TestCase, main
 print(os.getcwd())
 print(
     "PYTHONPATH="
-    + os.environ["PYTHONPATH"]
+    + os.environ.get("PYTHONPATH", "")
     + " LD_LIBRARY_PATH="
-    + os.environ["LD_LIBRARY_PATH"]
+    + os.environ.get("LD_LIBRARY_PATH", "")
     + " "
     + sys.executable
     + " "
