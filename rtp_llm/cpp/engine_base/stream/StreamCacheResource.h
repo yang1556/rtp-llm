@@ -113,8 +113,9 @@ public:
         return debug_string.str();
     }
 
+    void loadCacheSync();
+
 private:
-    void                          loadCacheSync();
     void                          waitLoadCacheDone(const std::shared_ptr<AsyncContext>& load_context);
     std::shared_ptr<AsyncContext> storeCacheAsync(const std::shared_ptr<BatchKVCacheResource>& batch_resource,
                                                   bool                                         enable_memory_cache,
@@ -133,6 +134,7 @@ private:
     int  malloc_failed_times_   = 0;
     bool fake_inited_           = false;
     bool resource_released_     = false;
+    bool load_cache_once_       = false;
 };
 
 }  // namespace rtp_llm

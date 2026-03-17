@@ -256,7 +256,7 @@ TEST_F(StreamCacheResourceTest, testStreamCacheResourceReuseCacheMethod) {
 }
 
 TEST_F(StreamCacheResourceTest, testInitKVBlock_TriggersLoadCacheSync_AndUpdatesReuseLen) {
-    // initKVBlock() calls incrKVBlock() then loadCacheSync() internally.
+    // GenerateStream::initKVBlock() ends with loadCacheSync(); allocator path is initKVBlock() only.
     prepareResource(/*reuse_cache=*/true);
     auto& resource = stream_->streamCacheResource();
 
@@ -271,6 +271,7 @@ TEST_F(StreamCacheResourceTest, testInitKVBlock_TriggersLoadCacheSync_AndUpdates
                                                                              cache_manager_->runtime_config_,
                                                                              cache_manager_->allocator_,
                                                                              device_);
+    ON_CALL(*mock_coord, hasActiveConnectors()).WillByDefault(testing::Return(true));
     cache_manager_->coordinator_ = mock_coord;
 
     // Build a FusedAsyncReadContext that is immediately done/success and has reuse blocks set.
@@ -296,6 +297,7 @@ TEST_F(StreamCacheResourceTest, testInitKVBlock_TriggersLoadCacheSync_AndUpdates
         }));
 
     ASSERT_TRUE(resource.initKVBlock(/*reserve_step=*/0).ok());
+    resource.loadCacheSync();
     ASSERT_NE(captured_ctx, nullptr);
     ASSERT_NE(captured_ctx->meta(), nullptr);
     EXPECT_TRUE(captured_ctx->meta()->enableMemoryCache());
@@ -318,7 +320,7 @@ TEST_F(StreamCacheResourceTest, testDecodeInitKVBlock_DisablesDeviceCacheOnlyFor
     stream_->generate_input_->generate_config->enable_device_cache = true;
     resource.resource_context_.enable_device_cache                 = true;
 
-    // Enable memory cache so initKVBlock will call asyncLoadCache -> asyncRead.
+    // loadCacheSync() (after initKVBlock, same as GenerateStream::initKVBlock) -> asyncRead.
     stream_->generate_input_->generate_config->enable_memory_cache = true;
     resource.resource_context_.enable_memory_cache                 = true;
 
@@ -331,6 +333,7 @@ TEST_F(StreamCacheResourceTest, testDecodeInitKVBlock_DisablesDeviceCacheOnlyFor
                                                                              cache_manager_->runtime_config_,
                                                                              cache_manager_->allocator_,
                                                                              device_);
+    ON_CALL(*mock_coord, hasActiveConnectors()).WillByDefault(testing::Return(true));
     cache_manager_->coordinator_ = mock_coord;
     EXPECT_CALL(*mock_coord, asyncRead(testing::_)).WillOnce(testing::Return(nullptr));
 
@@ -359,6 +362,7 @@ TEST_F(StreamCacheResourceTest, testDecodeInitKVBlock_DisablesDeviceCacheOnlyFor
         }));
 
     ASSERT_TRUE(resource.initKVBlock(/*reserve_step=*/0).ok());
+    resource.loadCacheSync();
     ASSERT_TRUE(resource.incrKVBlock(/*reserve_step=*/0).ok());
 }
 

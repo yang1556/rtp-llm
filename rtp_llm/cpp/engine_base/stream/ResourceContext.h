@@ -11,12 +11,15 @@
 namespace rtp_llm {
 
 class GenerateStream;
+class DeviceBase;
 
 struct ResourceContext {
     std::shared_ptr<KVCacheManager> cache_manager;
     std::shared_ptr<SystemPrompt>   system_prompt;
 
-    RoleType role_type{RoleType::PDFUSION};
+    RoleType     role_type{RoleType::PDFUSION};
+    bool         decode_entrance{false};  // PD反转模式：Decode侧作为请求入口
+    DeviceBase*  device{nullptr};         // 用于P2P场景创建 IGenerateStreamImpl
 
     bool    reuse_cache{false};
     bool    enable_memory_cache{false};

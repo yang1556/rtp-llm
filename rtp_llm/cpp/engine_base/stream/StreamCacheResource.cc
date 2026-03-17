@@ -1,8 +1,11 @@
 #include "rtp_llm/cpp/engine_base/stream/StreamCacheResource.h"
 #include "rtp_llm/cpp/engine_base/stream/GenerateStream.h"
+#include "rtp_llm/cpp/engine_base/stream/IGenerateStreamImpl.h"
 #include "rtp_llm/cpp/utils/HashUtil.h"
 #include "rtp_llm/cpp/core/BufferHelper.h"
+#include "rtp_llm/cpp/core/Event.h"
 #include "rtp_llm/cpp/cache/Types.h"
+#include "rtp_llm/cpp/cache/connector/AsyncContext.h"
 #include "rtp_llm/cpp/cache/connector/KVCacheConnectorReadWriteContext.h"
 #include "rtp_llm/cpp/config/RoleTypes.h"
 #include "rtp_llm/cpp/engine_base/stream/CompleteTokenIds.h"
@@ -56,6 +59,13 @@ public:
     const std::vector<int64_t>& tokens() const override {
         return tokens_;
     }
+
+    // P2P read 扩展字段
+    std::shared_ptr<IGenerateStream> generateStream() const override {
+        return generate_stream_;
+    }
+
+    std::shared_ptr<IGenerateStream> generate_stream_;
 
 private:
     bool                 enable_memory_cache_{false};
@@ -210,8 +220,6 @@ absl::Status StreamCacheResource::initKVBlock(size_t reserve_step) {
         stream_->setInitialReuseLength(result.reuse_len);
         stream_->setLocalReuseLength(result.reuse_len);
     }
-    // load cache from connector
-    loadCacheSync();
     return absl::OkStatus();
 }
 
@@ -320,14 +328,23 @@ bool StreamCacheResource::enableTieredMemoryCache() const {
 }
 
 void StreamCacheResource::loadCacheSync() {
-    if (!reuseCache() || (!enableMemoryCache() && !enableRemoteCache())) {
+    if (!resource_context_.cache_manager || !resource_context_.cache_manager->hasActiveConnectors()) {
         return;
     }
-    assert(reuse_cache());
-    auto meta               = std::make_shared<MetaImpl>(enableMemoryCache(), enableRemoteCache(), stream_->traceId());
+    if (load_cache_once_) {
+        return;
+    }
+    load_cache_once_ = true;
+    auto meta        = std::make_shared<MetaImpl>(
+        reuseCache() && enableMemoryCache(), reuseCache() && enableRemoteCache(), stream_->traceId());
+    if (resource_context_.device) {
+        meta->generate_stream_ =
+            std::make_shared<IGenerateStreamImpl>(stream_->shared_from_this(), resource_context_.device);
+    }
     auto connector_context  = std::make_shared<KVCacheConnectorReadWriteContextImpl>(batch_kv_cache_resource_, meta);
     auto load_cache_context = resource_context_.cache_manager->asyncLoadCache(connector_context);
     waitLoadCacheDone(load_cache_context);
+    // TODO: scheduler will call incrkvblock after load cache, or may lack block on p2p connector
 }
 
 void StreamCacheResource::waitLoadCacheDone(const std::shared_ptr<AsyncContext>& load_context) {
@@ -336,7 +353,12 @@ void StreamCacheResource::waitLoadCacheDone(const std::shared_ptr<AsyncContext>&
     }
     load_context->waitDone();
     if (!(load_context->success())) {
-        RTP_LLM_LOG_WARNING("load cache done but not success, stream: [%ld]", stream_->streamId());
+        auto error = load_context->errorInfo();
+        RTP_LLM_LOG_WARNING(
+            "load cache done but not success, stream: [%ld], error: %s", stream_->streamId(), error.ToString().c_str());
+        if (error.hasError()) {
+            stream_->setStop(error.code(), error.ToString());
+        }
         return;
     }
     auto read_context = std::dynamic_pointer_cast<FusedAsyncReadContext>(load_context);
