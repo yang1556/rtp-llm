@@ -532,6 +532,14 @@ def build_bazel_extensions(build_config: str) -> None:
     copy_extensions(project_root, build_config)
 
 
+def _safe_copy_so(src: Path, dst: Path):
+    """Copy .so file, handling read-only bazel outputs."""
+    if dst.exists():
+        dst.chmod(0o755)
+    shutil.copy2(src, dst)
+    dst.chmod(0o755)
+
+
 def copy_core_so_files(bazel_bin: Path, target_dir: Path) -> None:
     """Copy core .so files (always required)."""
     core_so_files = [
@@ -539,13 +547,13 @@ def copy_core_so_files(bazel_bin: Path, target_dir: Path) -> None:
         "librtp_compute_ops.so",
         "libth_transformer_config.so",
     ]
-    
+
     for so_file in core_so_files:
         src = bazel_bin / so_file
         if src.exists():
             dst = target_dir / so_file
             print(f"  {src} → {dst}")
-            shutil.copy2(src, dst)
+            _safe_copy_so(src, dst)
         else:
             # Try to find in subdirectories
             found = list(bazel_bin.glob(f"**/{so_file}"))
@@ -553,9 +561,18 @@ def copy_core_so_files(bazel_bin: Path, target_dir: Path) -> None:
                 src = found[0]
                 dst = target_dir / so_file
                 print(f"  {src} → {dst}")
-                shutil.copy2(src, dst)
+                _safe_copy_so(src, dst)
             else:
                 print(f"  Warning: {so_file} not found in {bazel_bin}")
+
+    # Copy all _solib_local dependencies (e.g. kv_cache_manager_client.so)
+    solib_dir = bazel_bin / "_solib_local"
+    if solib_dir.exists():
+        for so_file in solib_dir.rglob("*.so"):
+            dst = target_dir / so_file.name
+            if not dst.exists():
+                print(f"  solib: {so_file.name} → {dst}")
+                _safe_copy_so(so_file, dst)
 
 
 def copy_kernel_so_files(bazel_bin: Path, target_dir: Path) -> int:
@@ -667,7 +684,7 @@ def copy_kernel_so_files(bazel_bin: Path, target_dir: Path) -> int:
     for filename, src in sorted(unique_files.items()):
         dst = target_dir / filename
         print(f"  {src} → {dst}")
-        shutil.copy2(src, dst)
+        _safe_copy_so(src, dst)
         copied_count += 1
     
     print(f"  Copied {copied_count} kernel .so files")
