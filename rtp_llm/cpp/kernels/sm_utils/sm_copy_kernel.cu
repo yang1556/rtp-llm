@@ -188,6 +188,239 @@ __global__ void n2n_copy_kernel(const void** src_ptrs,
     }
 }
 
+
+// ==================== 变长 Gather/Scatter Kernel ====================
+
+__global__ void gather_copy_var_kernel(
+    const void** src_ptrs,
+    const size_t* src_offsets,   // 每个源的偏移量
+    const size_t* sizes,         // 每个源要拷贝的字节数
+    const size_t* dst_offsets,   // 目标内存中的前缀和偏移量
+    void* dst,
+    int num_srcs
+) {
+    if (blockIdx.x >= num_srcs) return;
+    const size_t tid = threadIdx.x;
+    const size_t num_threads = blockDim.x;
+
+    const int bytes_int4 = sizeof(int4);
+
+    for (int src_idx = blockIdx.x; src_idx < num_srcs; src_idx += gridDim.x) {
+        const size_t cur_size = sizes[src_idx];
+        const size_t cur_src_offset = src_offsets[src_idx];
+        const size_t cur_dst_offset = dst_offsets[src_idx];
+
+        const char* src_base = reinterpret_cast<const char*>(src_ptrs[src_idx]) + cur_src_offset;
+        char* dst_base = reinterpret_cast<char*>(dst) + cur_dst_offset;
+
+        const size_t num_elements_int4 = cur_size / bytes_int4;
+        const size_t total_bytes_int4 = bytes_int4 * num_elements_int4;
+        const size_t remaining_bytes = cur_size - total_bytes_int4;
+
+        const int bytes_int2 = sizeof(int2);
+        const size_t num_elements_int2 = remaining_bytes / bytes_int2;
+        const size_t total_bytes_int2 = bytes_int2 * num_elements_int2;
+        const size_t remaining_bytes_char = remaining_bytes - total_bytes_int2;
+
+        size_t element_idx = tid;
+        #pragma unroll 4
+        while (element_idx < num_elements_int4) {
+            reinterpret_cast<int4*>(dst_base)[element_idx] =
+                reinterpret_cast<const int4*>(src_base)[element_idx];
+            element_idx += num_threads;
+        }
+
+        if (remaining_bytes == 0) continue;
+
+        char* dst_base_int2 = dst_base + total_bytes_int4;
+        const char* src_base_int2 = src_base + total_bytes_int4;
+
+        element_idx = tid;
+        #pragma unroll 2
+        while (element_idx < num_elements_int2) {
+            reinterpret_cast<int2*>(dst_base_int2)[element_idx] =
+                reinterpret_cast<const int2*>(src_base_int2)[element_idx];
+            element_idx += num_threads;
+        }
+
+        if (tid < remaining_bytes_char) {
+            dst_base_int2[total_bytes_int2 + tid] = src_base_int2[total_bytes_int2 + tid];
+        }
+    }
+}
+
+__global__ void scatter_copy_var_kernel(
+    const void* src,
+    const size_t* src_offsets,   // 源内存中的前缀和偏移量
+    const size_t* sizes,         // 每个目标要拷贝的字节数
+    const size_t* dst_offsets,   // 每个目标的偏移量
+    void** dst_ptrs,
+    int num_dsts
+) {
+    if (blockIdx.x >= num_dsts) return;
+    const size_t tid = threadIdx.x;
+    const size_t num_threads = blockDim.x;
+
+    const int bytes_int4 = sizeof(int4);
+
+    for (int dst_idx = blockIdx.x; dst_idx < num_dsts; dst_idx += gridDim.x) {
+        const size_t cur_size = sizes[dst_idx];
+        const size_t cur_src_offset = src_offsets[dst_idx];
+        const size_t cur_dst_offset = dst_offsets[dst_idx];
+
+        const char* src_base = reinterpret_cast<const char*>(src) + cur_src_offset;
+        char* dst_base = reinterpret_cast<char*>(dst_ptrs[dst_idx]) + cur_dst_offset;
+
+        const size_t num_elements_int4 = cur_size / bytes_int4;
+        const size_t total_bytes_int4 = bytes_int4 * num_elements_int4;
+        const size_t remaining_bytes = cur_size - total_bytes_int4;
+
+        const int bytes_int2 = sizeof(int2);
+        const size_t num_elements_int2 = remaining_bytes / bytes_int2;
+        const size_t total_bytes_int2 = bytes_int2 * num_elements_int2;
+        const size_t remaining_bytes_char = remaining_bytes - total_bytes_int2;
+
+        size_t element_idx = tid;
+        #pragma unroll 4
+        while (element_idx < num_elements_int4) {
+            reinterpret_cast<int4*>(dst_base)[element_idx] =
+                reinterpret_cast<const int4*>(src_base)[element_idx];
+            element_idx += num_threads;
+        }
+
+        if (remaining_bytes == 0) continue;
+
+        char* dst_base_int2 = dst_base + total_bytes_int4;
+        const char* src_base_int2 = src_base + total_bytes_int4;
+
+        element_idx = tid;
+        #pragma unroll 2
+        while (element_idx < num_elements_int2) {
+            reinterpret_cast<int2*>(dst_base_int2)[element_idx] =
+                reinterpret_cast<const int2*>(src_base_int2)[element_idx];
+            element_idx += num_threads;
+        }
+
+        if (tid < remaining_bytes_char) {
+            dst_base_int2[total_bytes_int2 + tid] = src_base_int2[total_bytes_int2 + tid];
+        }
+    }
+}
+
+// ==================== 优化版：GPU端 offset=0 的变长 Gather/Scatter Kernel ====================
+
+__global__ void gather_copy_var_nooffset_kernel(
+    const void** src_ptrs,
+    const size_t* sizes,         // 每个源要拷贝的字节数
+    const size_t* dst_offsets,   // 目标内存中的前缀和偏移量
+    void* dst,
+    int num_srcs
+) {
+    if (blockIdx.x >= num_srcs) return;
+    const size_t tid = threadIdx.x;
+    const size_t num_threads = blockDim.x;
+
+    const int bytes_int4 = sizeof(int4);
+
+    for (int src_idx = blockIdx.x; src_idx < num_srcs; src_idx += gridDim.x) {
+        const size_t cur_size = sizes[src_idx];
+        const size_t cur_dst_offset = dst_offsets[src_idx];
+
+        const char* src_base = reinterpret_cast<const char*>(src_ptrs[src_idx]);
+        char* dst_base = reinterpret_cast<char*>(dst) + cur_dst_offset;
+
+        const size_t num_elements_int4 = cur_size / bytes_int4;
+        const size_t total_bytes_int4 = bytes_int4 * num_elements_int4;
+        const size_t remaining_bytes = cur_size - total_bytes_int4;
+
+        const int bytes_int2 = sizeof(int2);
+        const size_t num_elements_int2 = remaining_bytes / bytes_int2;
+        const size_t total_bytes_int2 = bytes_int2 * num_elements_int2;
+        const size_t remaining_bytes_char = remaining_bytes - total_bytes_int2;
+
+        size_t element_idx = tid;
+        #pragma unroll 4
+        while (element_idx < num_elements_int4) {
+            reinterpret_cast<int4*>(dst_base)[element_idx] =
+                reinterpret_cast<const int4*>(src_base)[element_idx];
+            element_idx += num_threads;
+        }
+
+        if (remaining_bytes == 0) continue;
+
+        char* dst_base_int2 = dst_base + total_bytes_int4;
+        const char* src_base_int2 = src_base + total_bytes_int4;
+
+        element_idx = tid;
+        #pragma unroll 2
+        while (element_idx < num_elements_int2) {
+            reinterpret_cast<int2*>(dst_base_int2)[element_idx] =
+                reinterpret_cast<const int2*>(src_base_int2)[element_idx];
+            element_idx += num_threads;
+        }
+
+        if (tid < remaining_bytes_char) {
+            dst_base_int2[total_bytes_int2 + tid] = src_base_int2[total_bytes_int2 + tid];
+        }
+    }
+}
+
+__global__ void scatter_copy_var_nooffset_kernel(
+    const void* src,
+    const size_t* src_offsets,   // 源内存中的前缀和偏移量
+    const size_t* sizes,         // 每个目标要拷贝的字节数
+    void** dst_ptrs,
+    int num_dsts
+) {
+    if (blockIdx.x >= num_dsts) return;
+    const size_t tid = threadIdx.x;
+    const size_t num_threads = blockDim.x;
+
+    const int bytes_int4 = sizeof(int4);
+
+    for (int dst_idx = blockIdx.x; dst_idx < num_dsts; dst_idx += gridDim.x) {
+        const size_t cur_size = sizes[dst_idx];
+        const size_t cur_src_offset = src_offsets[dst_idx];
+
+        const char* src_base = reinterpret_cast<const char*>(src) + cur_src_offset;
+        char* dst_base = reinterpret_cast<char*>(dst_ptrs[dst_idx]);
+
+        const size_t num_elements_int4 = cur_size / bytes_int4;
+        const size_t total_bytes_int4 = bytes_int4 * num_elements_int4;
+        const size_t remaining_bytes = cur_size - total_bytes_int4;
+
+        const int bytes_int2 = sizeof(int2);
+        const size_t num_elements_int2 = remaining_bytes / bytes_int2;
+        const size_t total_bytes_int2 = bytes_int2 * num_elements_int2;
+        const size_t remaining_bytes_char = remaining_bytes - total_bytes_int2;
+
+        size_t element_idx = tid;
+        #pragma unroll 4
+        while (element_idx < num_elements_int4) {
+            reinterpret_cast<int4*>(dst_base)[element_idx] =
+                reinterpret_cast<const int4*>(src_base)[element_idx];
+            element_idx += num_threads;
+        }
+
+        if (remaining_bytes == 0) continue;
+
+        char* dst_base_int2 = dst_base + total_bytes_int4;
+        const char* src_base_int2 = src_base + total_bytes_int4;
+
+        element_idx = tid;
+        #pragma unroll 2
+        while (element_idx < num_elements_int2) {
+            reinterpret_cast<int2*>(dst_base_int2)[element_idx] =
+                reinterpret_cast<const int2*>(src_base_int2)[element_idx];
+            element_idx += num_threads;
+        }
+
+        if (tid < remaining_bytes_char) {
+            dst_base_int2[total_bytes_int2 + tid] = src_base_int2[total_bytes_int2 + tid];
+        }
+    }
+}
+
 void launch_gather_copy(
     const void** src_ptrs, size_t offset, size_t size, void* dst, int num_srcs, int block_num, cudaStream_t stream) {
     if (block_num == 0) {
@@ -204,4 +437,73 @@ void launch_scatter_copy(
     scatter_copy_kernel<<<block_num, THREADS_PER_BLOCK, 0, stream>>>(src, offset, size, dst_ptrs, num_dsts);
 }
 
+void launch_gather_copy_var(
+    const void** src_ptrs,      // 源指针数组
+    const size_t* src_offsets,   // 每个源的偏移量数组
+    const size_t* sizes,         // 每个源要拷贝的字节数数组
+    const size_t* dst_offsets,   // 目标内存中的前缀和偏移量数组
+    void* dst,                   // 目标内存起始地址
+    int num_srcs,                // 源数量
+    int block_num,
+    cudaStream_t stream
+) {
+    if (block_num == 0) {
+        block_num = num_srcs;
+    }
+    gather_copy_var_kernel<<<block_num, THREADS_PER_BLOCK, 0, stream>>>(
+        src_ptrs, src_offsets, sizes, dst_offsets, dst, num_srcs
+    );
+}
+
+void launch_scatter_copy_var(
+    const void* src,             // 源内存起始地址
+    const size_t* src_offsets,   // 源内存中的前缀和偏移量数组
+    const size_t* sizes,         // 每个目标要拷贝的字节数数组
+    const size_t* dst_offsets,   // 每个目标的偏移量数组
+    void** dst_ptrs,             // 目标指针数组
+    int num_dsts,                // 目标数量
+    int block_num,
+    cudaStream_t stream
+) {
+    if (block_num == 0) {
+        block_num = num_dsts;
+    }
+    scatter_copy_var_kernel<<<block_num, THREADS_PER_BLOCK, 0, stream>>>(
+        src, src_offsets, sizes, dst_offsets, dst_ptrs, num_dsts
+    );
+}
+
+void launch_gather_copy_var_nooffset(
+    const void** src_ptrs,       // 源指针数组（每个指针已指向实际数据起始位置）
+    const size_t* sizes,         // 每个源要拷贝的字节数数组
+    const size_t* dst_offsets,   // 目标内存中的前缀和偏移量数组
+    void* dst,                   // 目标内存起始地址
+    int num_srcs,                // 源数量
+    int block_num,
+    cudaStream_t stream
+) {
+    if (block_num == 0) {
+        block_num = num_srcs;
+    }
+    gather_copy_var_nooffset_kernel<<<block_num, THREADS_PER_BLOCK, 0, stream>>>(
+        src_ptrs, sizes, dst_offsets, dst, num_srcs
+    );
+}
+
+void launch_scatter_copy_var_nooffset(
+    const void* src,             // 源内存起始地址
+    const size_t* src_offsets,   // 源内存中的前缀和偏移量数组
+    const size_t* sizes,         // 每个目标要拷贝的字节数数组
+    void** dst_ptrs,             // 目标指针数组（每个指针已指向实际写入起始位置）
+    int num_dsts,                // 目标数量
+    int block_num,
+    cudaStream_t stream
+) {
+    if (block_num == 0) {
+        block_num = num_dsts;
+    }
+    scatter_copy_var_nooffset_kernel<<<block_num, THREADS_PER_BLOCK, 0, stream>>>(
+        src, src_offsets, sizes, dst_ptrs, num_dsts
+    );
+}
 }  // namespace sDevMPS
