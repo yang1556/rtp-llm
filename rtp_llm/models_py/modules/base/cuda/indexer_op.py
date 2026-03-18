@@ -170,41 +170,11 @@ class IndexerOp(nn.Module):
         pe_dim = self.index_head_dim - self.rope_head_dim
         q_pe = q[:, :, :pe_dim]
         k_pe = k[:, :pe_dim]
-
         if self.cos_sin_cache is not None and total_local_ids.size(0) > 0:
-            # total_local_ids index into local q/k (this rank's chunk)
-            n_local = q_pe.size(0)
-            if total_local_ids.numel() > 0:
-                max_lid = total_local_ids.max().item()
-                if max_lid >= n_local:
-                    raise ValueError(
-                        f"total_local_ids out of range for q/k: "
-                        f"max(total_local_ids)={max_lid}, q.size(0)={n_local}. "
-                        "Check CP plan() local chunk vs actual input size."
-                    )
-            if total_global_ids.numel() > 0:
-                max_gid = total_global_ids.max().item()
-                if max_gid >= positions.size(0):
-                    raise ValueError(
-                        f"total_global_ids out of range for positions: "
-                        f"max(total_global_ids)={max_gid}, positions.size(0)={positions.size(0)}. "
-                        "Likely padded-to-unpadded coordinate conversion is missing in plan()."
-                    )
             q_pe_local = q_pe[total_local_ids]  # element wise
             k_pe_local = k_pe[total_local_ids]  # element wise
             k_rope = k_pe_local.unsqueeze(1)
             pos_ids_q0_global = positions[total_global_ids]  # element wise
-            # To isolate async CUDA errors from earlier kernels, uncomment: torch.cuda.synchronize()
-            # RoPE kernel may device-assert if pos_ids exceed cos_sin_cache length
-            max_cache_pos = self.cos_sin_cache.shape[0]
-            if pos_ids_q0_global.numel() > 0:
-                pos_max = pos_ids_q0_global.max().item()
-                if pos_max >= max_cache_pos:
-                    raise ValueError(
-                        f"RoPE pos_ids out of range: max(pos_ids)={pos_max} >= "
-                        f"cos_sin_cache.shape[0]={max_cache_pos}. "
-                        "Check max_position_embeddings vs actual sequence length."
-                    )
             rope._apply_rope_pos_ids_cos_sin_cache(
                 q=q_pe_local,
                 k=k_rope,
@@ -582,7 +552,9 @@ class IndexerOp(nn.Module):
         )
 
         total_kv_tokens = num_kv_tokens
-        assert total_kv_tokens > 0, "num_kv_tokens must be positive"
+        assert (
+            total_kv_tokens is not None and total_kv_tokens > 0
+        ), "total_kv_len must be set before _get_topk_ragged_cp"
 
         device = q_fp8.device
         weights_sq = weights.squeeze(-1)
@@ -612,16 +584,6 @@ class IndexerOp(nn.Module):
         assert (
             fmha_params.ks is not None and fmha_params.ke is not None
         ), "ks/ke must be prepared in prefill"
-
-        n_tokens_fmha = fmha_params.ks.shape[0]
-        if total_global_ids.numel() > 0:
-            max_idx = total_global_ids.max().item()
-            if max_idx >= n_tokens_fmha:
-                raise ValueError(
-                    f"total_global_ids out of range for fmha_params.ks: "
-                    f"max(total_global_ids)={max_idx}, fmha_params.ks.shape[0]={n_tokens_fmha}. "
-                    "Check that attn_inputs used for fill_params use global (prefill_actual_input_lengths_cpu) lengths."
-                )
 
         def run_part_logits_topk(
             q_part: torch.Tensor,
