@@ -52,9 +52,9 @@ public class ShortestTTFTStrategy implements LoadBalancer {
     private static final double STDDEV_THRESHOLD_FACTOR = 0.5;
 
     public ShortestTTFTStrategy(EngineWorkerStatus engineWorkerStatus,
-                                EngineHealthReporter engineHealthReporter,
-                                CacheAwareService cacheAwareService,
-                                ResourceMeasureFactory resourceMeasureFactory) {
+        EngineHealthReporter engineHealthReporter,
+        CacheAwareService cacheAwareService,
+        ResourceMeasureFactory resourceMeasureFactory) {
         this.engineWorkerStatus = engineWorkerStatus;
         this.engineHealthReporter = engineHealthReporter;
         this.cacheAwareService = cacheAwareService;
@@ -143,8 +143,8 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      *   capacity below the reserved quota; fallback to all if none available
      */
     private List<WorkerStatus> getAvailableWorkers(RoleType roleType, String group,
-                                                    ResourceMeasureIndicatorEnum indicator,
-                                                    long seqLen, FlexlbConfig config) {
+        ResourceMeasureIndicatorEnum indicator,
+        long seqLen, FlexlbConfig config) {
         Map<String, WorkerStatus> workerStatusMap = engineWorkerStatus.selectModelWorkerStatus(roleType, group);
         if (MapUtils.isEmpty(workerStatusMap)) {
             return new ArrayList<>();
@@ -153,9 +153,9 @@ public class ShortestTTFTStrategy implements LoadBalancer {
         ResourceMeasure resourceMeasure = resourceMeasureFactory.getMeasure(indicator);
 
         List<WorkerStatus> allAvailable = workerStatusMap.values().stream()
-                .filter(WorkerStatus::isAlive)
-                .filter(resourceMeasure::isResourceAvailable)
-                .toList();
+            .filter(WorkerStatus::isAlive)
+            .filter(resourceMeasure::isResourceAvailable)
+            .toList();
 
         long cpThreshold = config.getPrefillCpSeqLenThreshold();
         if (cpThreshold <= 0 || !RoleType.PREFILL.matches(roleType.getCode())) {
@@ -166,16 +166,16 @@ public class ShortestTTFTStrategy implements LoadBalancer {
         if (isLongQuery) {
             // Long query: prefer CP workers
             List<WorkerStatus> cpWorkers = allAvailable.stream()
-                    .filter(WorkerStatus::isCpEnabled)
-                    .toList();
+                .filter(WorkerStatus::isCpEnabled)
+                .toList();
             Logger.debug("Long query seqLen={}, CP workers={}, all workers={}", seqLen, cpWorkers.size(), allAvailable.size());
             return cpWorkers.isEmpty() ? new ArrayList<>(allAvailable) : new ArrayList<>(cpWorkers);
         } else {
             // Short query: prefer non-CP workers, or CP workers with spare capacity below reserved quota
             long reserveRatio = config.getCpWorkerLongQueryReserveRatio();
             List<WorkerStatus> preferred = allAvailable.stream()
-                    .filter(w -> !w.isCpEnabled() || isCpWorkerAvailableForShortQuery(w, reserveRatio))
-                    .toList();
+                .filter(w -> !w.isCpEnabled() || isCpWorkerAvailableForShortQuery(w, reserveRatio))
+                .toList();
             Logger.debug("Short query seqLen={}, preferred workers={}, all workers={}", seqLen, preferred.size(), allAvailable.size());
             return preferred.isEmpty() ? new ArrayList<>(allAvailable) : new ArrayList<>(preferred);
         }
@@ -205,8 +205,8 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      * @return Cache match results: key: engineIpPort, value: prefixMatchLength
      */
     private Map<String /*engineIpPort*/, Integer /*prefixMatchLength*/> getCacheMatchResults(BalanceContext balanceContext,
-                                                                                             RoleType roleType,
-                                                                                             String group) {
+        RoleType roleType,
+        String group) {
         List<Long> blockCacheKeys = balanceContext.getRequest().getBlockCacheKeys();
         return cacheAwareService.findMatchingEngines(blockCacheKeys, roleType, group);
     }
@@ -221,23 +221,23 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      */
     private List<ScoredWorker> scoreWorkers(List<WorkerStatus> workers, Map<String, Integer> cacheMatchResults, long seqLen) {
         return workers.stream()
-                .filter(WorkerStatus::isAlive)
-                .map(workerStatus -> {
-                    long hitCacheTokens = calculatePrefixMatchLength(workerStatus, cacheMatchResults);
-                    long prefillTime = TaskInfo.estimatePrefillTimeMs(seqLen, hitCacheTokens);
-                    long queueTime = workerStatus.getRunningQueueTime().get();
-                    long newTTFT = prefillTime + queueTime;
-                    long lastSelectedTime = workerStatus.getLastSelectedTime().get();
-                    Logger.debug("Calculate TTFT for worker - ip: {}, port: {}, hitCacheTokens: {}, prefillTime: {}, queueTime: {}, newTTFT: {}",
-                            workerStatus.getIp(),
-                            workerStatus.getPort(),
-                            hitCacheTokens,
-                            prefillTime,
-                            queueTime,
-                            newTTFT);
-                    return new ScoredWorker(workerStatus, newTTFT, hitCacheTokens, lastSelectedTime);
-                })
-                .collect(Collectors.toList());
+            .filter(WorkerStatus::isAlive)
+            .map(workerStatus -> {
+                long hitCacheTokens = calculatePrefixMatchLength(workerStatus, cacheMatchResults);
+                long prefillTime = TaskInfo.estimatePrefillTimeMs(seqLen, hitCacheTokens);
+                long queueTime = workerStatus.getRunningQueueTime().get();
+                long newTTFT = prefillTime + queueTime;
+                long lastSelectedTime = workerStatus.getLastSelectedTime().get();
+                Logger.debug("Calculate TTFT for worker - ip: {}, port: {}, hitCacheTokens: {}, prefillTime: {}, queueTime: {}, newTTFT: {}",
+                    workerStatus.getIp(),
+                    workerStatus.getPort(),
+                    hitCacheTokens,
+                    prefillTime,
+                    queueTime,
+                    newTTFT);
+                return new ScoredWorker(workerStatus, newTTFT, hitCacheTokens, lastSelectedTime);
+            })
+            .collect(Collectors.toList());
     }
 
     /**
@@ -251,10 +251,10 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      * @return Server status
      */
     private ServerStatus finalizeWorkerSelection(ScoredWorker selectedWorker,
-                                                 BalanceContext balanceContext,
-                                                 RoleType roleType,
-                                                 long requestId,
-                                                 long seqLen) {
+        BalanceContext balanceContext,
+        RoleType roleType,
+        long requestId,
+        long seqLen) {
         WorkerStatus workerStatus = selectedWorker.worker();
 
         logWorkerSelection(selectedWorker, roleType);
@@ -275,11 +275,11 @@ public class ShortestTTFTStrategy implements LoadBalancer {
     private void logWorkerSelection(ScoredWorker selectedWorker, RoleType roleType) {
         WorkerStatus workerStatus = selectedWorker.worker();
         Logger.debug("Selected {} worker - ip: {}, port: {}, hitCacheTokens: {}, ttft: {}",
-                roleType,
-                workerStatus.getIp(),
-                workerStatus.getPort(),
-                selectedWorker.hitCacheTokens(),
-                selectedWorker.ttft());
+            roleType,
+            workerStatus.getIp(),
+            workerStatus.getPort(),
+            selectedWorker.hitCacheTokens(),
+            selectedWorker.ttft());
     }
 
     /**
@@ -351,9 +351,9 @@ public class ShortestTTFTStrategy implements LoadBalancer {
         // 1. Primary sort: by TTFT (Time-To-First-Token) in ascending order
         // 2. Secondary sort: when TTFT is equal, by lastSelectedTime in ascending order
         return workers.stream()
-                .sorted(Comparator.comparingLong(ScoredWorker::ttft)
-                        .thenComparingLong(ScoredWorker::lastSelectedTime))
-                .toList();
+            .sorted(Comparator.comparingLong(ScoredWorker::ttft)
+                .thenComparingLong(ScoredWorker::lastSelectedTime))
+            .toList();
     }
 
     /**
@@ -377,15 +377,15 @@ public class ShortestTTFTStrategy implements LoadBalancer {
         double avgTTFT = candidates.stream().mapToLong(ScoredWorker::ttft).average().orElse(0.0);
 
         double stdDev = Math.sqrt(
-                candidates.stream()
-                        .mapToLong(ScoredWorker::ttft)
-                        .mapToDouble(v -> Math.pow(v - avgTTFT, 2))
-                        .average()
-                        .orElse(0.0));
+            candidates.stream()
+                .mapToLong(ScoredWorker::ttft)
+                .mapToDouble(v -> Math.pow(v - avgTTFT, 2))
+                .average()
+                .orElse(0.0));
         double percentageMinTTFT = minTTFT * TTFT_THRESHOLD_PERCENTAGE;
         double factoredStdDev = stdDev * STDDEV_THRESHOLD_FACTOR;
         Logger.debug("Calculate TTFT threshold, minTTFT: {}, avgTTFT: {}, stdDev: {}, percentageMinTTFT: {}, factoredStdDev: {}",
-                minTTFT, avgTTFT, stdDev, percentageMinTTFT, factoredStdDev);
+            minTTFT, avgTTFT, stdDev, percentageMinTTFT, factoredStdDev);
         return Math.max(percentageMinTTFT, factoredStdDev);
     }
 
@@ -399,8 +399,8 @@ public class ShortestTTFTStrategy implements LoadBalancer {
      */
     private List<ScoredWorker> filterSimilarWorkers(List<ScoredWorker> candidates, long minTTFT, double threshold) {
         List<ScoredWorker> scoredWorkers = candidates.stream()
-                .filter(worker -> Math.abs(worker.ttft() - minTTFT) <= threshold)
-                .toList();
+            .filter(worker -> Math.abs(worker.ttft() - minTTFT) <= threshold)
+            .toList();
         Logger.debug("Filter similar workers, minTTFT: {}, threshold: {}, candidates size: {}", minTTFT, threshold, scoredWorkers.size());
         return scoredWorkers;
     }
@@ -422,8 +422,8 @@ public class ShortestTTFTStrategy implements LoadBalancer {
 
         // Sort ascending by lastSelectedTime so the least recently used worker is tried first
         List<ScoredWorker> sorted = similarWorkers.stream()
-                .sorted(Comparator.comparingLong(ScoredWorker::lastSelectedTime))
-                .toList();
+            .sorted(Comparator.comparingLong(ScoredWorker::lastSelectedTime))
+            .toList();
 
         long now = System.nanoTime() / 1000;
         for (ScoredWorker candidate : sorted) {

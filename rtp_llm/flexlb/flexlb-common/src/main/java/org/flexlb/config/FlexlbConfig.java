@@ -135,6 +135,34 @@ public class FlexlbConfig {
      */
     private int nettyWorkerThreadMultiplier = 2;
 
+    // ========== Chat ID Affinity Configuration ==========
+
+    /**
+     * Whether to enable chatId affinity-aware traffic rejection
+     */
+    private boolean enableChatIdAffinity = false;
+
+    /**
+     * Affinity expiration time in milliseconds (default 10 minutes)
+     */
+    private long chatIdAffinityExpirationMs = 600_000;
+
+    /**
+     * Maximum number of chatId entries in the affinity index
+     */
+    private int chatIdAffinityMaxEntries = 1000;
+
+    /**
+     * Cleanup interval for expired affinity entries in milliseconds (default 1 minute)
+     */
+    private long chatIdAffinityCleanupIntervalMs = 60_000;
+
+    /**
+     * Water level rejection threshold (0-100) for direct routing mode.
+     * When cluster water level exceeds this threshold, requests without affinity are rejected.
+     */
+    private double affinityRejectionWaterLevelThreshold = 70.0;
+
     /**
      * Get load balancing strategy for a role type
      * This method handles the logic of selecting the appropriate strategy based on role type and configuration

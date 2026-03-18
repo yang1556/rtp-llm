@@ -1,6 +1,7 @@
 package org.flexlb.httpserver;
 
 import lombok.extern.slf4j.Slf4j;
+import org.flexlb.balance.affinity.ChatIdAffinityService;
 import org.flexlb.balance.scheduler.QueueManager;
 import org.flexlb.consistency.LBStatusConsistencyService;
 import org.flexlb.dao.BalanceContext;
@@ -46,19 +47,22 @@ public class HttpLoadBalanceServer {
     private final EngineHealthReporter engineHealthReporter;
     private final QueueManager queueManager;
     private final ActiveRequestCounter activeRequestCounter;
+    private final ChatIdAffinityService chatIdAffinityService;
 
     public HttpLoadBalanceServer(GeneralHttpNettyService generalHttpNettyService,
                                  RouteService routeService,
                                  LBStatusConsistencyService lbStatusConsistencyService,
                                  EngineHealthReporter engineHealthReporter,
                                  QueueManager queueManager,
-                                 ActiveRequestCounter activeRequestCounter) {
+                                 ActiveRequestCounter activeRequestCounter,
+                                 ChatIdAffinityService chatIdAffinityService) {
         this.generalHttpNettyService = generalHttpNettyService;
         this.routeService = routeService;
         this.lbStatusConsistencyService = lbStatusConsistencyService;
         this.engineHealthReporter = engineHealthReporter;
         this.queueManager = queueManager;
         this.activeRequestCounter = activeRequestCounter;
+        this.chatIdAffinityService = chatIdAffinityService;
     }
 
     @Bean
@@ -250,6 +254,11 @@ public class HttpLoadBalanceServer {
         response.setRealMasterHost(lbStatusConsistencyService.getMasterHostIpPort());
 
         if (response.isSuccess()) {
+            // Record affinity for successful routing
+            String chatId = ctx.getRequest().getChatId();
+            if (chatId != null && !chatId.isEmpty()) {
+                chatIdAffinityService.recordAffinity(chatId);
+            }
             return buildSuccessResponse(response);
         } else {
             Logger.error("Routing failed with error code: {}", response.getErrorMessage());
