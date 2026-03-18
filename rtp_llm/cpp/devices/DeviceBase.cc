@@ -229,6 +229,11 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
         group_type                = static_cast<CacheGroupType>(param.kv_cache_group_types_host->data<int32_t>()[gid]);
 
         const int total_blocks = block_num + reuse_block_num;
+
+        RTP_LLM_LOG_INFO("DEBUG(chanyin): total_blocks is %d", total_blocks);
+        RTP_LLM_LOG_INFO("DEBUG(chanyin): block_num is %d", block_num);
+        RTP_LLM_LOG_INFO("DEBUG(chanyin): reuse_block_num is %d", reuse_block_num);
+
         if (total_blocks <= 0) {
             continue;
         }
