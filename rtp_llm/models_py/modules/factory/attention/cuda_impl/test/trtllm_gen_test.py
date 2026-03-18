@@ -299,7 +299,7 @@ class PrepareCudaGraphKernelTest(TestCase):
 
     # ── MODE=0 (decode): seq_lens = copy(src1) ──
 
-    def test_mode0_seq_lens_copy(self):
+    def test_mode0_base(self):
         N, M = 4, 8
         src1 = torch.tensor([10, 20, 30, 40], dtype=torch.int32, device=self.device)
         src2 = torch.zeros(N, dtype=torch.int32, device=self.device)
@@ -311,24 +311,9 @@ class PrepareCudaGraphKernelTest(TestCase):
         self._run_kernel(
             src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0
         )
-
-        torch.testing.assert_close(seq_lens_out, src1)
-
-    def test_mode0_kv_offset(self):
-        N, M = 4, 8
-        src1 = torch.tensor([10, 20, 30, 40], dtype=torch.int32, device=self.device)
-        src2 = torch.zeros(N, dtype=torch.int32, device=self.device)
-        seq_lens_out = torch.zeros(N, dtype=torch.int32, device=self.device)
-        cu_kv = torch.zeros(N + 1, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        self._run_kernel(
-            src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0
-        )
-
         expected_kv = self._reference_kv_offset(block_id)
         torch.testing.assert_close(kv_offset, expected_kv)
+        torch.testing.assert_close(seq_lens_out, src1)
 
     def test_mode0_large_batch(self):
         N, M = 128, 16
@@ -348,7 +333,7 @@ class PrepareCudaGraphKernelTest(TestCase):
 
     # ── MODE=1 (spec-decode prefill): seq_lens = prefix + src2[0] ──
 
-    def test_mode1_seq_lens_add_scalar(self):
+    def test_mode1_base(self):
         N, M = 4, 8
         prefix = torch.tensor(
             [100, 200, 300, 400], dtype=torch.int32, device=self.device
@@ -374,31 +359,6 @@ class PrepareCudaGraphKernelTest(TestCase):
 
         expected = prefix + 5
         torch.testing.assert_close(seq_lens_out, expected)
-
-    def test_mode1_kv_offset(self):
-        N, M = 4, 8
-        prefix = torch.tensor(
-            [100, 200, 300, 400], dtype=torch.int32, device=self.device
-        )
-        q_len_tensor = torch.tensor([5], dtype=torch.int32, device=self.device)
-        seq_lens_out = torch.zeros(N, dtype=torch.int32, device=self.device)
-        cu_kv = torch.zeros(N + 1, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        self._run_kernel(
-            prefix,
-            q_len_tensor,
-            seq_lens_out,
-            cu_kv,
-            block_id,
-            kv_offset,
-            0,
-            N,
-            M,
-            mode=1,
-        )
-
         torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
 
     def test_mode1_large_batch(self):
@@ -428,7 +388,7 @@ class PrepareCudaGraphKernelTest(TestCase):
 
     # ── MODE=2 (prefill): seq_lens = input + prefix, cu_kv_seqlens ──
 
-    def test_mode2_seq_lens(self):
+    def test_mode2_base(self):
         N, M = 4, 8
         page_size = 64
         input_lens = torch.tensor(
@@ -457,68 +417,12 @@ class PrepareCudaGraphKernelTest(TestCase):
 
         expected_seq = input_lens + prefix_lens
         torch.testing.assert_close(seq_lens_out, expected_seq)
-
-    def test_mode2_cu_kv_seqlens(self):
-        N, M = 4, 16
-        page_size = 64
-        input_lens = torch.tensor(
-            [10, 20, 30, 40], dtype=torch.int32, device=self.device
-        )
-        prefix_lens = torch.tensor(
-            [5, 15, 25, 35], dtype=torch.int32, device=self.device
-        )
-        seq_lens_out = torch.zeros(N, dtype=torch.int32, device=self.device)
-        cu_kv = torch.zeros(N + 1, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        self._run_kernel(
-            input_lens,
-            prefix_lens,
-            seq_lens_out,
-            cu_kv,
-            block_id,
-            kv_offset,
-            page_size,
-            N,
-            M,
-            mode=2,
-        )
-
+        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
         total_seq = (input_lens + prefix_lens).cpu()
         pages_per_seq = (total_seq + page_size - 1) // page_size
         expected_cu = torch.zeros(N + 1, dtype=torch.int32)
         expected_cu[1:] = torch.cumsum(pages_per_seq, dim=0)
         torch.testing.assert_close(cu_kv.cpu(), expected_cu)
-
-    def test_mode2_kv_offset(self):
-        N, M = 4, 8
-        page_size = 64
-        input_lens = torch.tensor(
-            [10, 20, 30, 40], dtype=torch.int32, device=self.device
-        )
-        prefix_lens = torch.tensor(
-            [5, 15, 25, 35], dtype=torch.int32, device=self.device
-        )
-        seq_lens_out = torch.zeros(N, dtype=torch.int32, device=self.device)
-        cu_kv = torch.zeros(N + 1, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        self._run_kernel(
-            input_lens,
-            prefix_lens,
-            seq_lens_out,
-            cu_kv,
-            block_id,
-            kv_offset,
-            page_size,
-            N,
-            M,
-            mode=2,
-        )
-
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
 
     def test_mode2_large_batch(self):
         N, M = 128, 32
