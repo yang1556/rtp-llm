@@ -234,7 +234,9 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
         RTP_LLM_LOG_INFO("DEBUG(chanyin): block_num is %d", block_num);
         RTP_LLM_LOG_INFO("DEBUG(chanyin): reuse_block_num is %d", reuse_block_num);
 
+
         if (total_blocks <= 0) {
+            RTP_LLM_LOG_WARNING("DEBUG(chanyin): skip write cache store, total_blocks is %d", total_blocks);
             continue;
         }
 
