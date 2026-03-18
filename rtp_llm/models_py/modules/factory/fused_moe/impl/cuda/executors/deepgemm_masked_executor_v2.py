@@ -16,28 +16,24 @@ from rtp_llm.models_py.modules.factory.fused_moe.defs.fused_moe import (
     ExpertForwardPayload,
     FusedMoeExpertExecutor,
 )
+from rtp_llm.models_py.modules.factory.fused_moe.defs.quant_config import (
+    FusedMoEQuantConfig,
+)
+from rtp_llm.models_py.modules.factory.fused_moe.defs.type import ExecutorType
 from rtp_llm.models_py.triton_kernels.common.activation import (
     create_packed_scale_tensor,
     silu_and_mul_masked_post_quant_packed_fwd,
     silu_mul_masked_fp8_post_quant_fwd,
 )
-from rtp_llm.models_py.modules.factory.fused_moe.defs.quant_config import (
-    FusedMoEQuantConfig,
-)
-from rtp_llm.models_py.modules.factory.fused_moe.defs.type import ExecutorType
 from rtp_llm.models_py.triton_kernels.moe.ep_kernels import (
     ep_gather,
     ep_scatter_v2,
     tma_align_input_scale,
 )
-from rtp_llm.models_py.utils.math import ceil_div, align
 from rtp_llm.models_py.utils.arch import get_num_device_sms, get_sm
+from rtp_llm.models_py.utils.math import align, ceil_div
 from rtp_llm.models_py.utils.memory import dispose_tensor
 from rtp_llm.utils.model_weight import W
-
-
-def align_up_math(n: int, alignment: int = 128) -> int:
-    return int(math.ceil(n / alignment)) * alignment
 
 
 class DeepGemmMaskedExecutorV2(FusedMoeExpertExecutor):
@@ -160,13 +156,21 @@ class DeepGemmMaskedExecutorV2(FusedMoeExpertExecutor):
                 ),
                 (
                     torch.zeros(
-                        [self.num_experts_per_partition, ceil_div(self.K // self.BLOCK_SIZE, 4), alignment],
+                        [
+                            self.num_experts_per_partition,
+                            ceil_div(self.K // self.BLOCK_SIZE, 4),
+                            alignment,
+                        ],
                         device=hidden_states_fp8_device,
                         dtype=torch.int,
                     ).transpose(1, 2)
                     if is_deep_gemm_e8m0_used()
                     else torch.empty(
-                        (self.num_experts_per_partition, alignment, self.K // self.BLOCK_SIZE),
+                        (
+                            self.num_experts_per_partition,
+                            alignment,
+                            self.K // self.BLOCK_SIZE,
+                        ),
                         device=hidden_states_fp8_device,
                         dtype=torch.float32,
                     )
@@ -180,7 +184,9 @@ class DeepGemmMaskedExecutorV2(FusedMoeExpertExecutor):
                 topk_idx,
                 alignment,
                 expert_start_loc,
-                input_tensor[0].view(self.num_experts_per_partition * alignment, self.K),
+                input_tensor[0].view(
+                    self.num_experts_per_partition * alignment, self.K
+                ),
                 input_tensor[1],
                 output_index,
                 scale_ue8m0=is_deep_gemm_e8m0_used(),
@@ -289,6 +295,11 @@ class DeepGemmMaskedExecutorV2(FusedMoeExpertExecutor):
                 device=hidden_states_fp8_device,
                 dtype=torch.bfloat16,
             )
-            ep_gather(down_output.view(self.num_experts_per_partition * alignment,
-                      self.K), topk_idx, topk_weights, output_index, gather_out)
+            ep_gather(
+                down_output.view(self.num_experts_per_partition * alignment, self.K),
+                topk_idx,
+                topk_weights,
+                output_index,
+                gather_out,
+            )
             return CombineForwardPayload(fused_expert_output=gather_out)

@@ -21,8 +21,8 @@ from rtp_llm.models_py.modules.factory.fused_moe.impl.common.strategy.batched_tr
 )
 from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.strategy import (
     CudaFp8PerBlockEpNormalStrategy,
-    CudaFp8PerBlockNoDPStrategy,
     CudaFp8PerBlockNoDPMaskedStrategy,
+    CudaFp8PerBlockNoDPStrategy,
     CudaFp8PerTensorNoDPStrategy,
 )
 from rtp_llm.ops import MoeConfig, ParallelismConfig
@@ -37,12 +37,13 @@ def create_model_config_without_quant() -> ModelConfig:
     return model_config
 
 
-def create_model_config_with_fp8_block_quant(dtype: Optional[str] = None) -> ModelConfig:
+def create_model_config_with_fp8_block_quant(
+    dtype: Optional[str] = None,
+) -> ModelConfig:
     """Create ModelConfig with FP8 block-wise quantization"""
     model_config = ModelConfig()
     model_config.quant_config = Fp8BlockWiseQuantConfig()
-    if dtype is not None:
-        model_config.data_type = dtype
+    model_config.data_type = dtype if dtype is not None else "bf16"
     return model_config
 
 
@@ -71,7 +72,9 @@ def create_parallelism_config(
 
 
 def create_moe_config(
-    use_deepep_low_latency: bool = False, use_all_gather: Optional[bool] = None, moe_strategy: Optional[str] = None,
+    use_deepep_low_latency: bool = False,
+    use_all_gather: Optional[bool] = None,
+    moe_strategy: Optional[str] = None,
 ) -> MoeConfig:
     """Create MoeConfig with specified settings
 
@@ -235,11 +238,13 @@ class TestCudaFp8PerBlockNoDPMaskedStrategy(unittest.TestCase):
         mock_has_deep_gemm.return_value = True
 
         config = create_moe_config_adapter(
-            model_config=create_model_config_with_fp8_block_quant("bf16"),
+            model_config=create_model_config_with_fp8_block_quant(),
             parallelism_config=create_parallelism_config(
                 ep_size=1, tp_size=1, dp_size=1
             ),
-            moe_config=create_moe_config(use_all_gather=True, moe_strategy="fp8_per_block_no_dp_masked"),
+            moe_config=create_moe_config(
+                use_all_gather=True, moe_strategy="fp8_per_block_no_dp_masked"
+            ),
         )
 
         strategy = CudaFp8PerBlockNoDPMaskedStrategy()
@@ -251,11 +256,13 @@ class TestCudaFp8PerBlockNoDPMaskedStrategy(unittest.TestCase):
         mock_has_deep_gemm.return_value = True
 
         config = create_moe_config_adapter(
-            model_config=create_model_config_with_fp8_block_quant("bf16"),
+            model_config=create_model_config_with_fp8_block_quant(),
             parallelism_config=create_parallelism_config(
                 ep_size=2, tp_size=2, dp_size=1
             ),
-            moe_config=create_moe_config(use_all_gather=True, moe_strategy="fp8_per_block_no_dp_masked"),
+            moe_config=create_moe_config(
+                use_all_gather=True, moe_strategy="fp8_per_block_no_dp_masked"
+            ),
         )
 
         strategy = CudaFp8PerBlockNoDPMaskedStrategy()
