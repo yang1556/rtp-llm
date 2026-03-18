@@ -1062,6 +1062,25 @@ def slopes(ts: List[torch.Tensor], n: int):
     slopes = torch.Tensor(get_slopes(n))
     return slopes
 
+def merge_qkvz_transpose_reorder(
+    ts: List[torch.Tensor],
+):
+    """Merge and reorder qkv and z tensors for Qwen3.5Moe.
+
+    Merges qkv (shape: [token, head_num_k * dim_q + head_num_k * dim_k + head_num_v * dim_v])
+    and z (shape: [token, head_num_v, dim_v * group_v]) into a single transposed tensor.
+    """
+    qkv = ts[0]
+    z = ts[1]
+    return torch.cat([qkv, z], dim=0).T
+
+def merge_ba_transpose_reorder(
+    ts: List[torch.Tensor],
+):
+    """Merge and reorder b and a tensors, then transpose."""
+    b = ts[0]
+    a = ts[1]
+    return torch.cat([b, a], dim=0).T
 
 class W:
     # global
