@@ -119,7 +119,6 @@ class FlashInferPythonMHATest(TestCase):
         v_size = self.head_dim * self.num_kv_heads
         qkv_dim = self.head_dim * self.num_heads + 2 * self.num_kv_heads * self.head_dim
         num_tokens = sum(lengths)
-
         if is_prefill:
             attn_inputs = gen_attention_inputs(
                 self.page_size, self.num_pages, input_lengths=lengths
@@ -129,18 +128,36 @@ class FlashInferPythonMHATest(TestCase):
                 self.page_size, self.num_pages, sequence_lengths=lengths
             )
 
-        qkv = torch.rand([num_tokens, qkv_dim], dtype=torch.bfloat16, device=self.device) * 2 - 1
+        qkv = (
+            torch.rand([num_tokens, qkv_dim], dtype=torch.bfloat16, device=self.device)
+            * 2
+            - 1
+        )
         q_ref = qkv[:, :q_size].reshape(num_tokens, self.num_heads, self.head_dim)
-        k_ref = qkv[:, q_size:q_size + k_size].reshape(num_tokens, self.num_kv_heads, self.head_dim)
-        v_ref = qkv[:, q_size + k_size:q_size + k_size + v_size].reshape(num_tokens, self.num_kv_heads, self.head_dim)
+        k_ref = qkv[:, q_size : q_size + k_size].reshape(
+            num_tokens, self.num_kv_heads, self.head_dim
+        )
+        v_ref = qkv[:, q_size + k_size : q_size + k_size + v_size].reshape(
+            num_tokens, self.num_kv_heads, self.head_dim
+        )
 
         kv_cache = self._init_kv_cache(dtype)
-        kv_write_lengths = attn_inputs.input_lengths if is_prefill else attn_inputs.sequence_lengths
-        write_kv_cache(k_ref, v_ref, kv_cache, kv_write_lengths, attn_inputs.kv_cache_block_id_host)
+        kv_write_lengths = (
+            attn_inputs.input_lengths if is_prefill else attn_inputs.sequence_lengths
+        )
+        write_kv_cache(
+            k_ref, v_ref, kv_cache, kv_write_lengths, attn_inputs.kv_cache_block_id_host
+        )
 
         out_ref = attention_prefill_ref(
-            q_ref, k_ref, v_ref, attn_inputs.sequence_lengths,
-            self.num_heads, self.num_kv_heads, self.head_dim, causal=True,
+            q_ref,
+            k_ref,
+            v_ref,
+            attn_inputs.sequence_lengths,
+            self.num_heads,
+            self.num_kv_heads,
+            self.head_dim,
+            causal=True,
         )
 
         if use_prefill_op:
@@ -148,46 +165,82 @@ class FlashInferPythonMHATest(TestCase):
             input_params = op.prepare(attn_inputs)
             out_trtllm = op.forward(q_ref, kv_cache, input_params)
 
-            out_trtllm_f32 = out_trtllm.reshape(num_tokens, self.num_heads, self.head_dim).float()
+            out_trtllm_f32 = out_trtllm.reshape(
+                num_tokens, self.num_heads, self.head_dim
+            ).float()
             out_ref_f32 = out_ref.float()
             allowed_mismatch_rate = 1e-5
         else:
             last_token_idx = attn_inputs.cu_seqlens[1:] - 1
+            if is_prefill:
+                q_len_per_req = 6
+                attn_inputs.prefix_lengths = attn_inputs.input_lengths - q_len_per_req
+                attn_inputs.input_lengths = (
+                    torch.ones_like(
+                        attn_inputs.input_lengths, dtype=attn_inputs.input_lengths.dtype
+                    )
+                    * q_len_per_req
+                )
+                last_token_idx = last_token_idx.unsqueeze(-1).repeat(
+                    1, q_len_per_req
+                ) - torch.arange(q_len_per_req).flip([0]).view(1, q_len_per_req)
+                last_token_idx = last_token_idx.reshape(-1)
             out_ref = out_ref[last_token_idx]
-
             op = FlashInferTRTLLMDecodeOp(config)
             q = q_ref[last_token_idx]
             attn_inputs.sequence_lengths -= 1
             input_params = op.prepare(attn_inputs)
             out_trtllm = op.forward(q, kv_cache, input_params)
 
-            out_trtllm_f32 = out_trtllm.reshape(-1, self.num_heads, self.head_dim).float()
+            out_trtllm_f32 = out_trtllm.reshape(
+                -1, self.num_heads, self.head_dim
+            ).float()
             out_ref_f32 = out_ref.float()
             allowed_mismatch_rate = 1e-3
-
         assert_close_with_mismatch_tolerance(
-            out_trtllm_f32, out_ref_f32,
-            atol=0.04, rtol=0.04,
+            out_trtllm_f32,
+            out_ref_f32,
+            atol=0.04,
+            rtol=0.04,
             max_mismatched_elements=int(allowed_mismatch_rate * out_ref_f32.numel()),
         )
 
     def test_flashinfer_trtllm_prefill_op_bf16(self):
-        self._test_flashinfer_trtllm_base(torch.bfloat16, [2, 129, 255, 63], is_prefill=True, use_prefill_op=True)
+        self._test_flashinfer_trtllm_base(
+            torch.bfloat16, [2, 129, 255, 63], is_prefill=True, use_prefill_op=True
+        )
 
     def test_flashinfer_trtllm_prefill_op_fp8(self):
-        self._test_flashinfer_trtllm_base(torch.float8_e4m3fn, [2, 129, 255, 63], is_prefill=True, use_prefill_op=True)
+        self._test_flashinfer_trtllm_base(
+            torch.float8_e4m3fn, [2, 129, 255, 63], is_prefill=True, use_prefill_op=True
+        )
 
     def test_flashinfer_trtllm_spec_op_bf16(self):
-        self._test_flashinfer_trtllm_base(torch.bfloat16, [2, 129, 255, 63], is_prefill=True, use_prefill_op=False)
+        self._test_flashinfer_trtllm_base(
+            torch.bfloat16, [11, 129, 255, 63], is_prefill=True, use_prefill_op=False
+        )
 
     def test_flashinfer_trtllm_spec_op_fp8(self):
-        self._test_flashinfer_trtllm_base(torch.float8_e4m3fn, [2, 129, 255, 63], is_prefill=True, use_prefill_op=False)
+        self._test_flashinfer_trtllm_base(
+            torch.float8_e4m3fn,
+            [11, 129, 255, 63],
+            is_prefill=True,
+            use_prefill_op=False,
+        )
 
     def test_flashinfer_trtllm_decode_op_bf16(self):
-        self._test_flashinfer_trtllm_base(torch.bfloat16, [2, 129, 255, 63], is_prefill=False, use_prefill_op=False)
+        self._test_flashinfer_trtllm_base(
+            torch.bfloat16, [2, 129, 255, 63], is_prefill=False, use_prefill_op=False
+        )
 
     def test_flashinfer_trtllm_decode_op_fp8(self):
-        self._test_flashinfer_trtllm_base(torch.float8_e4m3fn, [2, 129, 255, 63], is_prefill=False, use_prefill_op=False)
+        self._test_flashinfer_trtllm_base(
+            torch.float8_e4m3fn,
+            [11, 129, 255, 63],
+            is_prefill=False,
+            use_prefill_op=False,
+        )
+
 
 class PrepareCudaGraphKernelTest(TestCase):
     """Tests for the unified _prepare_cuda_graph_kernel Triton kernel."""
@@ -198,17 +251,35 @@ class PrepareCudaGraphKernelTest(TestCase):
         self.device = torch.device("cuda")
         set_seed(42)
 
-    def _run_kernel(self, src1, src2, seq_lens_out, cu_kv_seqlens_out,
-                    block_id, kv_offset_out, page_size, N, M, mode):
+    def _run_kernel(
+        self,
+        src1,
+        src2,
+        seq_lens_out,
+        cu_kv_seqlens_out,
+        block_id,
+        kv_offset_out,
+        page_size,
+        N,
+        M,
+        mode,
+    ):
         total_bm = N * M
         BLOCK_SIZE = max(triton.next_power_of_2(N), 1024)
         grid = (triton.cdiv(total_bm, BLOCK_SIZE),)
         _prepare_cuda_graph_kernel[grid](
-            src1, src2,
-            seq_lens_out, cu_kv_seqlens_out,
-            block_id, kv_offset_out,
-            page_size, N, M, total_bm,
-            MODE=mode, BLOCK_SIZE=BLOCK_SIZE,
+            src1,
+            src2,
+            seq_lens_out,
+            cu_kv_seqlens_out,
+            block_id,
+            kv_offset_out,
+            page_size,
+            N,
+            M,
+            total_bm,
+            MODE=mode,
+            BLOCK_SIZE=BLOCK_SIZE,
         )
         torch.cuda.synchronize()
 
@@ -237,7 +308,9 @@ class PrepareCudaGraphKernelTest(TestCase):
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0)
+        self._run_kernel(
+            src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0
+        )
 
         torch.testing.assert_close(seq_lens_out, src1)
 
@@ -250,7 +323,9 @@ class PrepareCudaGraphKernelTest(TestCase):
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0)
+        self._run_kernel(
+            src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0
+        )
 
         expected_kv = self._reference_kv_offset(block_id)
         torch.testing.assert_close(kv_offset, expected_kv)
@@ -264,7 +339,9 @@ class PrepareCudaGraphKernelTest(TestCase):
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0)
+        self._run_kernel(
+            src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0
+        )
 
         torch.testing.assert_close(seq_lens_out, src1)
         torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
@@ -273,28 +350,54 @@ class PrepareCudaGraphKernelTest(TestCase):
 
     def test_mode1_seq_lens_add_scalar(self):
         N, M = 4, 8
-        prefix = torch.tensor([100, 200, 300, 400], dtype=torch.int32, device=self.device)
+        prefix = torch.tensor(
+            [100, 200, 300, 400], dtype=torch.int32, device=self.device
+        )
         q_len_tensor = torch.tensor([5], dtype=torch.int32, device=self.device)
         seq_lens_out = torch.zeros(N, dtype=torch.int32, device=self.device)
         cu_kv = torch.zeros(N + 1, dtype=torch.int32, device=self.device)
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(prefix, q_len_tensor, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=1)
+        self._run_kernel(
+            prefix,
+            q_len_tensor,
+            seq_lens_out,
+            cu_kv,
+            block_id,
+            kv_offset,
+            0,
+            N,
+            M,
+            mode=1,
+        )
 
         expected = prefix + 5
         torch.testing.assert_close(seq_lens_out, expected)
 
     def test_mode1_kv_offset(self):
         N, M = 4, 8
-        prefix = torch.tensor([100, 200, 300, 400], dtype=torch.int32, device=self.device)
+        prefix = torch.tensor(
+            [100, 200, 300, 400], dtype=torch.int32, device=self.device
+        )
         q_len_tensor = torch.tensor([5], dtype=torch.int32, device=self.device)
         seq_lens_out = torch.zeros(N, dtype=torch.int32, device=self.device)
         cu_kv = torch.zeros(N + 1, dtype=torch.int32, device=self.device)
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(prefix, q_len_tensor, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=1)
+        self._run_kernel(
+            prefix,
+            q_len_tensor,
+            seq_lens_out,
+            cu_kv,
+            block_id,
+            kv_offset,
+            0,
+            N,
+            M,
+            mode=1,
+        )
 
         torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
 
@@ -307,7 +410,18 @@ class PrepareCudaGraphKernelTest(TestCase):
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(prefix, q_len_tensor, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=1)
+        self._run_kernel(
+            prefix,
+            q_len_tensor,
+            seq_lens_out,
+            cu_kv,
+            block_id,
+            kv_offset,
+            0,
+            N,
+            M,
+            mode=1,
+        )
 
         torch.testing.assert_close(seq_lens_out, prefix + 7)
         torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
@@ -317,14 +431,29 @@ class PrepareCudaGraphKernelTest(TestCase):
     def test_mode2_seq_lens(self):
         N, M = 4, 8
         page_size = 64
-        input_lens = torch.tensor([10, 20, 30, 40], dtype=torch.int32, device=self.device)
-        prefix_lens = torch.tensor([5, 15, 25, 35], dtype=torch.int32, device=self.device)
+        input_lens = torch.tensor(
+            [10, 20, 30, 40], dtype=torch.int32, device=self.device
+        )
+        prefix_lens = torch.tensor(
+            [5, 15, 25, 35], dtype=torch.int32, device=self.device
+        )
         seq_lens_out = torch.zeros(N, dtype=torch.int32, device=self.device)
         cu_kv = torch.zeros(N + 1, dtype=torch.int32, device=self.device)
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(input_lens, prefix_lens, seq_lens_out, cu_kv, block_id, kv_offset, page_size, N, M, mode=2)
+        self._run_kernel(
+            input_lens,
+            prefix_lens,
+            seq_lens_out,
+            cu_kv,
+            block_id,
+            kv_offset,
+            page_size,
+            N,
+            M,
+            mode=2,
+        )
 
         expected_seq = input_lens + prefix_lens
         torch.testing.assert_close(seq_lens_out, expected_seq)
@@ -332,14 +461,29 @@ class PrepareCudaGraphKernelTest(TestCase):
     def test_mode2_cu_kv_seqlens(self):
         N, M = 4, 16
         page_size = 64
-        input_lens = torch.tensor([10, 20, 30, 40], dtype=torch.int32, device=self.device)
-        prefix_lens = torch.tensor([5, 15, 25, 35], dtype=torch.int32, device=self.device)
+        input_lens = torch.tensor(
+            [10, 20, 30, 40], dtype=torch.int32, device=self.device
+        )
+        prefix_lens = torch.tensor(
+            [5, 15, 25, 35], dtype=torch.int32, device=self.device
+        )
         seq_lens_out = torch.zeros(N, dtype=torch.int32, device=self.device)
         cu_kv = torch.zeros(N + 1, dtype=torch.int32, device=self.device)
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(input_lens, prefix_lens, seq_lens_out, cu_kv, block_id, kv_offset, page_size, N, M, mode=2)
+        self._run_kernel(
+            input_lens,
+            prefix_lens,
+            seq_lens_out,
+            cu_kv,
+            block_id,
+            kv_offset,
+            page_size,
+            N,
+            M,
+            mode=2,
+        )
 
         total_seq = (input_lens + prefix_lens).cpu()
         pages_per_seq = (total_seq + page_size - 1) // page_size
@@ -350,14 +494,29 @@ class PrepareCudaGraphKernelTest(TestCase):
     def test_mode2_kv_offset(self):
         N, M = 4, 8
         page_size = 64
-        input_lens = torch.tensor([10, 20, 30, 40], dtype=torch.int32, device=self.device)
-        prefix_lens = torch.tensor([5, 15, 25, 35], dtype=torch.int32, device=self.device)
+        input_lens = torch.tensor(
+            [10, 20, 30, 40], dtype=torch.int32, device=self.device
+        )
+        prefix_lens = torch.tensor(
+            [5, 15, 25, 35], dtype=torch.int32, device=self.device
+        )
         seq_lens_out = torch.zeros(N, dtype=torch.int32, device=self.device)
         cu_kv = torch.zeros(N + 1, dtype=torch.int32, device=self.device)
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(input_lens, prefix_lens, seq_lens_out, cu_kv, block_id, kv_offset, page_size, N, M, mode=2)
+        self._run_kernel(
+            input_lens,
+            prefix_lens,
+            seq_lens_out,
+            cu_kv,
+            block_id,
+            kv_offset,
+            page_size,
+            N,
+            M,
+            mode=2,
+        )
 
         torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
 
@@ -371,7 +530,18 @@ class PrepareCudaGraphKernelTest(TestCase):
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(input_lens, prefix_lens, seq_lens_out, cu_kv, block_id, kv_offset, page_size, N, M, mode=2)
+        self._run_kernel(
+            input_lens,
+            prefix_lens,
+            seq_lens_out,
+            cu_kv,
+            block_id,
+            kv_offset,
+            page_size,
+            N,
+            M,
+            mode=2,
+        )
 
         expected_seq = input_lens + prefix_lens
         torch.testing.assert_close(seq_lens_out, expected_seq)
@@ -397,7 +567,18 @@ class PrepareCudaGraphKernelTest(TestCase):
             kv_offset = torch.zeros(1, 2, M, dtype=torch.int32, device=self.device)
             page_size = 64 if mode == 2 else 0
 
-            self._run_kernel(src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, page_size, 1, M, mode=mode)
+            self._run_kernel(
+                src1,
+                src2,
+                seq_lens_out,
+                cu_kv,
+                block_id,
+                kv_offset,
+                page_size,
+                1,
+                M,
+                mode=mode,
+            )
 
             if mode == 0:
                 self.assertEqual(seq_lens_out.item(), 42)
@@ -422,7 +603,18 @@ class PrepareCudaGraphKernelTest(TestCase):
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(input_lens, prefix_lens, seq_lens_out, cu_kv, block_id, kv_offset, page_size, N, M, mode=2)
+        self._run_kernel(
+            input_lens,
+            prefix_lens,
+            seq_lens_out,
+            cu_kv,
+            block_id,
+            kv_offset,
+            page_size,
+            N,
+            M,
+            mode=2,
+        )
 
         torch.testing.assert_close(seq_lens_out, input_lens)
         # Exact page boundaries: 1, 2, 3 pages
@@ -440,7 +632,18 @@ class PrepareCudaGraphKernelTest(TestCase):
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(input_lens, prefix_lens, seq_lens_out, cu_kv, block_id, kv_offset, page_size, N, M, mode=2)
+        self._run_kernel(
+            input_lens,
+            prefix_lens,
+            seq_lens_out,
+            cu_kv,
+            block_id,
+            kv_offset,
+            page_size,
+            N,
+            M,
+            mode=2,
+        )
 
         # 65 -> 2 pages, 129 -> 3 pages, 193 -> 4 pages
         expected_cu = torch.tensor([0, 2, 5, 9], dtype=torch.int32)
@@ -456,297 +659,11 @@ class PrepareCudaGraphKernelTest(TestCase):
         block_id = self._make_block_id(N, M)
         kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
 
-        self._run_kernel(src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0)
+        self._run_kernel(
+            src1, src2, seq_lens_out, cu_kv, block_id, kv_offset, 0, N, M, mode=0
+        )
 
         torch.testing.assert_close(seq_lens_out, src1)
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
-
-
-class FlashInferTRTLLMSpecDecodeImplTest(TestCase):
-    """Tests for FlashInferTRTLLMSpecDecodeImpl.prepare_cuda_graph patterns.
-
-    SpecDecodeImpl.prepare_cuda_graph has two branches:
-      - Decode (is_prefill=False): MODE=0, src1=src2=sequence_lengths_plus_1_d,
-        seq_lens_out=cu_kv_out=fmha_params.seq_lens (aliased), page_size=0
-      - Prefill (is_prefill=True): MODE=1, src1=prefix_lengths_d, src2=input_lengths_d,
-        seq_lens_out=cu_kv_out=fmha_params.seq_lens (aliased), page_size=0
-    """
-
-    def setUp(self) -> None:
-        if not torch.cuda.is_available():
-            raise SkipTest("CUDA is not available")
-        self.device = torch.device("cuda")
-        set_seed(42)
-
-    def _make_block_id(self, N, M):
-        return torch.randint(0, 512, (N, M), dtype=torch.int32, device=self.device)
-
-    def _reference_kv_offset(self, block_id):
-        B, M = block_id.shape
-        kv_offset = torch.zeros(B, 2, M, dtype=torch.int32, device=self.device)
-        for b in range(B):
-            for m in range(M):
-                bid = block_id[b, m].item()
-                kv_offset[b, 0, m] = bid * 2
-                kv_offset[b, 1, m] = bid * 2 + 1
-        return kv_offset
-
-    def _run_spec_decode_prepare(self, is_prefill, seq_lens_plus_1=None,
-                                  prefix_lengths=None, input_lengths=None,
-                                  block_id=None, kv_offset=None):
-        """Simulate FlashInferTRTLLMSpecDecodeImpl.prepare_cuda_graph exactly."""
-        N = block_id.shape[0]
-        M = block_id.shape[1]
-        total_bm = N * M
-        BLOCK_SIZE = max(triton.next_power_of_2(N), 1024)
-        grid = (triton.cdiv(total_bm, BLOCK_SIZE),)
-        seq_lens = torch.zeros(N, dtype=torch.int32, device=self.device)
-        if not is_prefill:
-            _prepare_cuda_graph_kernel[grid](
-                seq_lens_plus_1, seq_lens_plus_1,
-                seq_lens, seq_lens,
-                block_id, kv_offset,
-                0, N, M, total_bm,
-                MODE=0, BLOCK_SIZE=BLOCK_SIZE,
-            )
-        else:
-            _prepare_cuda_graph_kernel[grid](
-                prefix_lengths, input_lengths,
-                seq_lens, seq_lens,
-                block_id, kv_offset,
-                0, N, M, total_bm,
-                MODE=1, BLOCK_SIZE=BLOCK_SIZE,
-            )
-        torch.cuda.synchronize()
-        return seq_lens
-
-    # ── Decode path (is_prefill=False) ──
-
-    def test_decode_copies_seq_lens(self):
-        """Decode: seq_lens = copy(sequence_lengths_plus_1)."""
-        N, M = 4, 8
-        seq_lens_plus_1 = torch.tensor([11, 21, 31, 41], dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=False, seq_lens_plus_1=seq_lens_plus_1,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(seq_lens, seq_lens_plus_1)
-
-    def test_decode_kv_offset(self):
-        """Decode: kv_offset correctly computed."""
-        N, M = 4, 8
-        seq_lens_plus_1 = torch.tensor([11, 21, 31, 41], dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        self._run_spec_decode_prepare(
-            is_prefill=False, seq_lens_plus_1=seq_lens_plus_1,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
-
-    def test_decode_aliased_src_tensors(self):
-        """Decode: same tensor used as both src1 and src2 must not corrupt."""
-        N, M = 8, 16
-        seq_lens_plus_1 = torch.randint(1, 500, (N,), dtype=torch.int32, device=self.device)
-        original = seq_lens_plus_1.clone()
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=False, seq_lens_plus_1=seq_lens_plus_1,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(seq_lens, original)
-        torch.testing.assert_close(seq_lens_plus_1, original)
-
-    def test_decode_large_batch(self):
-        N, M = 128, 32
-        seq_lens_plus_1 = torch.randint(2, 1000, (N,), dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=False, seq_lens_plus_1=seq_lens_plus_1,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(seq_lens, seq_lens_plus_1)
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
-
-    # ── Prefill path (is_prefill=True) ──
-
-    def test_prefill_seq_lens_prefix_plus_qlen(self):
-        """Prefill: seq_lens = prefix_lengths + input_lengths[0] (broadcast scalar)."""
-        N, M = 4, 8
-        prefix = torch.tensor([100, 200, 300, 400], dtype=torch.int32, device=self.device)
-        q_len = 5
-        input_lengths = torch.full((N,), q_len, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=True, prefix_lengths=prefix, input_lengths=input_lengths,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(seq_lens, prefix + q_len)
-
-    def test_prefill_kv_offset(self):
-        """Prefill: kv_offset correctly computed."""
-        N, M = 4, 8
-        prefix = torch.tensor([100, 200, 300, 400], dtype=torch.int32, device=self.device)
-        input_lengths = torch.full((N,), 5, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        self._run_spec_decode_prepare(
-            is_prefill=True, prefix_lengths=prefix, input_lengths=input_lengths,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
-
-    def test_prefill_varying_prefix_uniform_qlen(self):
-        """Prefill: varying prefix lengths with uniform q_len (MTP/spec-decode pattern)."""
-        N, M = 6, 16
-        prefix = torch.tensor([50, 100, 150, 200, 250, 300], dtype=torch.int32, device=self.device)
-        q_len = 3
-        input_lengths = torch.full((N,), q_len, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=True, prefix_lengths=prefix, input_lengths=input_lengths,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(seq_lens, prefix + q_len)
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
-
-    def test_prefill_large_batch(self):
-        N, M = 64, 32
-        prefix = torch.randint(50, 500, (N,), dtype=torch.int32, device=self.device)
-        q_len = 7
-        input_lengths = torch.full((N,), q_len, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=True, prefix_lengths=prefix, input_lengths=input_lengths,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(seq_lens, prefix + q_len)
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
-
-    def test_prefill_qlen_1(self):
-        """Prefill with q_len=1 (single-token speculative step)."""
-        N, M = 4, 8
-        prefix = torch.tensor([100, 200, 300, 400], dtype=torch.int32, device=self.device)
-        input_lengths = torch.full((N,), 1, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=True, prefix_lengths=prefix, input_lengths=input_lengths,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(seq_lens, prefix + 1)
-
-    # ── Mode switching ──
-
-    def test_decode_then_prefill_reuses_output(self):
-        """Switching from decode to prefill overwrites seq_lens correctly."""
-        N, M = 4, 8
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens_plus_1 = torch.tensor([11, 21, 31, 41], dtype=torch.int32, device=self.device)
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=False, seq_lens_plus_1=seq_lens_plus_1,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-        torch.testing.assert_close(seq_lens, seq_lens_plus_1)
-
-        prefix = torch.tensor([100, 200, 300, 400], dtype=torch.int32, device=self.device)
-        input_lengths = torch.full((N,), 5, dtype=torch.int32, device=self.device)
-        kv_offset2 = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-        block_id2 = self._make_block_id(N, M)
-
-        seq_lens2 = self._run_spec_decode_prepare(
-            is_prefill=True, prefix_lengths=prefix, input_lengths=input_lengths,
-            block_id=block_id2, kv_offset=kv_offset2,
-        )
-
-        torch.testing.assert_close(seq_lens2, prefix + 5)
-        torch.testing.assert_close(kv_offset2, self._reference_kv_offset(block_id2))
-
-    def test_single_batch_decode(self):
-        N, M = 1, 4
-        seq_lens_plus_1 = torch.tensor([42], dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=False, seq_lens_plus_1=seq_lens_plus_1,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        self.assertEqual(seq_lens.item(), 42)
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
-
-    def test_single_batch_prefill(self):
-        N, M = 1, 4
-        prefix = torch.tensor([100], dtype=torch.int32, device=self.device)
-        input_lengths = torch.tensor([3], dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=True, prefix_lengths=prefix, input_lengths=input_lengths,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        self.assertEqual(seq_lens.item(), 103)
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
-
-    def test_multi_block_grid_decode(self):
-        """total_bm exceeds BLOCK_SIZE, exercising multi-block grid in decode mode."""
-        N, M = 4, 512
-        seq_lens_plus_1 = torch.tensor([11, 21, 31, 41], dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=False, seq_lens_plus_1=seq_lens_plus_1,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(seq_lens, seq_lens_plus_1)
-        torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
-
-    def test_multi_block_grid_prefill(self):
-        """total_bm exceeds BLOCK_SIZE, exercising multi-block grid in prefill mode."""
-        N, M = 4, 512
-        prefix = torch.tensor([100, 200, 300, 400], dtype=torch.int32, device=self.device)
-        input_lengths = torch.full((N,), 5, dtype=torch.int32, device=self.device)
-        block_id = self._make_block_id(N, M)
-        kv_offset = torch.zeros(N, 2, M, dtype=torch.int32, device=self.device)
-
-        seq_lens = self._run_spec_decode_prepare(
-            is_prefill=True, prefix_lengths=prefix, input_lengths=input_lengths,
-            block_id=block_id, kv_offset=kv_offset,
-        )
-
-        torch.testing.assert_close(seq_lens, prefix + 5)
         torch.testing.assert_close(kv_offset, self._reference_kv_offset(block_id))
 
 
