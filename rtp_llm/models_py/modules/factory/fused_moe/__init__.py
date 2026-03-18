@@ -46,11 +46,13 @@ if device_type == DeviceType.ROCm:
         RocmEpLowLatencyStrategy,
         RocmEpNormalStrategy,
         RocmFp8PerChannelPureTPStrategy,
+        RocmFp8PerBlockPureTPStrategy
     )
     registry = StrategyRegistry()
     registry.register(RocmEpLowLatencyStrategy())
     registry.register(RocmEpNormalStrategy())
     registry.register(RocmFp8PerChannelPureTPStrategy())
+    registry.register(RocmFp8PerBlockPureTPStrategy())
     registry.register(RocmBf16PureTPStrategy())
     registry.register(BatchedTritonStrategy())
     FusedMoeFactory.set_registry(registry)

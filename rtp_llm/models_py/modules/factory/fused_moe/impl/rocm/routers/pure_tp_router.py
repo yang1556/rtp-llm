@@ -135,7 +135,7 @@ class PureTpRouterNoQuant(PureTpRouterBase):
         super().check_conditions(checker, config)
         resolver = MoeConfigResolver()
         quant_method = resolver.get_quant_method(config)
-        checker.check(quant_method is None)
+        checker.check(quant_method is None or quant_method == "FP8_PER_BLOCK")
 
     def _do_quant(
         self, a1: torch.Tensor
