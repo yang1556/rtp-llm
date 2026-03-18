@@ -294,8 +294,7 @@ read_release_version = repository_rule(
 def _torch_repo_impl(ctx):
     torch_path = ctx.os.environ.get("TORCH_ROOT")
     if not torch_path:
-        # Auto-detect torch from Python environment
-        # Try multiple python paths (CI uses /opt/conda310/bin/python)
+        # Auto-detect torch: try running python, then check common paths
         python_candidates = ["python3", "python", "/opt/conda310/bin/python"]
         for python_bin in python_candidates:
             result = ctx.execute([python_bin, "-c",
@@ -303,10 +302,21 @@ def _torch_repo_impl(ctx):
             if result.return_code == 0 and result.stdout.strip():
                 torch_path = result.stdout.strip()
                 break
+        # Fallback: check common conda/pip torch paths directly
+        if not torch_path:
+            common_paths = [
+                "/opt/conda310/lib/python3.10/site-packages/torch",
+                "/opt/conda/lib/python3.10/site-packages/torch",
+                "/usr/local/lib/python3.10/dist-packages/torch",
+                "/usr/lib/python3/dist-packages/torch",
+            ]
+            for p in common_paths:
+                if ctx.path(p).exists:
+                    torch_path = p
+                    break
         if not torch_path:
             fail("TORCH_ROOT not set and torch not found. " +
-                 "Set TORCH_ROOT or ensure torch is installed. " +
-                 "Tried: " + ", ".join(python_candidates))
+                 "Set TORCH_ROOT or ensure torch is installed.")
 
     if not ctx.path(torch_path).exists:
         fail("Torch path does not exist: " + torch_path)
