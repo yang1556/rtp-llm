@@ -295,19 +295,18 @@ def _torch_repo_impl(ctx):
     torch_path = ctx.os.environ.get("TORCH_ROOT")
     if not torch_path:
         # Auto-detect torch from Python environment
-        result = ctx.execute(["python3", "-c",
-            "import os, torch; print(os.path.dirname(torch.__file__))"])
-        if result.return_code == 0:
-            torch_path = result.stdout.strip()
-        else:
-            # Try python instead of python3
-            result = ctx.execute(["python", "-c",
+        # Try multiple python paths (CI uses /opt/conda310/bin/python)
+        python_candidates = ["python3", "python", "/opt/conda310/bin/python"]
+        for python_bin in python_candidates:
+            result = ctx.execute([python_bin, "-c",
                 "import os, torch; print(os.path.dirname(torch.__file__))"])
-            if result.return_code == 0:
+            if result.return_code == 0 and result.stdout.strip():
                 torch_path = result.stdout.strip()
-            else:
-                fail("TORCH_ROOT not set and torch not found in Python. " +
-                     "Set TORCH_ROOT or install torch: " + result.stderr)
+                break
+        if not torch_path:
+            fail("TORCH_ROOT not set and torch not found. " +
+                 "Set TORCH_ROOT or ensure torch is installed. " +
+                 "Tried: " + ", ".join(python_candidates))
 
     if not ctx.path(torch_path).exists:
         fail("Torch path does not exist: " + torch_path)
