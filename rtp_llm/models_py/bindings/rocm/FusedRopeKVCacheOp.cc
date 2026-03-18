@@ -158,7 +158,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> FusedRopeKVCachePrefillO
 
     torch::Tensor qkv_buf_fp8;
     if (use_fmha_fp8) {
-        qkv_buf_fp8 = torch::empty(qkv.sizes(), torch::TensorOptions(get_fp8_dtype(device_)).device(qkv.device()));
+        qkv_buf_fp8 = torch::empty(qkv.sizes(), torch::TensorOptions(torch::kFloat8_e4m3fnuz).device(qkv.device()));
     }
 
     int *padding_offset = nullptr, *position_ids = nullptr;
@@ -206,6 +206,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> FusedRopeKVCachePrefillO
                                          store_kv,
                                          store_cache,
                                          rope_cache_ptr,
+                                         false,
                                          stream_);
     } else {
         // V1 kernel does not support use_paged_fmha=true, fall back to legacy path
@@ -246,12 +247,6 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> FusedRopeKVCachePrefillO
                                          store_cache,
                                          rope_cache_ptr,
                                          stream_);
-    }
-    if (use_paged_fmha) {
-        if (paged_fp8) {
-            return std::make_tuple(q_fp8_buf, torch::Tensor(), torch::Tensor());
-        }
-        return std::make_tuple(q_output, torch::Tensor(), torch::Tensor());
     }
     if (use_fmha_fp8) {
         return std::make_tuple(qkv_buf_fp8, torch::Tensor(), torch::Tensor());
