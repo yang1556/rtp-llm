@@ -37,6 +37,7 @@ HIP_RUNTIME_LIBRARY = '%{hip_runtime_library}'
 ROCR_RUNTIME_PATH = '%{rocr_runtime_path}'
 ROCR_RUNTIME_LIBRARY = '%{rocr_runtime_library}'
 VERBOSE = '%{crosstool_verbose}'=='1'
+ROCM_AMDGPU_TARGETS_RAW = '%{rocm_amdgpu_targets}'
 
 def Log(s):
   print('gpus/crosstool: {0}'.format(s))
@@ -186,6 +187,9 @@ def InvokeHipcc(argv, log=False):
   # linker for TensorFlow on ROCm platform.
   hipccopts += ' -fno-gpu-rdc '
   hipccopts += ' -Wno-unused-command-line-argument '
+  # Pass explicit amdgpu target(s) so device compile sees a single arch (required by CK).
+  for t in [t.strip().strip('"') for t in ROCM_AMDGPU_TARGETS_RAW.split(',') if t.strip()]:
+    hipccopts += ' --amdgpu-target=' + t + ' '
   hipccopts += undefines
   hipccopts += defines
   hipccopts += std_options
