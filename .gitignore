@@ -9,6 +9,12 @@ __pycache__/
 *.pth
 .torch_bazelrc
 *.egg-info/
+
+# Build artifacts - never commit .so files
+rtp_llm/libs/*.so
+rtp_llm/libs/*.so.*
+smoke_actual/
+main_logs/
 !tests/data/**/*.npy
 /notebooks
 **/.ipynb_checkpoints/
