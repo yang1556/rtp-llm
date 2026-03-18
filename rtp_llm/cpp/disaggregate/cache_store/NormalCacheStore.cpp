@@ -67,8 +67,13 @@ bool NormalCacheStore::init(const CacheStoreInitParams& params) {
     }
 
     auto check_task_readiness = [this]() {
+        int cnt = 0;
         while (!thread_pool_close_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            cnt = (cnt + 1) % 1000;
+            if (cnt == 0) {
+                RTP_LLM_LOG_INFO("DEBUG(chanyin): check task readiness, store tasks size is %d", store_tasks_.size());
+            }
             std::unique_lock<std::shared_mutex> lock(store_tasks_mutex_);
             for (auto it = this->store_tasks_.begin(); it != this->store_tasks_.end();) {
                 auto& [buffer, item]   = *it;

@@ -779,8 +779,10 @@ void CudaEvent::synchronize() const {
 bool CudaEvent::checkReadiness() const {
     auto status = cudaEventQuery(event_);
     if (status == cudaSuccess) {
+        RTP_LLM_LOG_INFO("DEBUG(chanyin): CudaEvent checkReadiness success");
         return true;
     } else if (status == cudaErrorNotReady) {
+        RTP_LLM_LOG_INFO("DEBUG(chanyin): CudaEvent checkReadiness not ready");
         return false;
     } else {
         RTP_LLM_LOG_ERROR("CudaEvent checkReadiness failed with status: %d", status);

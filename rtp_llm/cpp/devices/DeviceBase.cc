@@ -286,6 +286,7 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
         };
 
         if (group_type == CacheGroupType::LINEAR) {
+            RTP_LLM_LOG_INFO("DEBUG(chanyin): add last block, total_blocks is %d", total_blocks);
             addBlock(total_blocks - 1, group_type);
         } else {
             for (int index = 0; index < total_blocks; ++index) {
