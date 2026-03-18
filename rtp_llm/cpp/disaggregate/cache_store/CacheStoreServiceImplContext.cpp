@@ -85,6 +85,7 @@ void CacheStoreServiceImplContext::runFailed(KvCacheStoreServiceErrorCode error_
 
     stopTimer();
 
+    RTP_LLM_LOG_INFO("DEBUG(chanyin): write_count is %d, total_block_count_ is %d", write_cnt_, total_block_count_);
     auto request_block_buffer_store = request_block_buffer_store_.lock();
     if (request_block_buffer_store) {
         RTP_LLM_LOG_WARNING(

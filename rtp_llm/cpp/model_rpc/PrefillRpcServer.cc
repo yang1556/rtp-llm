@@ -390,7 +390,7 @@ grpc::Status PrefillRpcServer::prepareAllocateResource(PrefillGenerateContext& p
 grpc::Status PrefillRpcServer::GenerateStreamCall(grpc::ServerContext*                   server_context,
                                                   const GenerateInputPB*                 request,
                                                   grpc::ServerWriter<GenerateOutputsPB>* writer) {
-    RTP_LLM_LOG_DEBUG("request [%ld] start generate stream call", request->request_id());
+    RTP_LLM_LOG_INFO("DEBUG(chanyin): request [%ld] start generate stream call", request->request_id());
     auto pd_separation = request->generate_config().max_new_tokens() > 1 && request->generate_config().num_beams() <= 1
                          && request->generate_config().variable_num_beams().size() == 0
                          && request->generate_config().num_return_sequences() <= 1

@@ -74,7 +74,8 @@ void DecodeRpcServer::prepareGenerateContext(DecodeGenerateContext& decode_conte
                       allocate_request.stage() == RemoteStage::ALLOCATE,
                       grpc::StatusCode::INTERNAL,
                       "message first status != RemoteStage::ALLOCATE");
-    decode_context.request_id  = allocate_request.request_id();
+    decode_context.request_id = allocate_request.request_id();
+    RTP_LLM_LOG_INFO("DEBUG(chanyin): request_id is %ld", allocate_request.request_id());
     decode_context.request_key = makeRequestKey(allocate_request.client_id(), allocate_request.request_id());
 
     for (auto& addr : allocate_request.peer_addrs()) {
