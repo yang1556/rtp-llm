@@ -294,12 +294,23 @@ read_release_version = repository_rule(
 def _torch_repo_impl(ctx):
     torch_path = ctx.os.environ.get("TORCH_ROOT")
     if not torch_path:
-        fail("TORCH_ROOT environment variable is not set. " +
-             "Please set it to the root of your PyTorch installation " +
-             "(e.g., 'export TORCH_ROOT=$(python -c \"import os, torch; print(os.path.dirname(os.path.dirname(torch.utils.cmake_prefix_path)))\")')")
+        # Auto-detect torch from Python environment
+        result = ctx.execute(["python3", "-c",
+            "import os, torch; print(os.path.dirname(torch.__file__))"])
+        if result.return_code == 0:
+            torch_path = result.stdout.strip()
+        else:
+            # Try python instead of python3
+            result = ctx.execute(["python", "-c",
+                "import os, torch; print(os.path.dirname(torch.__file__))"])
+            if result.return_code == 0:
+                torch_path = result.stdout.strip()
+            else:
+                fail("TORCH_ROOT not set and torch not found in Python. " +
+                     "Set TORCH_ROOT or install torch: " + result.stderr)
 
     if not ctx.path(torch_path).exists:
-        fail("The path specified by TORCH_ROOT does not exist: " + torch_path)
+        fail("Torch path does not exist: " + torch_path)
 
     ctx.file("BUILD", ctx.read(ctx.attr.build_file))
     ctx.symlink(torch_path, "torch_root")
