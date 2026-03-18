@@ -27,6 +27,7 @@
 #endif
 #if USING_ROCM
 #include "rtp_llm/cpp/rocm/cuda_shims.h"
+#include "rtp_llm/cpp/kernels/rocm_utils/vec_dtypes_hip.h"
 #endif
 #include <cstdlib>
 
@@ -60,7 +61,7 @@ void float_to_half(const void* input, void* output, int size) {
     int           n_blocks          = (size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
     float_to_half_kernel<<<n_blocks, THREADS_PER_BLOCK>>>(float_input, half_output, size);
-    cudaDeviceSynchronize();
+    (void)cudaDeviceSynchronize();
 }
 
 __global__ void
@@ -80,7 +81,7 @@ void half_to_float(const void* input, void* output, const int num_elements) {
     const int gridSize  = (num_elements + blockSize - 1) / blockSize;
 
     half_to_float_kernel<<<gridSize, blockSize>>>(half_input, float_output, num_elements);
-    cudaDeviceSynchronize();
+    (void)cudaDeviceSynchronize();
 }
 
 template<typename T, typename T_IN, int ITEMS_PER_THREAD>
@@ -3735,10 +3736,17 @@ __global__ void add_fusedQKV_bias_transpose_prefill_kernel_v1(T*                
                     const int inVBlockIdx =
                         kv_block_array.getVLocalIdx(dst_kv_seq_idx, head_idx, size_per_head, tidx * vec_size + vec_i);
 
+#if defined(__HIP_PLATFORM_AMD__)
+                    k_cache[inKBlockIdx] = cast_float_to_fp8_for_kv_cache<Tcache>(float(reinterpret_cast<T*>(&k)[vec_i])
+                                                                                  * (float(1 << (8 - 1)) / s_max[0]));
+                    v_cache[inVBlockIdx] = cast_float_to_fp8_for_kv_cache<Tcache>(float(reinterpret_cast<T*>(&v)[vec_i])
+                                                                                  * (float(1 << (8 - 1)) / s_max[1]));
+#else
                     k_cache[inKBlockIdx] =
                         Tcache(float(reinterpret_cast<T*>(&k)[vec_i]) * (float(1 << (8 - 1)) / s_max[0]));
                     v_cache[inVBlockIdx] =
                         Tcache(float(reinterpret_cast<T*>(&v)[vec_i]) * (float(1 << (8 - 1)) / s_max[1]));
+#endif
                 }
 
                 if (tidx == 0) {
@@ -3997,8 +4005,7 @@ __global__ void add_fusedQKV_bias_transpose_prefill_kernel(T*                   
         }
         *reinterpret_cast<Vec_t*>(&q_buf[dest_q_idx]) = q;
         if (QuantizedQKV != nullptr) {
-            QuantizedVecType* quantized_q_ptr =
-                reinterpret_ptr<QuantizedEltType, QuantizedVecType>(q_buf, dest_q_idx);
+            QuantizedVecType* quantized_q_ptr = reinterpret_ptr<QuantizedEltType, QuantizedVecType>(q_buf, dest_q_idx);
             convert_to_fp8(quantized_q_ptr, q);
         }
     }
@@ -4038,10 +4045,17 @@ __global__ void add_fusedQKV_bias_transpose_prefill_kernel(T*                   
 
                     // convert_to_fp8(reinterpret_cast<__nv_fp8_e4m3*>(k_cache) + inKBlockIdx,
                     // float(reinterpret_cast<T*>(&k)[vec_i]) * float(1 << (8 - 1)) / s_max[0]);
+#if defined(__HIP_PLATFORM_AMD__)
+                    k_cache[inKBlockIdx] = cast_float_to_fp8_for_kv_cache<Tcache>(float(reinterpret_cast<T*>(&k)[vec_i])
+                                                                                  * (float(1 << (8 - 1)) / s_max[0]));
+                    v_cache[inVBlockIdx] = cast_float_to_fp8_for_kv_cache<Tcache>(float(reinterpret_cast<T*>(&v)[vec_i])
+                                                                                  * (float(1 << (8 - 1)) / s_max[1]));
+#else
                     k_cache[inKBlockIdx] =
                         Tcache(float(reinterpret_cast<T*>(&k)[vec_i]) * (float(1 << (8 - 1)) / s_max[0]));
                     v_cache[inVBlockIdx] =
                         Tcache(float(reinterpret_cast<T*>(&v)[vec_i]) * (float(1 << (8 - 1)) / s_max[1]));
+#endif
                 }
 
                 if (tidx == 0) {
@@ -4266,10 +4280,17 @@ __global__ void add_fusedQKV_bias_transpose_decode_kernel_v1(T*                 
                     const int inVBlockIdx =
                         kv_block_array.getVLocalIdx(dst_kv_seq_idx, head_idx, size_per_head, tidx * vec_size + vec_i);
 
+#if defined(__HIP_PLATFORM_AMD__)
+                    k_cache[inKBlockIdx] = cast_float_to_fp8_for_kv_cache<Tcache>(float(reinterpret_cast<T*>(&k)[vec_i])
+                                                                                  * (float(1 << (8 - 1)) / s_max[0]));
+                    v_cache[inVBlockIdx] = cast_float_to_fp8_for_kv_cache<Tcache>(float(reinterpret_cast<T*>(&v)[vec_i])
+                                                                                  * (float(1 << (8 - 1)) / s_max[1]));
+#else
                     k_cache[inKBlockIdx] =
                         Tcache(float(reinterpret_cast<T*>(&k)[vec_i]) * (float(1 << (8 - 1)) / s_max[0]));
                     v_cache[inVBlockIdx] =
                         Tcache(float(reinterpret_cast<T*>(&v)[vec_i]) * (float(1 << (8 - 1)) / s_max[1]));
+#endif
                 }
                 if (tidx == 0) {
                     *reinterpret_cast<float*>(&k_scale_ptr[inScaleIdx]) = s_max[0] / float(1 << (8 - 1));
@@ -4434,10 +4455,17 @@ __global__ void add_fusedQKV_bias_transpose_decode_kernel(T*                    
                     const int inVBlockIdx = kv_block_array.getVLocalIdx<KvCacheDataType::FP8>(
                         dst_kv_seq_idx, head_idx, size_per_head, tidx * vec_size + vec_i);
 
+#if defined(__HIP_PLATFORM_AMD__)
+                    k_cache[inKBlockIdx] = cast_float_to_fp8_for_kv_cache<Tcache>(float(reinterpret_cast<T*>(&k)[vec_i])
+                                                                                  * (float(1 << (8 - 1)) / s_max[0]));
+                    v_cache[inVBlockIdx] = cast_float_to_fp8_for_kv_cache<Tcache>(float(reinterpret_cast<T*>(&v)[vec_i])
+                                                                                  * (float(1 << (8 - 1)) / s_max[1]));
+#else
                     k_cache[inKBlockIdx] =
                         Tcache(float(reinterpret_cast<T*>(&k)[vec_i]) * (float(1 << (8 - 1)) / s_max[0]));
                     v_cache[inVBlockIdx] =
                         Tcache(float(reinterpret_cast<T*>(&v)[vec_i]) * (float(1 << (8 - 1)) / s_max[1]));
+#endif
                 }
 
                 if (tidx == 0) {

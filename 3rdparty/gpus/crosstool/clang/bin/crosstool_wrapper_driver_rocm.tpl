@@ -189,7 +189,7 @@ def InvokeHipcc(argv, log=False):
   hipccopts += ' -Wno-unused-command-line-argument '
   # Pass explicit amdgpu target(s) so device compile sees a single arch (required by CK).
   for t in [t.strip().strip('"') for t in ROCM_AMDGPU_TARGETS_RAW.split(',') if t.strip()]:
-    hipccopts += ' --amdgpu-target=' + t + ' '
+    hipccopts += ' --offload-arch=' + t + ' '
   hipccopts += undefines
   hipccopts += defines
   hipccopts += std_options

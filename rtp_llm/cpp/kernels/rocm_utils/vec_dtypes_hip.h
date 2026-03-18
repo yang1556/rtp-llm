@@ -53,6 +53,13 @@ namespace rtp_llm {
 #define FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
 #endif
 
+#if defined(__HIP_PLATFORM_AMD__)
+// Prevent ROCm amd_bfloat16.h macro make_bfloat162(a,b) -> amd_bfloat162(a,b) from
+// turning this function into "nv_bfloat162 amd_bfloat162(...)", which would shadow
+// the struct type amd_bfloat162 and cause "must use 'struct' tag" errors.
+#undef make_bfloat162
+#endif
+
 FLASHINFER_INLINE nv_bfloat162 make_bfloat162(const nv_bfloat16 x, const nv_bfloat16 y) {
     nv_bfloat162 t;
     t.x = x;
@@ -105,6 +112,128 @@ FLASHINFER_INLINE float2 __bfloat1622float2(const __hip_bfloat162 a) {
     hi_float = __internal_bfloat162float(((__nv_bfloat162_raw)a).y);
     return make_float2(lo_float, hi_float);
 }
+#endif
+
+#if defined(__HIP_PLATFORM_AMD__)
+// ROCm: __hip_fp8_* constructors from half/float are __host__ only; device-side encode + reinterpret.
+namespace {
+// E4M3 FNuz: 1 sign, 4 exp, 3 mantissa; saturate 448, RNE.
+FLASHINFER_INLINE uint8_t rocm_float_to_e4m3_fnuz(float x) {
+    if (!isfinite(x))
+        return 0;
+    uint32_t    s   = (x < 0.f) ? 1u : 0u;
+    float       ax  = fabsf(x);
+    const float SAT = 448.0f;
+    if (ax >= SAT)
+        return (uint8_t)((s << 7) | (0xFu << 3));
+    const float MIN_SUB = 1.0f / 512.0f;
+    if (ax < MIN_SUB)
+        return 0;
+    int   exp2;
+    float m   = frexpf(ax, &exp2);
+    float k   = m * 2.0f;
+    int   e   = exp2 - 1;
+    auto  rne = [](float v) {
+        float f    = floorf(v);
+        float frac = v - f;
+        int   i    = (int)f;
+        if (frac > 0.5f)
+            return i + 1;
+        if (frac < 0.5f)
+            return i;
+        return (i & 1) ? (i + 1) : i;
+    };
+    if (e < -6) {
+        int mant = rne(ax * 512.0f);
+        if (mant <= 0)
+            return 0;
+        if (mant > 7)
+            mant = 7;
+        return (uint8_t)((s << 7) | (0u << 3) | (mant & 7));
+    }
+    int mant = rne((k - 1.0f) * 8.0f);
+    if (mant == 8) {
+        mant = 0;
+        ++e;
+    }
+    if (e > 7)
+        return (uint8_t)((s << 7) | (0xFu << 3));
+    uint8_t exp_field = (uint8_t)(e + 7);
+    if (exp_field == 0)
+        exp_field = 1;
+    return (uint8_t)((s << 7) | (exp_field << 3) | (mant & 7));
+}
+// E5M2 FNuz: 1 sign, 5 exp (bias 15), 2 mantissa; saturate 57344.
+FLASHINFER_INLINE uint8_t rocm_float_to_e5m2_fnuz(float x) {
+    if (!isfinite(x))
+        return 0;
+    uint32_t    s   = (x < 0.f) ? 1u : 0u;
+    float       ax  = fabsf(x);
+    const float SAT = 57344.0f;
+    if (ax >= SAT)
+        return (uint8_t)((s << 7) | (0x1Fu << 2));
+    const float MIN_SUB = 1.0f / 16384.0f;
+    if (ax < MIN_SUB)
+        return 0;
+    int   exp2;
+    float m   = frexpf(ax, &exp2);
+    float k   = m * 2.0f;
+    int   e   = exp2 - 1;
+    auto  rne = [](float v) {
+        float f    = floorf(v);
+        float frac = v - f;
+        int   i    = (int)f;
+        if (frac > 0.5f)
+            return i + 1;
+        if (frac < 0.5f)
+            return i;
+        return (i & 1) ? (i + 1) : i;
+    };
+    if (e < -14) {
+        int mant = rne(ax * 16384.0f);
+        if (mant <= 0)
+            return 0;
+        if (mant > 3)
+            mant = 3;
+        return (uint8_t)((s << 7) | (0u << 2) | (mant & 3));
+    }
+    int mant = rne((k - 1.0f) * 4.0f);
+    if (mant == 4) {
+        mant = 0;
+        ++e;
+    }
+    if (e > 15)
+        return (uint8_t)((s << 7) | (0x1Fu << 2));
+    uint8_t exp_field = (uint8_t)(e + 15);
+    if (exp_field == 0)
+        exp_field = 1;
+    return (uint8_t)((s << 7) | (exp_field << 2) | (mant & 3));
+}
+FLASHINFER_INLINE __nv_fp8_e4m3 rocm_half_to_fp8_e4m3(half h) {
+    float   f   = __half2float(h);
+    uint8_t raw = rocm_float_to_e4m3_fnuz(f);
+    return *reinterpret_cast<__nv_fp8_e4m3*>(&raw);
+}
+FLASHINFER_INLINE __nv_fp8_e5m2 rocm_half_to_fp8_e5m2(half h) {
+    float   f   = __half2float(h);
+    uint8_t raw = rocm_float_to_e5m2_fnuz(f);
+    return *reinterpret_cast<__nv_fp8_e5m2*>(&raw);
+}
+// Device-safe float -> __nv_fp8_e4m3 for KV cache (HIP fp8 ctor is host-only).
+FLASHINFER_INLINE __nv_fp8_e4m3 rocm_float_to_fp8_e4m3(float f) {
+    uint8_t raw = rocm_float_to_e4m3_fnuz(f);
+    return *reinterpret_cast<__nv_fp8_e4m3*>(&raw);
+}
+// Helper for unfused_attention_kernels: on ROCm use device encode for fp8.
+template<typename T>
+FLASHINFER_INLINE T cast_float_to_fp8_for_kv_cache(float f) {
+    return T(f);
+}
+template<>
+FLASHINFER_INLINE __nv_fp8_e4m3 cast_float_to_fp8_for_kv_cache<__nv_fp8_e4m3>(float f) {
+    return rocm_float_to_fp8_e4m3(f);
+}
+}  // namespace
 #endif
 
 /******************* vec_t type cast *******************/
@@ -267,15 +396,19 @@ template<>
 struct vec_cast<__nv_fp8_e4m3, half> {
     template<size_t vec_size>
     FLASHINFER_INLINE static void cast(__nv_fp8_e4m3* dst, const half* src) {
-#ifdef FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
+#if defined(__HIP_PLATFORM_AMD__)
+#pragma unroll
+        for (size_t i = 0; i < vec_size; ++i) {
+            dst[i] = rocm_half_to_fp8_e4m3(src[i]);
+        }
+#elif defined(FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED)
         if constexpr (vec_size == 1) {
             dst[0] = __nv_fp8_e4m3(src[0]);
         } else {
 #pragma unroll
             for (size_t i = 0; i < vec_size / 2; ++i) {
                 uint16_t y;
-                uint32_t x = *(uint32_t*)&src[i * 2];
-                //     asm volatile("cvt.rn.satfinite.e4m3x2.f16x2 %0, %1;" : "=h"(y) : "r"(x));
+                uint32_t x              = *(uint32_t*)&src[i * 2];
                 *(uint16_t*)&dst[i * 2] = y;
             }
         }
@@ -284,7 +417,7 @@ struct vec_cast<__nv_fp8_e4m3, half> {
         for (size_t i = 0; i < vec_size; ++i) {
             dst[i] = __nv_fp8_e4m3(src[i]);
         }
-#endif  // FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
+#endif
     }
 };
 
@@ -292,15 +425,19 @@ template<>
 struct vec_cast<__nv_fp8_e5m2, half> {
     template<size_t vec_size>
     FLASHINFER_INLINE static void cast(__nv_fp8_e5m2* dst, const half* src) {
-#ifdef FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
+#if defined(__HIP_PLATFORM_AMD__)
+#pragma unroll
+        for (size_t i = 0; i < vec_size; ++i) {
+            dst[i] = rocm_half_to_fp8_e5m2(src[i]);
+        }
+#elif defined(FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED)
         if constexpr (vec_size == 1) {
             dst[0] = __nv_fp8_e5m2(src[0]);
         } else {
 #pragma unroll
             for (size_t i = 0; i < vec_size / 2; ++i) {
                 uint16_t y;
-                uint32_t x = *(uint32_t*)&src[i * 2];
-                //     asm volatile("cvt.rn.satfinite.e5m2x2.f16x2 %0, %1;" : "=h"(y) : "r"(x));
+                uint32_t x              = *(uint32_t*)&src[i * 2];
                 *(uint16_t*)&dst[i * 2] = y;
             }
         }
@@ -309,7 +446,7 @@ struct vec_cast<__nv_fp8_e5m2, half> {
         for (size_t i = 0; i < vec_size; ++i) {
             dst[i] = __nv_fp8_e5m2(src[i]);
         }
-#endif  // FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
+#endif
     }
 };
 

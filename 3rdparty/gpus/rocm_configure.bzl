@@ -702,7 +702,7 @@ def _read_dir(repository_ctx, src_dir):
 
 def _compute_rocm_extra_copts(repository_ctx, amdgpu_targets):
     if False:
-        amdgpu_target_flags = ["--amdgpu-target=" +
+        amdgpu_target_flags = ["--offload-arch=" +
                                amdgpu_target for amdgpu_target in amdgpu_targets]
     else:
         # AMDGPU targets are handled in the "crosstool_wrapper_driver_is_not_gcc"
