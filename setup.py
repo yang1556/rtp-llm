@@ -63,11 +63,14 @@ def get_version_with_platform() -> str:
 
 def get_platform_tag() -> str:
     """Get wheel platform tag.
-    
+
     Returns platform tag like: linux_x86_64, manylinux_2_28_x86_64
     """
     machine = platform.machine()
-    
+
+    if should_skip_bazel_build():
+        return f"linux_{machine}"
+
     # Extract platform from RTP_BAZEL_CONFIG
     build_config = detect_build_config()
     
