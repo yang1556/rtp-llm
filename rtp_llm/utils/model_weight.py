@@ -1082,6 +1082,27 @@ def merge_ba_transpose_reorder(
     a = ts[1]
     return torch.cat([b, a], dim=0).T
 
+def split_q_gate(ts: List[torch.Tensor], head_num: int, head_dim: int, part: int):
+    """Split q_gate tensor into q or gate part.
+
+    This function is used for both weight and scale (if fp8_per_block).
+    For weight, new_head_dim is head_dim; for scale, it's head_dim / block_size.
+    """
+    dim0, dim1 = ts[0].shape
+    assert (
+        dim0 % (head_num * 2) == 0
+    ), f"dim0 % (head_num * 2) != 0, dim0: {dim0}, head_num: {head_num}, head_dim: {head_dim}, dim1: {dim1}"
+    new_head_dim = dim0 // (head_num * 2)
+    t = ts[0].reshape(head_num, 2, new_head_dim, dim1)
+    if part == 0:
+        return t[:, 0, :, :].reshape(-1, dim1)
+    else:
+        return t[:, 1, :, :].reshape(-1, dim1)
+
+def plus_one(ts: List[torch.Tensor]):
+    """Add one to the tensor. Qwen3Next uses gemma_rms_norm."""
+    return ts[0] + 1
+
 class W:
     # global
     embedding = "embedding"
