@@ -106,9 +106,25 @@ class BackendManager(object):
             and model_config.expert_num > 0
             and engine_config.parallelism_config.world_size > 1
         ):
-            from rtp_llm.models_py.distributed.deepep_wrapper import init_deepep_wrapper
+            deepep_init_success = False
+            moriep_init_success = False
+            try:
+                from rtp_llm.models_py.distributed.deepep_wrapper import init_deepep_wrapper
+                init_deepep_wrapper(engine_config, model_config)
+                deepep_init_success = True
+            except Exception as e:
+                logging.error(f"Failed to initialize DeepEP wrapper: {e}")
 
-            init_deepep_wrapper(engine_config, model_config)
+            try:
+                from rtp_llm.models_py.distributed.moriep_wrapper import init_moriep_wrapper
+                init_moriep_wrapper(engine_config, model_config)
+                moriep_init_success = True
+            except Exception as e:
+                logging.error(f"Failed to initialize MoriEP wrapper: {e}")
+
+            if not deepep_init_success and not moriep_init_success:
+                logging.error("Failed to initialize both DeepEP and MoriEP wrappers")
+                raise RuntimeError("Failed to initialize both DeepEP and MoriEP wrappers")
 
         # Optional propose model config
         propose_model_config = ModelFactory.create_propose_model_config(
