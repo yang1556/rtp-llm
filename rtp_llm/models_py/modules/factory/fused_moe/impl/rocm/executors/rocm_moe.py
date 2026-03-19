@@ -169,6 +169,15 @@ class RocmExpertsFp8PerChannel(FusedMoeExpertExecutor):
         self.a1q_scale = weights.get(W.moe_w1_input_sr, None)
         self.a2_scale = weights.get(W.moe_w2_input_sr, None)
 
+        if self.ep_size > 1:
+            local_E = self.w1.size(0)
+            start = self.ep_rank * local_E
+            end = start + local_E
+            self.expert_mask = torch.zeros(self.num_experts, dtype=torch.int32, device=self.w1.device)
+            self.expert_mask[start:end] = 1
+        else:
+            self.expert_mask = None
+
     @property
     def local_num_experts(self) -> int:
         return self.w1.size(0)
@@ -238,7 +247,7 @@ class RocmExpertsFp8PerChannel(FusedMoeExpertExecutor):
             moe_out,
             global_E,
             BLOCK_SIZE_M,
-            local_expert_mask=None,
+            local_expert_mask=self.expert_mask,
             num_local_tokens=None,
             dispatch_policy=0,
         )
