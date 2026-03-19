@@ -213,7 +213,14 @@ class PerChannelFp8Weight(CompositeWeight, QuantWeight):
         ):
             return False
         name = src_weight_info.name
-        return name in cls.w8a8_weight_list
+        if name not in cls.w8a8_weight_list:
+            return False
+        if quant_config._exclude_modules and hasattr(src_weight_info, 'weights'):
+            for ckpt_w in src_weight_info.weights:
+                base_name = ckpt_w.name.rsplit('.', 1)[0].replace('{i}', '0')
+                if base_name in quant_config._exclude_modules:
+                    return False
+        return True
 
     def __init__(
         self,
