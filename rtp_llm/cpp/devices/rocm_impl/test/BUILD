@@ -116,7 +116,6 @@ cc_test(
         "@//:using_aiter_src": [
             "@aiter_src//:module_aiter_enum",
             "@aiter_src//:module_moe_asm",
-            "@aiter_src//:module_moe_ck2stages",
             "@aiter_src//:module_quant",
             "@aiter_src//:module_moe_sorting",
             "@aiter_src//:module_gemm_a8w8",
@@ -124,10 +123,14 @@ cc_test(
         "//conditions:default": [
             "@aiter//:module_aiter_enum",
             "@aiter//:module_moe_asm",
-            "@aiter//:module_moe_ck2stages",
             "@aiter//:module_quant",
             "@aiter//:module_moe_sorting",
             "@aiter//:module_gemm_a8w8",
+        ],
+    }) + select({
+        "@//:rocm_gfx950": [],
+        "//conditions:default": [
+            "@aiter//:module_moe_ck2stages",
         ],
     }),
     tags = ["rocm"],
