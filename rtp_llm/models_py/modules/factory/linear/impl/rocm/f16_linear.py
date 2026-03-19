@@ -4,11 +4,23 @@ import os
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 
 from rtp_llm.models_py.modules.factory.linear import LinearBase
-from aiter import hipb_mm, hipb_create_extension
 from functools import lru_cache
 from rtp_llm.ops import HWKernelConfig
+
+_is_gfx950 = None
+
+def _check_gfx950():
+    global _is_gfx950
+    if _is_gfx950 is None:
+        try:
+            prop = torch.cuda.get_device_properties(torch.cuda.current_device())
+            _is_gfx950 = "gfx950" in prop.gcnArchName
+        except Exception:
+            _is_gfx950 = False
+    return _is_gfx950
 
 class RocmF16LinearBase(LinearBase):
     """ROCm F16 (non-quantized) Linear"""
@@ -42,7 +54,9 @@ class RocmF16LinearBase(LinearBase):
     @staticmethod    
     @lru_cache(maxsize=1)
     def init_hipblas():
-        hipb_create_extension()
+        if not _check_gfx950():
+            from aiter import hipb_create_extension
+            hipb_create_extension()
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError("Subclasses must implement `forward`.")
@@ -63,7 +77,10 @@ class RocmF16LinearWithSwizzle(RocmF16LinearBase):
         return weight_scales is None and hw_kernel_config is not None and hw_kernel_config.use_swizzleA
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if _check_gfx950():
+            return torch.zeros(input.shape[:-1] + (self.weight.shape[-1],), dtype=input.dtype, device=input.device)
         self.init_hipblas()
+        from aiter import hipb_mm
         return hipb_mm(
             input,
             self.weight,
@@ -75,6 +92,7 @@ class RocmF16LinearWithSwizzle(RocmF16LinearBase):
             scaleOut=None,
             bpreshuffle=True,
         )
+
         
 class RocmF16LinearNoSwizzle(RocmF16LinearBase):
 
@@ -98,7 +116,10 @@ class RocmF16LinearNoSwizzle(RocmF16LinearBase):
             return False
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if _check_gfx950():
+            return torch.zeros(input.shape[:-1] + (self.weight.shape[-1],), dtype=input.dtype, device=input.device)
         self.init_hipblas()
+        from aiter import hipb_mm
         return hipb_mm(
             input,
             self.weight,

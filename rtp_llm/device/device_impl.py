@@ -852,12 +852,15 @@ class RocmImpl(GpuImpl):
     ) -> torch.Tensor:
         if key == "weight":
             assert weight.dtype == torch.float8_e4m3fn
-            weight_as_int8 = weight.view(torch.int8)
-            ROCM_FP8_NAN_AS_INT = -128
-            weight_as_int8[weight_as_int8 == ROCM_FP8_NAN_AS_INT] = 0
-            weight = weight_as_int8.view(torch.float8_e4m3fnuz)
+            prop = torch.cuda.get_device_properties(torch.cuda.current_device())
+            if "gfx950" not in prop.gcnArchName:
+                weight_as_int8 = weight.view(torch.int8)
+                ROCM_FP8_NAN_AS_INT = -128
+                weight_as_int8[weight_as_int8 == ROCM_FP8_NAN_AS_INT] = 0
+                weight = weight_as_int8.view(torch.float8_e4m3fnuz)
         elif key == "scale":
-            weight = weight * 2.0
+            if "gfx950" not in torch.cuda.get_device_properties(torch.cuda.current_device()).gcnArchName:
+                weight = weight * 2.0
 
         if key in [W.attn_qkv_w, W.attn_o_w, W.ffn_w2, W.ffn_w13, W.ffn_w3, W.moe_gate, W.multi_tokens_predict_eh_proj]:
             if self.py_env_configs.py_hw_kernel_config.use_swizzleA:
@@ -907,6 +910,9 @@ class RocmImpl(GpuImpl):
         self, weight: torch.Tensor, weight_scale: torch.Tensor
     ):
         assert weight.dtype == torch.float8_e4m3fn
+        prop = torch.cuda.get_device_properties(torch.cuda.current_device())
+        if "gfx950" in prop.gcnArchName:
+            return weight, weight_scale
         # The bits pattern 10000000(-128) represents zero in e4m3fn
         # but NaN in e4m3fnuz. So here we set it to 0.
         # https://onnx.ai/onnx/technical/float8.html

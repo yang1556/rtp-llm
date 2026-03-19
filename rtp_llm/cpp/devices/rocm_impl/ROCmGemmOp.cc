@@ -537,6 +537,9 @@ BufferPtr ROCmDevice::gemm(const GemmParams& params) {
     hipblas_mm_wrapper_->setStream(current_stream_);
 
     if (ROCmGemmDispatch::dispatch(params) == GemmImplementType::hipblas_basic_gemm) {
+#ifdef ROCM_GFX950
+        hipMemsetAsync(D, 0, output->sizeBytes(), stream_);
+#else
         hipblas_mm_wrapper_->Gemm(b_op,
                                   a_op,
                                   arguments.n,
@@ -550,6 +553,7 @@ BufferPtr ROCmDevice::gemm(const GemmParams& params) {
                                   arguments.ldc,
                                   arguments.alpha,
                                   arguments.beta);
+#endif
 
         return std::move(output);
     } else if (ROCmGemmDispatch::dispatch(params) == GemmImplementType::hipblas_batch_gemm) {

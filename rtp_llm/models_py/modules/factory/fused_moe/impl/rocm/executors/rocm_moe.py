@@ -149,7 +149,11 @@ class RocmExpertsFp8PerChannel(FusedMoeExpertExecutor):
         super().__init__(config, quant_config, weights)
 
         # Update quant_config with FP8-specific settings
-        self.quant_config.quant_dtype = torch.float8_e4m3fnuz
+        prop = torch.cuda.get_device_properties(torch.cuda.current_device())
+        if "gfx950" in prop.gcnArchName:
+            self.quant_config.quant_dtype = torch.float8_e4m3fn
+        else:
+            self.quant_config.quant_dtype = torch.float8_e4m3fnuz
         self.quant_config.per_act_token_quant = True
         self.quant_config.per_out_ch_quant = True
         self.quant_config.block_shape = None
@@ -189,12 +193,12 @@ class RocmExpertsFp8PerChannel(FusedMoeExpertExecutor):
         assert payload.expert_tokens_meta is not None
 
         global_E = self.num_experts
-        E = global_E
+        E = self.local_num_experts
         N = self.w1.size(1)
         assert payload.expert_topk_ids is not None
 
-        assert self.w1.size(0) == E
-        assert self.w2.size(0) == E
+        assert self.w1.size(0) == E, f"w1 expert dim mismatch: {self.w1.size(0)} != {E}"
+        assert self.w2.size(0) == E, f"w2 expert dim mismatch: {self.w2.size(0)} != {E}"
 
         topk_ids = payload.expert_topk_ids
         topk_weights = payload.expert_topk_weights
