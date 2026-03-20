@@ -47,17 +47,7 @@ void P2PConnectorAsyncReadContext::checkDone() {
     if (done()) {
         return;
     }
-    if (transfer_not_done_hold_pending_.load(std::memory_order_acquire)) {
-        const int64_t until_ms = transfer_not_done_hold_until_ms_.load(std::memory_order_relaxed);
-        if (currentTimeMs() >= until_ms) {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (!done_) {
-                done_ = true;
-            }
-            transfer_not_done_hold_pending_.store(false, std::memory_order_release);
-            transfer_not_done_hold_until_ms_.store(0, std::memory_order_relaxed);
-            done_cv_.notify_all();
-        }
+    if (tryFinishExpiredTransferNotDoneHold()) {
         return;
     }
     if (!tp_sync_result_->done()) {
@@ -71,18 +61,45 @@ void P2PConnectorAsyncReadContext::checkDone() {
         return;
     }
 
-    const bool  success    = tp_sync_result_->success() && server_call_result_->success();
-    ErrorCode   error_code = ErrorCode::NONE_ERROR;
-    std::string error_message;
-    if (!success) {
+    applyMergedReadOutcome(mergeReadResultsWhenBothDone());
+}
+
+bool P2PConnectorAsyncReadContext::tryFinishExpiredTransferNotDoneHold() {
+    if (!transfer_not_done_hold_pending_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const int64_t until_ms = transfer_not_done_hold_until_ms_.load(std::memory_order_relaxed);
+    if (currentTimeMs() >= until_ms) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!done_) {
+            done_ = true;
+        }
+        transfer_not_done_hold_pending_.store(false, std::memory_order_release);
+        transfer_not_done_hold_until_ms_.store(0, std::memory_order_relaxed);
+        done_cv_.notify_all();
+    }
+    return true;
+}
+
+P2PConnectorAsyncReadContext::MergedReadOutcome P2PConnectorAsyncReadContext::mergeReadResultsWhenBothDone() const {
+    MergedReadOutcome outcome;
+    outcome.success = tp_sync_result_->success() && server_call_result_->success();
+    if (!outcome.success) {
         if (tp_sync_result_->done() && !tp_sync_result_->success()) {
-            error_code    = tp_sync_result_->errorCode();
-            error_message = tp_sync_result_->errorMessage();
+            outcome.error_code    = tp_sync_result_->errorCode();
+            outcome.error_message = tp_sync_result_->errorMessage();
         } else if (server_call_result_->done() && !server_call_result_->success()) {
-            error_code    = server_call_result_->error_code;
-            error_message = server_call_result_->error_message;
+            outcome.error_code    = server_call_result_->error_code;
+            outcome.error_message = server_call_result_->error_message;
         }
     }
+    return outcome;
+}
+
+void P2PConnectorAsyncReadContext::applyMergedReadOutcome(const MergedReadOutcome& outcome) {
+    const bool  success    = outcome.success;
+    ErrorCode   error_code = outcome.error_code;
+    std::string error_message{outcome.error_message};
 
     if (!success && error_code == ErrorCode::P2P_CONNECTOR_WORKER_READ_TRANSFER_NOT_DONE
         && transfer_not_done_hold_ms_ > 0) {
@@ -146,12 +163,17 @@ void P2PConnectorAsyncReadContext::cancel(const std::shared_ptr<P2PBroadcastClie
         server_call_result_->cancel();
     }
 
-    // 如果 tp_sync_result_ 未完成，通过 P2PBroadcastClient 发送 CANCEL 请求
-    if (!tp_sync_result_->done() && tp_broadcast_client && !cancel_result_) {
-        cancel_result_ = tp_broadcast_client->cancel(unique_key, P2PConnectorBroadcastType::CANCEL_READ);
-    }
-    if (cancel_result_ && !cancel_result_->done()) {
-        cancel_result_->checkDone();
+    // 如果 tp_sync_result_ 未完成，通过 P2PBroadcastClient 发送 CANCEL 请求（至多成功发起一次）
+    if (!tp_sync_result_->done() && tp_broadcast_client) {
+        bool expected = false;
+        if (tp_cancel_broadcast_triggered_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            auto cancel_result = tp_broadcast_client->cancel(unique_key, P2PConnectorBroadcastType::CANCEL_READ);
+            if (!cancel_result) {
+                tp_cancel_broadcast_triggered_.store(false, std::memory_order_release);
+            } else if (!cancel_result->done()) {
+                cancel_result->checkDone();
+            }
+        }
     }
 }
 

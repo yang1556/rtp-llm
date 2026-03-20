@@ -29,7 +29,7 @@ public:
     void   waitDone() override {}
 
 private:
-    KVCacheResourcePtr resource_;
+    const KVCacheResourcePtr resource_;
 };
 
 class P2PConnectorAsyncReadContext: public AsyncContext {
@@ -65,11 +65,21 @@ public:
     ErrorInfo errorInfo() const override;
 
 private:
-    KVCacheResourcePtr                               resource_;
-    std::shared_ptr<P2PBroadcastClient::Result>      tp_sync_result_;
-    std::shared_ptr<PrefillLoadCaller::Result>       server_call_result_;
-    std::shared_ptr<DecodeSchedulerMetricsCollector> collector_;
-    std::shared_ptr<P2PBroadcastClient::Result>      cancel_result_;
+    struct MergedReadOutcome {
+        bool        success{false};
+        ErrorCode   error_code{ErrorCode::NONE_ERROR};
+        std::string error_message;
+    };
+
+    /// transfer_not_done 等待窗口到期则置 done；只要处于 hold 等待则返回 true（调用方应结束 checkDone）
+    bool tryFinishExpiredTransferNotDoneHold();
+    MergedReadOutcome mergeReadResultsWhenBothDone() const;
+    void              applyMergedReadOutcome(const MergedReadOutcome& outcome);
+
+    const KVCacheResourcePtr                               resource_;
+    const std::shared_ptr<P2PBroadcastClient::Result>      tp_sync_result_;
+    const std::shared_ptr<PrefillLoadCaller::Result>       server_call_result_;
+    const std::shared_ptr<DecodeSchedulerMetricsCollector> collector_;
 
     const int64_t transfer_not_done_hold_ms_;
 
@@ -81,6 +91,7 @@ private:
     std::string             error_message_;
     std::atomic<bool>       transfer_not_done_hold_pending_{false};
     std::atomic<int64_t>    transfer_not_done_hold_until_ms_{0};
+    std::atomic<bool>       tp_cancel_broadcast_triggered_{false};
 };
 
 class P2PConnectorAsyncWriteByLayerContext: public AsyncContext {
@@ -94,7 +105,7 @@ public:
     bool success() const override;
 
 private:
-    KVCacheResourcePtr resource_;
+    const KVCacheResourcePtr resource_;
 };
 
 /// @brief 后台线程定期检查 in-flight 异步 read 上下文，超时时自动取消
