@@ -122,6 +122,7 @@ void PyWrappedModel::setupKVCacheForAttentionInputs(torch_ext::PyAttentionInputs
                                                     const GptModelInputs&         inputs,
                                                     BufferPtr&                    kv_cache_kernel_block_id_device,
                                                     std::vector<BufferPtr>* kv_cache_kernel_block_id_device_by_group) {
+    RTP_LLM_PROFILE_SCOPE("py_model.setupKVCacheForAttentionInputs");
     DevicePerfWrapper wrapper(device_, "py model setupKVCacheForAttentionInputs");
     if (!inputs.kv_cache_kernel_block_id) {
         return;
@@ -279,7 +280,6 @@ GptModelOutputs PyWrappedModel::forwardMicroBatched(const GptModelInputs& inputs
     }
 
     if (!inputs.warmup && inputs.pd_separation) {
-        RTP_LLM_CHECK_WITH_INFO(device_->cache_store_async_writer_ != nullptr, "cache_store_async_writer_ is nullptr");
         device_->cache_store_async_writer_->init();
     }
 
@@ -290,7 +290,6 @@ GptModelOutputs PyWrappedModel::forwardMicroBatched(const GptModelInputs& inputs
                             py_model_outputs.size(),
                             input_list.size());
     if (!inputs.warmup && inputs.pd_separation) {
-        RTP_LLM_CHECK_WITH_INFO(device_->cache_store_async_writer_ != nullptr, "cache_store_async_writer_ is nullptr");
         device_->cache_store_async_writer_->waitAllDone();
     }
 
@@ -363,8 +362,6 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         std::vector<BufferPtr> kv_cache_kernel_block_id_device_by_group;
         if (!inputs.warmup && inputs.pd_separation) {
             attention_inputs.cache_store_inputs = prepareWriteCacheParams(inputs);
-            RTP_LLM_CHECK_WITH_INFO(device_->cache_store_async_writer_ != nullptr,
-                                    "cache_store_async_writer_ is nullptr");
             device_->cache_store_async_writer_->init();
         }
         setupKVCacheForAttentionInputs(
@@ -394,8 +391,6 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         }
 
         if (!inputs.warmup && inputs.pd_separation) {
-            RTP_LLM_CHECK_WITH_INFO(device_->cache_store_async_writer_ != nullptr,
-                                    "cache_store_async_writer_ is nullptr");
             device_->cache_store_async_writer_->waitAllDone();
         }
 

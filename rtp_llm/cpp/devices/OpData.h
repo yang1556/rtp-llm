@@ -586,6 +586,11 @@ struct CacheStoreInputs {
     bool                     warmup;
 
     int layer_id = 0;
+
+    // Pre-created event from the main thread to avoid cudaEventRecord
+    // contention on background threads. nullptr means writeCacheStore will
+    // create an event on the spot (single-threaded / C++ path).
+    DeviceEventPtr pre_created_event = nullptr;
 };
 
 struct AttentionCommonInputs {
