@@ -24,6 +24,8 @@ DeviceBase::DeviceBase(const DeviceInitParams& params): device_id_(params.device
     // 在构造函数中就设置这些标志，因为某些组件（如TorchCudaAllocator）可能在init()之前就被创建
     enable_device_perf_         = init_params_.profile_debug_logging_config.enable_device_perf;
     enable_torch_alloc_profile_ = init_params_.profile_debug_logging_config.enable_torch_alloc_profile;
+    // always init cache_store_writer first
+    cache_store_async_writer_ = std::make_unique<CacheStoreAsyncWriter>();
 }
 
 void DeviceBase::init() {
@@ -152,9 +154,6 @@ void DeviceBase::setCacheStore(std::shared_ptr<rtp_llm::CacheStore> cache_store)
         throw OpException(OpStatus::make(OpErrorType::ERROR_INTERNAL, "CacheStore already set"));
     }
     cache_store_ = cache_store;
-    if (cache_store_) {
-        cache_store_async_writer_ = std::make_unique<CacheStoreAsyncWriter>();
-    }
 }
 
 void DeviceBase::writeCacheStore(const WriteCacheParams& params) {
@@ -224,7 +223,8 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
             (param.input_lengths_host->data<int>()[param.decoder_batch_size + batch_id] + seq_size_per_block - 1)
             / seq_size_per_block;
         auto request_id     = *(param.request_id->dataWithOffset<int64_t>(batch_id));
-        auto request_blocks = std::make_shared<RequestBlockBuffer>(std::to_string(request_id), createEvent());
+        auto event          = param.pre_created_event ? param.pre_created_event : createEvent();
+        auto request_blocks = std::make_shared<RequestBlockBuffer>(std::to_string(request_id), event);
         RTP_LLM_LOG_DEBUG(
             "write cache store, request id is %ld, blocks num is %ld", request_id, block_num + reuse_block_num);
 

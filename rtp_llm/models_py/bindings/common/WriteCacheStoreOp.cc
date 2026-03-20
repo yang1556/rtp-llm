@@ -16,7 +16,8 @@ void runWriteCacheStore(DeviceBase*        device,
                         torch::Tensor      prefix_lengths,
                         torch::Tensor      kv_cache_block_id_host,
                         PyCacheStoreInputs cache_store_inputs,
-                        LayerKVCache       kv_cache) {
+                        LayerKVCache       kv_cache,
+                        DeviceEventPtr     pre_created_event) {
 
     auto layer_to_group_buf = (cache_store_inputs.kv_cache_layer_to_group.defined()
                                && cache_store_inputs.kv_cache_layer_to_group.numel() > 0) ?
@@ -46,7 +47,8 @@ void runWriteCacheStore(DeviceBase*        device,
                             cache_store_inputs.model_id,
                             cache_store_inputs.decode_entrance,
                             cache_store_inputs.warmup,
-                            kv_cache.layer_id};
+                            kv_cache.layer_id,
+                            std::move(pre_created_event)};
 
     KvCacheInfo kv_cache_info;
     // kv_cache_buffer uses kv block base address (compatible with existing cache store writer which writes "k_").
@@ -78,19 +80,22 @@ void WriteCacheStoreOp(const torch::Tensor&                         input_length
     auto captured_cache_store            = cache_store_member.value();
     auto captured_kv_cache               = kv_cache.value();
 
-    RTP_LLM_CHECK_WITH_INFO(device->cache_store_async_writer_ != nullptr, "CacheStoreAsyncWriter not initialized");
+    auto event = device->createEvent();
+
     device->cache_store_async_writer_->submit([device,
                                                captured_input_lengths,
                                                captured_prefix_lengths,
                                                captured_kv_cache_block_id_host,
                                                captured_cache_store,
-                                               captured_kv_cache]() {
+                                               captured_kv_cache,
+                                               event = std::move(event)]() mutable {
         runWriteCacheStore(device,
                            captured_input_lengths,
                            captured_prefix_lengths,
                            captured_kv_cache_block_id_host,
                            captured_cache_store,
-                           captured_kv_cache);
+                           captured_kv_cache,
+                           std::move(event));
     });
 }
 
