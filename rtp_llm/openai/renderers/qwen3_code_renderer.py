@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Optional
 
 from jinja2 import Environment
@@ -15,20 +16,43 @@ from rtp_llm.openai.renderers.sglang_helpers.function_call.base_format_detector 
 from rtp_llm.openai.renderers.sglang_helpers.function_call.qwen3_coder_detector import (
     Qwen3CoderDetector,
 )
+from rtp_llm.openai.renderers.sglang_helpers.reasoning_parser import ReasoningParser
 
 
 class Qwen3CoderRenderer(ReasoningToolBaseRenderer):
     """Qwen3CoderRenderer 使用 Qwen3CoderDetector 进行工具调用解析"""
 
     @override
+    def in_think_mode(self, request: ChatCompletionRequest):
+        """Qwen3.5 chat template always appends <think> unless enable_thinking is
+        explicitly False, so the renderer must default to thinking-on."""
+        if request.disable_thinking():
+            return False
+        return True
+
+    @override
     def _create_detector(
         self, request: ChatCompletionRequest
     ) -> Optional[BaseFormatDetector]:
-        """创建Qwen3Coder检测器"""
         if request.tools:
             return Qwen3CoderDetector()
         else:
             return None
+
+    @override
+    def _create_reasoning_parser(
+        self, request: ChatCompletionRequest
+    ) -> Optional[ReasoningParser]:
+        if not self.in_think_mode(request):
+            return None
+
+        try:
+            rendered_result = self.render_chat(request)
+            if rendered_result.rendered_prompt.endswith(self.think_start_tag):
+                return ReasoningParser(model_type="qwen3-thinking")
+        except Exception as e:
+            logging.error(f"Failed to render chat in _create_reasoning_parser: {e}")
+        return ReasoningParser(model_type="qwen3")
 
     def _customize_jinja_env(self, env: Environment) -> None:
         """自定义Jinja2环境，添加smart items过滤器"""
