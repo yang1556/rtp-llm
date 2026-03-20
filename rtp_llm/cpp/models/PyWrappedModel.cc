@@ -289,7 +289,6 @@ GptModelOutputs PyWrappedModel::forwardMicroBatched(const GptModelInputs& inputs
     }
 
     if (!inputs.warmup && inputs.pd_separation) {
-        RTP_LLM_CHECK_WITH_INFO(cache_store_async_writer_ != nullptr, "cache_store_async_writer_ is nullptr");
         cache_store_async_writer_->init();
     }
 
@@ -300,7 +299,6 @@ GptModelOutputs PyWrappedModel::forwardMicroBatched(const GptModelInputs& inputs
                             py_model_outputs.size(),
                             input_list.size());
     if (!inputs.warmup && inputs.pd_separation) {
-        RTP_LLM_CHECK_WITH_INFO(cache_store_async_writer_ != nullptr, "cache_store_async_writer_ is nullptr");
         cache_store_async_writer_->waitAllDone();
     }
 
@@ -371,8 +369,6 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
 
         if (!inputs.warmup && inputs.pd_separation) {
             attention_inputs.cache_store_inputs = prepareWriteCacheParams(inputs);
-            RTP_LLM_CHECK_WITH_INFO(cache_store_async_writer_ != nullptr,
-                                    "cache_store_async_writer_ is nullptr");
             cache_store_async_writer_->init();
         }
         setupKVCacheForAttentionInputs(attention_inputs, inputs);
@@ -412,8 +408,6 @@ GptModelOutputs PyWrappedModel::forward(const GptModelInputs& inputs) {
         }
 
         if (!inputs.warmup && inputs.pd_separation) {
-            RTP_LLM_CHECK_WITH_INFO(cache_store_async_writer_ != nullptr,
-                                    "cache_store_async_writer_ is nullptr");
             cache_store_async_writer_->waitAllDone();
         }
 

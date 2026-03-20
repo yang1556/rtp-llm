@@ -16,17 +16,23 @@ void WriteCacheStoreOp(const torch::Tensor&                         input_length
 
     const PyCacheStoreInputs& cache_store_inputs = cache_store_member.value();
 
+    // Capture all torch::Tensors by value so the underlying memory stays alive
+    // in the background thread. torch::Tensor copy is a cheap refcount bump.
     auto captured_input_lengths          = input_lengths;
     auto captured_prefix_lengths         = prefix_lengths;
     auto captured_kv_cache_block_id_host = kv_cache_block_id_host;
     auto captured_cache_store            = cache_store_inputs;
     auto captured_kv_cache               = kv_cache.value();
 
+    // Create event in main thread to avoid cudaEventRecord contention on background threads.
+    auto event = runtimeCreateEvent();
+
     auto run = [captured_input_lengths,
                 captured_prefix_lengths,
                 captured_kv_cache_block_id_host,
                 captured_cache_store,
-                captured_kv_cache]() {
+                captured_kv_cache,
+                event = std::move(event)]() mutable {
         CacheStoreInputs inputs{captured_input_lengths,
                                 captured_prefix_lengths,
                                 captured_kv_cache_block_id_host,
@@ -44,7 +50,8 @@ void WriteCacheStoreOp(const torch::Tensor&                         input_length
                                 captured_cache_store.model_id,
                                 captured_cache_store.decode_entrance,
                                 captured_cache_store.warmup,
-                                captured_kv_cache.layer_id};
+                                captured_kv_cache.layer_id,
+                                std::move(event)};
 
         KvCacheInfo kv_cache_info;
         kv_cache_info.kv_cache_buffer = captured_kv_cache.kv_cache_base;

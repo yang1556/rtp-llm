@@ -232,9 +232,7 @@ inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
         throw std::runtime_error("PyWrappedModel constructor: Python model initialization failed.");
     }
 
-    if (cache_manager_ && cache_manager_->getCacheStore()) {
-        cache_store_async_writer_ = std::make_unique<CacheStoreAsyncWriter>();
-    }
+    cache_store_async_writer_ = std::make_unique<CacheStoreAsyncWriter>();
 
     if (device_props_.enable_prefill_cp) {
         context_parallel_processor_ =
