@@ -15,20 +15,16 @@ void FakeBalanceExpertOp::forward(torch::Tensor expert_ids, torch::Tensor expert
     if (expert_ids.dtype() == torch::kInt64) {
         fake_balance_expert(expert_ids.data_ptr<int64_t>(),
                             expert_scales.data_ptr<float>(),
-                            dp_rank_,
-                            dp_size_,
-                            ep_size_,
-                            expert_num_,
-                            token_num * top_k,
+                            static_cast<int>(dp_rank_),
+                            static_cast<int>(expert_num_),
+                            static_cast<int>(token_num * top_k),
                             current_stream);
     } else if (expert_ids.dtype() == torch::kInt32) {
         fake_balance_expert(expert_ids.data_ptr<int32_t>(),
                             expert_scales.data_ptr<float>(),
-                            dp_rank_,
-                            dp_size_,
-                            ep_size_,
-                            expert_num_,
-                            token_num * top_k,
+                            static_cast<int>(dp_rank_),
+                            static_cast<int>(expert_num_),
+                            static_cast<int>(token_num * top_k),
                             current_stream);
     } else {
         throw std::runtime_error("Unimplemented dtype for FakeBalanceExpertOp: "
