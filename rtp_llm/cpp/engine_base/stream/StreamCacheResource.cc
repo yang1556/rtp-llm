@@ -176,6 +176,9 @@ absl::Status StreamCacheResource::initKVBlock(size_t reserve_step) {
     }
 
     if (batch_kv_cache_resource_->curBlocksNum() > 0) {
+        if (reserve_step > 0) {
+            return incrKVBlock(reserve_step);
+        }
         return absl::OkStatus();
     }
 
