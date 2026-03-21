@@ -1,12 +1,11 @@
 #pragma once
+
 #include "ATen/core/TensorBody.h"
+#include "rtp_llm/cpp/devices/GraphRunnerDeviceShims.h"
 #include "rtp_llm/cpp/utils/Logger.h"
 #include "rtp_llm/models_py/bindings/OpDefs.h"
-#include "rtp_llm/cpp/devices/cuda_impl/CudaFlashInfer.h"
-#include "rtp_llm/cpp/cuda/cuda_host_utils.h"
-#include <ATen/cuda/CUDAGeneratorImpl.h>
-#include <ATen/cuda/CUDAGraph.h>
 #include <torch/version.h>
+
 #include <string>
 
 using namespace torch_ext;
@@ -60,63 +59,59 @@ public:
     }
 
 public:
-    py::object attn_pyobj_{py::none()};
-    // for output
-    at::Tensor decoder_layer_hidden_states_;
-    // for input
+    py::object    attn_pyobj_{py::none()};
+    at::Tensor    decoder_layer_hidden_states_;
     PyModelInputs py_model_inputs_;
 };
 
 class GraphInstance {
 public:
-    GraphInstance(bool keep_graph = false) {
 #if (TORCH_VERSION_MAJOR > 2) || (TORCH_VERSION_MAJOR == 2 && TORCH_VERSION_MINOR >= 8)
-        // PyTorch >= 2.8: CUDAGraph constructor supports keep_graph parameter
-        graph_ = at::cuda::CUDAGraph(keep_graph);
+    explicit GraphInstance(bool keep_graph = false): graph_(keep_graph) {}
 #else
-        // PyTorch < 2.8: CUDAGraph constructor doesn't support keep_graph parameter
-        graph_ = at::cuda::CUDAGraph();
-        (void)keep_graph;  // Suppress unused parameter warning
-#endif
+    explicit GraphInstance(bool keep_graph = false): graph_() {
+        (void)keep_graph;
     }
+#endif
     at::cuda::CUDAGraph graph_;
     CaptureMemoryHold   mem_hold_;
 };
 
 class CudaGraphStreamLife {
 public:
-    CudaGraphStreamLife(at::cuda::CUDAStream capture_stream):
-        origin_stream_(at::cuda::getCurrentCUDAStream(at::cuda::current_device())) {
-        // Set `capture_stream` for capture. All kernels should use this stream while capturing.
-        at::cuda::setCurrentCUDAStream(capture_stream);
-        RTP_LLM_LOG_INFO("Set Cuda Stream: capture_stream -> %d, origin_stream -> %d",
-                         capture_stream.stream(),
-                         origin_stream_.stream());
+    explicit CudaGraphStreamLife(rtp_llm::graph_runner::GraphStream capture_stream):
+        origin_stream_(rtp_llm::graph_runner::graphGetCurrentStream()) {
+        rtp_llm::graph_runner::graphSetCurrentStream(capture_stream);
+        RTP_LLM_LOG_INFO("Set graph stream for capture.");
     }
     ~CudaGraphStreamLife() {
-        at::cuda::setCurrentCUDAStream(origin_stream_);
+        rtp_llm::graph_runner::graphSetCurrentStream(origin_stream_);
     }
 
+    CudaGraphStreamLife(const CudaGraphStreamLife&)            = delete;
+    CudaGraphStreamLife& operator=(const CudaGraphStreamLife&) = delete;
+    CudaGraphStreamLife(CudaGraphStreamLife&&)                 = delete;
+    CudaGraphStreamLife& operator=(CudaGraphStreamLife&&)      = delete;
+
 private:
-    at::cuda::CUDAStream origin_stream_;
+    rtp_llm::graph_runner::GraphStream origin_stream_;
 };
 
-// RAII guard for CUDA graph capture state
 class CudaGraphCaptureGuard {
 public:
-    CudaGraphCaptureGuard() {
-        rtp_llm::CaptureCheck::in_cuda_graph_capture = true;
+    explicit CudaGraphCaptureGuard(rtp_llm::graph_runner::GraphNcclCaptureContext* ctx = nullptr): ctx_(ctx) {
+        rtp_llm::graph_runner::enter_graph_capture(ctx_);
     }
 
     ~CudaGraphCaptureGuard() {
-        rtp_llm::CaptureCheck::in_cuda_graph_capture = false;
+        rtp_llm::graph_runner::exit_graph_capture(ctx_);
     }
 
-    // Non-copyable, non-movable
     CudaGraphCaptureGuard(const CudaGraphCaptureGuard&)            = delete;
     CudaGraphCaptureGuard& operator=(const CudaGraphCaptureGuard&) = delete;
     CudaGraphCaptureGuard(CudaGraphCaptureGuard&&)                 = delete;
     CudaGraphCaptureGuard& operator=(CudaGraphCaptureGuard&&)      = delete;
-};
 
-// CudaGraphState is defined in GraphBase.h (include it when you need the type)
+private:
+    rtp_llm::graph_runner::GraphNcclCaptureContext* ctx_{nullptr};
+};

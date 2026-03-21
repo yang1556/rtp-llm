@@ -1,10 +1,11 @@
-#include "rtp_llm/cpp/devices/cuda_impl/CudaGraphRunner.h"
+#include "rtp_llm/cpp/devices/CudaGraphRunner.h"
 #include <optional>
 
 namespace rtp_llm {
+
 void CudaGraphRunner::capturePrefill() {
     RTP_LLM_LOG_INFO("Capture Prefill Start");
-    // Pre-initialize all graph instances with keep_graph based on debug mode
+    // Pre-initialize all graph instances with keep_graph based on debug mode.
     for (int seq_len : capture_range_) {
         graph_instances_.try_emplace(seq_len, enable_cuda_graph_debug_mode_);
     }
@@ -75,4 +76,5 @@ void CudaGraphRunner::capturePrefillOneSeqLen(int seq_len) {
 void CudaGraphRunner::replayPrefill(int seq_len) {
     replayGraph(seq_len);
 }
+
 }  // namespace rtp_llm

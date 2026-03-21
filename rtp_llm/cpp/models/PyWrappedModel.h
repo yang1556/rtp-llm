@@ -9,10 +9,9 @@
 #include <pybind11/embed.h>
 #include "rtp_llm/models_py/bindings/OpDefsUtils.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
-#include "rtp_llm/cpp/devices/GraphBase.h"
-#if USING_CUDA
-#include <c10/cuda/CUDAStream.h>
-#include "rtp_llm/cpp/devices/cuda_impl/CudaGraphRunner.h"
+#include "rtp_llm/cpp/devices/GraphRunnerDeviceShims.h"
+#if USING_CUDA || USING_ROCM
+#include "rtp_llm/cpp/devices/CudaGraphRunner.h"
 #endif
 
 #include "rtp_llm/cpp/models/context_parallel/ContextParallelProcessorBase.h"
@@ -111,7 +110,7 @@ inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
     auto py_initialize_method = py_model_.attr("initialize");
     py_init_result            = py_initialize_method(init_resources);
     if (enable_cuda_graph_) {
-#if USING_CUDA
+#if USING_CUDA || USING_ROCM
         c10::ScalarType dtype = dataTypeToTorchType(description_.data_type);
 
         // Create GraphParams from DeviceInitParams
@@ -155,9 +154,13 @@ inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
 
         graph_runner_ = new CudaGraphRunner(graph_params, py_instance);
         RTP_LLM_CHECK_WITH_INFO(graph_runner_ != nullptr, "graph_runner_ can't be nullptr in PyWrapper");
-#else
-        RTP_LLM_CHECK_WITH_INFO(false, "CUDA Graph is only supported on CUDA platform for now");
-#endif
+
+        {
+            void*       nccl_comm   = graph_runner::getGraphCaptureTpNcclComm(device_);
+            const auto& init_params = device_->initParams();
+            graph_runner::register_graph_capture_nccl_comm(
+                nccl_comm, static_cast<int>(init_params.tp_size), static_cast<int>(init_params.tp_rank));
+        }
         if (weights_.position_encoding) {
             graph_runner_->setPositionEncoding(Buffer2torchTensor(weights_.position_encoding->kernel, false).cuda());
         }
@@ -174,6 +177,10 @@ inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
         graph_runner_->initCapture();
         RTP_LLM_LOG_INFO("allocation records after capture:");
         params.device->traceMemoryUsage();
+#endif  // USING_CUDA || USING_ROCM
+#if !(USING_CUDA || USING_ROCM)
+        RTP_LLM_CHECK_WITH_INFO(false, "CUDA Graph is only supported on CUDA/ROCM platform");
+#endif
     }
 
     auto py_init_success = py_init_result.cast<bool>();
