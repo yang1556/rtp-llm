@@ -9,6 +9,7 @@
 #include "rtp_llm/cpp/devices/OpData.h"
 #include "torch/extension.h"
 #include "torch/types.h"
+#include <limits>
 #include <numeric>
 #include "rtp_llm/cpp/config/ConfigModules.h"
 #include "rtp_llm/cpp/disaggregate/cache_store/ErrorCodeUtil.h"
@@ -186,17 +187,15 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
         is_hybrid = !torch::all(group_types_host.index({layer_to_group_type_host}) == 1).item<bool>();
     }
 
-    const size_t group_num = is_hybrid ? param.kv_cache_group_types_host->shape()[0] : 1;
+    // const size_t group_num = is_hybrid ? param.kv_cache_group_types_host->shape()[0] : 1;
 
     int gid = 0;
+    if (param.kv_cache_layer_to_group_host && param.layer_id >= 0
+        && static_cast<size_t>(param.layer_id) < param.kv_cache_layer_to_group_host->size()) {
+        gid = param.kv_cache_layer_to_group_host->data<int32_t>()[param.layer_id];
+    }
+
     if (param.host_kv_cache_offset->shape().size() == 3) {
-        gid = -1;
-        if (param.kv_cache_layer_to_group_host && param.layer_id >= 0
-            && static_cast<size_t>(param.layer_id) < param.kv_cache_layer_to_group_host->size()) {
-            gid = param.kv_cache_layer_to_group_host->data<int32_t>()[param.layer_id];
-        }
-        RTP_LLM_CHECK_WITH_INFO(
-            gid >= 0 && gid < static_cast<int32_t>(group_num), "invalid kv cache group id [%d]", gid);
         const auto group_offset_view = (*param.host_kv_cache_offset)[static_cast<size_t>(gid)];  // [B, M]
         max_blocks_per_batch         = group_offset_view.shape()[1];
         offset_addr                  = group_offset_view.data<int32_t>();
@@ -232,11 +231,36 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
         RTP_LLM_LOG_DEBUG(
             "write cache store, request id is %ld, blocks num is %ld", request_id, block_num + reuse_block_num);
 
-        // hyrbid attention currently not support asymmetric TP
-        // Hybrid cache: send kv cache in full-block granularity ("kv_" + optional "kv_scale_").
-        // Linear group only needs the last block; Full group needs all blocks.
+        // Hybrid cache: Linear group only needs the last block; Full group needs all blocks.
         CacheGroupType group_type = CacheGroupType::FULL;
-        group_type                = static_cast<CacheGroupType>(param.kv_cache_group_types_host->data<int32_t>()[gid]);
+        if (param.kv_cache_group_types_host) {
+            group_type = static_cast<CacheGroupType>(param.kv_cache_group_types_host->data<int32_t>()[gid]);
+        }
+
+        size_t k_block_bytes = 0;
+        size_t v_block_bytes = 0;
+        if (param.kv_cache_k_block_bytes_by_group_host && param.kv_cache_v_block_bytes_by_group_host) {
+            RTP_LLM_CHECK_WITH_INFO(static_cast<size_t>(gid) < param.kv_cache_k_block_bytes_by_group_host->size(),
+                                    "invalid gid=%d for kv_cache_k_block_bytes_by_group_host size=%zu",
+                                    gid,
+                                    param.kv_cache_k_block_bytes_by_group_host->size());
+            RTP_LLM_CHECK_WITH_INFO(static_cast<size_t>(gid) < param.kv_cache_v_block_bytes_by_group_host->size(),
+                                    "invalid gid=%d for kv_cache_v_block_bytes_by_group_host size=%zu",
+                                    gid,
+                                    param.kv_cache_v_block_bytes_by_group_host->size());
+            k_block_bytes = static_cast<size_t>(param.kv_cache_k_block_bytes_by_group_host->data<int32_t>()[gid]);
+            v_block_bytes = static_cast<size_t>(param.kv_cache_v_block_bytes_by_group_host->data<int32_t>()[gid]);
+        }
+        if (k_block_bytes == 0 || v_block_bytes == 0) {
+            const size_t half_bytes = param.kv_block_stride_bytes / 2;
+            k_block_bytes           = half_bytes;
+            v_block_bytes           = param.kv_block_stride_bytes - half_bytes;
+        }
+
+        RTP_LLM_CHECK_WITH_INFO(
+            k_block_bytes <= std::numeric_limits<uint32_t>::max(), "k_block_bytes overflow uint32: %zu", k_block_bytes);
+        RTP_LLM_CHECK_WITH_INFO(
+            v_block_bytes <= std::numeric_limits<uint32_t>::max(), "v_block_bytes overflow uint32: %zu", v_block_bytes);
 
         const int total_blocks = block_num + reuse_block_num;
         if (total_blocks <= 0) {
@@ -257,23 +281,24 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
             void*                 kv_addr = (void*)((int8_t*)kv_cache_data + block_id * param.kv_block_stride_bytes);
             std::shared_ptr<void> kv_block_addr(kv_addr, [](void* p) {});
 
-            if (is_hybrid || mla_kvcache) {
+            if (mla_kvcache) {
                 request_blocks->addBlock("kv_" + cache_key, kv_block_addr, param.kv_block_stride_bytes, true, true);
             } else {
-                const uint32_t        kv_half = static_cast<uint32_t>(param.kv_block_stride_bytes / 2);
-                void*                 k_addr  = kv_addr;
-                void*                 v_addr  = (void*)((int8_t*)kv_addr + kv_half);
+                void*                 k_addr = kv_addr;
+                void*                 v_addr = (void*)((int8_t*)kv_addr + k_block_bytes);
                 std::shared_ptr<void> k_block_addr(k_addr, [](void* p) {});
                 std::shared_ptr<void> v_block_addr(v_addr, [](void* p) {});
-                request_blocks->addBlock("k_" + cache_key, k_block_addr, kv_half, true, true);
-                request_blocks->addBlock("v_" + cache_key, v_block_addr, kv_half, true, true);
+                request_blocks->addBlock(
+                    "k_" + cache_key, k_block_addr, static_cast<uint32_t>(k_block_bytes), true, true);
+                request_blocks->addBlock(
+                    "v_" + cache_key, v_block_addr, static_cast<uint32_t>(v_block_bytes), true, true);
             }
 
             if (kv_scale_data) {
                 void* kv_scale_addr = (void*)((int8_t*)kv_scale_data + block_id * param.kv_scale_stride_bytes);
                 std::shared_ptr<void> kv_scale_block_addr(kv_scale_addr, [](void* p) {});
 
-                if (is_hybrid || mla_kvcache) {
+                if (mla_kvcache) {
                     request_blocks->addBlock(
                         "kv_scale_" + cache_key, kv_scale_block_addr, param.kv_scale_stride_bytes, true, true);
                 } else {

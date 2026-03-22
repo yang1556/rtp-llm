@@ -186,16 +186,22 @@ std::vector<BlockInfo> MemoryLayoutStrategy::convertIndexToBuffer(int layer_id, 
 
 std::vector<BlockInfo>
 MemoryLayoutStrategy::convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const {
+    return convertIndexToBuffer(layer_id, block_id, partition_count, partition_id, nullptr);
+}
+
+std::vector<BlockInfo> MemoryLayoutStrategy::convertIndexToBuffer(int                layer_id,
+                                                                   int                block_id,
+                                                                   int                partition_count,
+                                                                   int                partition_id,
+                                                                   const KVPartitionSplitParams* partition_params) const {
     // Hybrid attention models are not support asymmetric TP, thus transfer the whole kvache blocks
-    if (config_.is_mla || config_.enable_hybrid_attention) {
+    if (config_.is_mla) {
         // For MLA models and hybrid attention models, use the same logic as the simpler convertIndexToBuffer function
         return createBasicBlockInfo(layer_id, block_id);
     }
 
-    // TODO(xinfei.sxf) deal with linear attention
-
     // For non-MLA models with partitioning
-    return createPartitionedBlockInfo(layer_id, block_id, partition_count, partition_id);
+    return createPartitionedBlockInfo(layer_id, block_id, partition_count, partition_id, partition_params);
 }
 
 // Helper functions for creating block info
@@ -216,37 +222,48 @@ std::vector<BlockInfo> MemoryLayoutStrategy::createBasicBlockInfo(int layer_id, 
     return {kv_info};
 }
 
-std::vector<BlockInfo> MemoryLayoutStrategy::createPartitionedBlockInfo(int layer_id,
-                                                                        int block_id,
-                                                                        int partition_count,
-                                                                        int partition_id) const {
+std::vector<BlockInfo> MemoryLayoutStrategy::createPartitionedBlockInfo(int                             layer_id,
+                                                                        int                             block_id,
+                                                                        int                             partition_count,
+                                                                        int                             partition_id,
+                                                                        const KVPartitionSplitParams* partition_params) const {
     checkLayerIdValidity(layer_id);
     auto& layer_tensor = layer_kv_tensors_[layer_id];
     void* kv_addr      = layer_tensor[block_id].data_ptr();
 
-    const int heads = static_cast<int>(config_.local_head_num_kv);
-
-    auto kv_parts = MHAKVCacheSpec::splitKVPartitionBytes(static_cast<size_t>(config_.kv_block_stride_bytes),
-                                                          static_cast<size_t>(config_.kv_block_stride_bytes / 2),
-                                                          static_cast<size_t>(config_.kv_block_stride_bytes / 2),
-                                                          heads,
-                                                          partition_count,
-                                                          partition_id,
-                                                          "kv_cache");
+    KVPartitionBytes kv_parts;
+    if (partition_params == nullptr) {
+        kv_parts = MHAKVCacheSpec::splitKVPartitionBytes(static_cast<size_t>(config_.kv_block_stride_bytes),
+                                                         static_cast<size_t>(config_.kv_block_stride_bytes / 2),
+                                                         static_cast<size_t>(config_.kv_block_stride_bytes / 2),
+                                                         static_cast<int>(config_.local_head_num_kv),
+                                                         partition_count,
+                                                         partition_id,
+                                                         "kv_cache");
+    } else {
+        kv_parts = MHAKVCacheSpec::splitKVPartitionBytes(partition_params->kv_full_block_bytes,
+                                                         partition_params->kv_k_bytes,
+                                                         partition_params->kv_v_bytes,
+                                                         partition_params->kv_heads,
+                                                         partition_count,
+                                                         partition_id,
+                                                         "kv_cache");
+    }
 
     std::vector<BlockInfo> out = createPartitionedSubBlocks(layer_tensor[block_id], kv_addr, kv_parts);
 
     if (config_.hasScale()) {
-        auto& layer_scale_tensor = layer_kv_scale_tensors_[layer_id];
-        void* scale_addr         = layer_scale_tensor[block_id].data_ptr();
-        auto  sc_parts     = MHAKVCacheSpec::splitKVPartitionBytes(static_cast<size_t>(config_.kv_scale_stride_bytes),
-                                                              static_cast<size_t>(config_.kv_scale_stride_bytes / 2),
-                                                              static_cast<size_t>(config_.kv_scale_stride_bytes / 2),
-                                                              heads,
-                                                              partition_count,
-                                                              partition_id,
-                                                              "kv_cache_scale");
-        auto  scale_blocks = createPartitionedSubBlocks(layer_scale_tensor[block_id], scale_addr, sc_parts);
+        const int scale_heads = static_cast<int>(config_.local_head_num_kv);
+        auto&     layer_scale_tensor = layer_kv_scale_tensors_[layer_id];
+        void*     scale_addr         = layer_scale_tensor[block_id].data_ptr();
+        auto      sc_parts           = MHAKVCacheSpec::splitKVPartitionBytes(static_cast<size_t>(config_.kv_scale_stride_bytes),
+                                                                  static_cast<size_t>(config_.k_scale_stride_bytes),
+                                                                  static_cast<size_t>(config_.v_scale_stride_bytes),
+                                                                  scale_heads,
+                                                                  partition_count,
+                                                                  partition_id,
+                                                                  "kv_cache_scale");
+        auto scale_blocks = createPartitionedSubBlocks(layer_scale_tensor[block_id], scale_addr, sc_parts);
         out.insert(out.end(), scale_blocks.begin(), scale_blocks.end());
     }
 

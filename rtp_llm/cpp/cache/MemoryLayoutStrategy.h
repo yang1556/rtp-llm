@@ -31,6 +31,12 @@ public:
     std::vector<BlockInfo>
     convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const;
 
+    std::vector<BlockInfo> convertIndexToBuffer(int                layer_id,
+                                                int                block_id,
+                                                int                partition_count,
+                                                int                partition_id,
+                                                const KVPartitionSplitParams* partition_params) const;
+
     const MemoryLayoutConfig& getConfig() const {
         return config_;
     }
@@ -43,8 +49,11 @@ private:
     void                   clearScaleTensor(torch::Tensor& kv_scale_tensor);
     BlockInfo              makeBlockInfo(const torch::Tensor& tensor, void* addr, size_t size_bytes) const;
     std::vector<BlockInfo> createBasicBlockInfo(int layer_id, int block_id) const;
-    std::vector<BlockInfo>
-    createPartitionedBlockInfo(int layer_id, int block_id, int partition_count, int partition_id) const;
+    std::vector<BlockInfo> createPartitionedBlockInfo(int                             layer_id,
+                                                      int                             block_id,
+                                                      int                             partition_count,
+                                                      int                             partition_id,
+                                                      const KVPartitionSplitParams* partition_params) const;
     std::vector<BlockInfo>
     createPartitionedSubBlocks(const torch::Tensor& layer_tensor, void* base_addr, const KVPartitionBytes& parts) const;
 

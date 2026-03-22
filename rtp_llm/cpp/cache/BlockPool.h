@@ -69,6 +69,14 @@ public:
     std::vector<BlockInfo> convertIndexToBuffer(int layer_id, int block_id) const;
     std::vector<BlockInfo>
     convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const;
+    std::vector<BlockInfo> convertIndexToBuffer(int                layer_id,
+                                                int                block_id,
+                                                int                partition_count,
+                                                int                partition_id,
+                                                const KVPartitionSplitParams* partition_params) const;
+
+    // Pool layer index (same indexing as convertIndexToBuffer's layer_id) -> layout config for that memory layout.
+    const MemoryLayoutConfig& layoutConfigForPoolLayerIndex(int pool_layer_flat_index) const;
 
     void* getBaseAddress() const {
         return cache_base_ptr_;

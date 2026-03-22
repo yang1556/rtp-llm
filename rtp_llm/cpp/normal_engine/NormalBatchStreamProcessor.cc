@@ -53,6 +53,10 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
             CACHED_HOST_BUF(TYPE_INT32, {static_cast<size_t>(kv_cache_group_nums_), total_batch_size, max_blocks_num});
         model_input.kv_cache_layer_to_group = CACHED_HOST_BUF(TYPE_INT32, {num_layers_});
         model_input.kv_cache_group_types    = CACHED_HOST_BUF(TYPE_INT32, {static_cast<size_t>(kv_cache_group_nums_)});
+        model_input.kv_cache_k_block_bytes_by_group =
+            CACHED_HOST_BUF(TYPE_INT32, {static_cast<size_t>(kv_cache_group_nums_)});
+        model_input.kv_cache_v_block_bytes_by_group =
+            CACHED_HOST_BUF(TYPE_INT32, {static_cast<size_t>(kv_cache_group_nums_)});
         model_input.kv_cache_update_mapping = CACHED_HOST_BUF(TYPE_INT32, {total_block_copy_num, 2});
         model_input.cache_keys              = CACHED_HOST_BUF(TYPE_INT64, {total_context_batch_size, max_blocks_num});
     }
@@ -103,7 +107,16 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
     if (model_input.kv_cache_group_types) {
         auto* dst = model_input.kv_cache_group_types->data<int32_t>();
         for (size_t g = 0; g < kv_cache_group_nums_; ++g) {
-            dst[g] = static_cast<int32_t>(kv_cache_group_types_[g]);
+            const auto type = g < kv_cache_group_types_.size() ? kv_cache_group_types_[g] : CacheGroupType::FULL;
+            dst[g]          = static_cast<int32_t>(type);
+        }
+    }
+    if (model_input.kv_cache_k_block_bytes_by_group && model_input.kv_cache_v_block_bytes_by_group) {
+        auto* k_dst = model_input.kv_cache_k_block_bytes_by_group->data<int32_t>();
+        auto* v_dst = model_input.kv_cache_v_block_bytes_by_group->data<int32_t>();
+        for (size_t g = 0; g < kv_cache_group_nums_; ++g) {
+            k_dst[g] = static_cast<int32_t>(kv_k_block_bytes_by_group_[g]);
+            v_dst[g] = static_cast<int32_t>(kv_v_block_bytes_by_group_[g]);
         }
     }
 

@@ -296,24 +296,26 @@ rtp_llm::AttentionCommonInputs GptModel::prepareAttentionInputs(const GptModelIn
             cache_keys_vec = rtp_llm::buffer2vector<int64_t>(*inputs.cache_keys);
         }
         CacheStoreInputs cache_store_inputs;
-        cache_store_inputs.input_lengths_host           = inputs.input_lengths;
-        cache_store_inputs.prefix_lengths_host          = inputs.prefix_lengths;
-        cache_store_inputs.host_kv_cache_offset         = inputs.kv_cache_block_id;
-        cache_store_inputs.kv_cache_layer_to_group_host = inputs.kv_cache_layer_to_group;
-        cache_store_inputs.kv_cache_group_types_host    = inputs.kv_cache_group_types;
-        cache_store_inputs.context_batch_size           = attention_inputs.context_batch_size;
-        cache_store_inputs.decoder_batch_size           = attention_inputs.decoder_batch_size;
-        cache_store_inputs.request_id                   = inputs.request_id;
-        cache_store_inputs.request_pd_separation        = inputs.request_pd_separation;
-        cache_store_inputs.cache_keys                   = transVectorToString(cache_keys_vec);
-        cache_store_inputs.tokens_per_block             = inputs.seq_size_per_block;
-        cache_store_inputs.kv_block_stride_bytes        = inputs.kv_block_stride_bytes;
-        cache_store_inputs.kv_scale_stride_bytes        = inputs.kv_scale_stride_bytes;
-        cache_store_inputs.pd_separation                = inputs.pd_separation;
-        cache_store_inputs.model_id                     = model_id_;
-        cache_store_inputs.decode_entrance              = inputs.decode_entrance;
-        cache_store_inputs.warmup                       = inputs.warmup;
-        attention_inputs.cache_store_inputs             = cache_store_inputs;
+        cache_store_inputs.input_lengths_host                   = inputs.input_lengths;
+        cache_store_inputs.prefix_lengths_host                  = inputs.prefix_lengths;
+        cache_store_inputs.host_kv_cache_offset                 = inputs.kv_cache_block_id;
+        cache_store_inputs.kv_cache_layer_to_group_host         = inputs.kv_cache_layer_to_group;
+        cache_store_inputs.kv_cache_group_types_host            = inputs.kv_cache_group_types;
+        cache_store_inputs.kv_cache_k_block_bytes_by_group_host = inputs.kv_cache_k_block_bytes_by_group;
+        cache_store_inputs.kv_cache_v_block_bytes_by_group_host = inputs.kv_cache_v_block_bytes_by_group;
+        cache_store_inputs.context_batch_size                   = attention_inputs.context_batch_size;
+        cache_store_inputs.decoder_batch_size                   = attention_inputs.decoder_batch_size;
+        cache_store_inputs.request_id                           = inputs.request_id;
+        cache_store_inputs.request_pd_separation                = inputs.request_pd_separation;
+        cache_store_inputs.cache_keys                           = transVectorToString(cache_keys_vec);
+        cache_store_inputs.tokens_per_block                     = inputs.seq_size_per_block;
+        cache_store_inputs.kv_block_stride_bytes                = inputs.kv_block_stride_bytes;
+        cache_store_inputs.kv_scale_stride_bytes                = inputs.kv_scale_stride_bytes;
+        cache_store_inputs.pd_separation                        = inputs.pd_separation;
+        cache_store_inputs.model_id                             = model_id_;
+        cache_store_inputs.decode_entrance                      = inputs.decode_entrance;
+        cache_store_inputs.warmup                               = inputs.warmup;
+        attention_inputs.cache_store_inputs                     = cache_store_inputs;
     }
 
     if (context_batch_size && prep_output.need_mask) {
@@ -1940,6 +1942,10 @@ void tpSyncModelInputs(GptModelInputs& inputs, rtp_llm::DeviceBase* device) {
         if (group_types_len) {
             inputs.kv_cache_group_types = device->allocateBuffer(
                 {rtp_llm::DataType::TYPE_INT32, {group_types_len}, rtp_llm::AllocationType::HOST});
+            inputs.kv_cache_k_block_bytes_by_group = device->allocateBuffer(
+                {rtp_llm::DataType::TYPE_INT32, {group_types_len}, rtp_llm::AllocationType::HOST});
+            inputs.kv_cache_v_block_bytes_by_group = device->allocateBuffer(
+                {rtp_llm::DataType::TYPE_INT32, {group_types_len}, rtp_llm::AllocationType::HOST});
         }
         inputs.request_id =
             device->allocateBuffer({rtp_llm::DataType::TYPE_INT64, {request_length}, rtp_llm::AllocationType::HOST});
@@ -2011,6 +2017,12 @@ void tpSyncModelInputs(GptModelInputs& inputs, rtp_llm::DeviceBase* device) {
         if (inputs.kv_cache_group_types) {
             buffers.emplace_back(inputs.kv_cache_group_types);
         }
+        if (inputs.kv_cache_k_block_bytes_by_group) {
+            buffers.emplace_back(inputs.kv_cache_k_block_bytes_by_group);
+        }
+        if (inputs.kv_cache_v_block_bytes_by_group) {
+            buffers.emplace_back(inputs.kv_cache_v_block_bytes_by_group);
+        }
         if (inputs.pd_separation) {
             buffers.emplace_back(inputs.cache_keys);
         }
@@ -2064,6 +2076,8 @@ void GptModel::holdInputsHostBuffers(const GptModelInputs& inputs) {
     buffer_holder_.hold_host(inputs.kv_cache_block_id);
     buffer_holder_.hold_host(inputs.kv_cache_layer_to_group);
     buffer_holder_.hold_host(inputs.kv_cache_group_types);
+    buffer_holder_.hold_host(inputs.kv_cache_k_block_bytes_by_group);
+    buffer_holder_.hold_host(inputs.kv_cache_v_block_bytes_by_group);
     buffer_holder_.hold_host(inputs.kv_cache_update_mapping);
 
     if (inputs.multimodal_features.has_value()) {

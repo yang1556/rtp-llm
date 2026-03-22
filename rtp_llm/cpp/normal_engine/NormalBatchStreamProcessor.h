@@ -36,7 +36,21 @@ public:
         kv_cache_group_types_(cache_config.group_types),
         warm_up_(warm_up),
         enable_detail_log_(profiling_debug_logging_config.enable_detail_log),
-        device_(rtp_llm::DeviceFactory::getDefaultDevice()) {}
+        device_(rtp_llm::DeviceFactory::getDefaultDevice()) {
+        kv_k_block_bytes_by_group_.reserve(kv_cache_group_nums_);
+        kv_v_block_bytes_by_group_.reserve(kv_cache_group_nums_);
+        for (size_t gid = 0; gid < kv_cache_group_nums_; ++gid) {
+            const auto& spec = gid < cache_config.cache_specs.size() ? cache_config.cache_specs[gid] : nullptr;
+            if (spec) {
+                kv_k_block_bytes_by_group_.push_back(spec->k_block_size_bytes());
+                kv_v_block_bytes_by_group_.push_back(spec->v_block_size_bytes());
+            } else {
+                const size_t k_bytes = cache_config.kv_block_stride_bytes / 2;
+                kv_k_block_bytes_by_group_.push_back(k_bytes);
+                kv_v_block_bytes_by_group_.push_back(cache_config.kv_block_stride_bytes - k_bytes);
+            }
+        }
+    }
 
     virtual absl::Status dispatch(const StreamGroups& stream_groups, const MergedOutput& merge_outputs) const;
     virtual absl::StatusOr<GptModelInputs> gatherModelInput(const StreamGroups& stream_groups) const;
@@ -85,6 +99,8 @@ protected:
     size_t                       scale_stride_bytes_;
     size_t                       seq_size_per_block_;
     size_t                       kv_cache_group_nums_ = 1;
+    std::vector<size_t>          kv_k_block_bytes_by_group_;
+    std::vector<size_t>          kv_v_block_bytes_by_group_;
     mutable std::vector<int32_t> layer_to_kv_cache_group_id_;
     std::vector<CacheGroupType>  kv_cache_group_types_;
     bool                         warm_up_;

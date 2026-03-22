@@ -93,18 +93,22 @@ struct MHAKVCacheSpec: public KVCacheSpec {
                                                   int         partition_count,
                                                   int         partition_id,
                                                   const char* debug_name) {
+        if (heads < partition_count) {
+            RTP_LLM_CHECK_WITH_INFO(partition_count % heads == 0,
+                                    "partition_count must be divisible by heads (%s): partition_count=%d heads=%d",
+                                    debug_name,
+                                    partition_count,
+                                    heads);
+            auto partition_heads = partition_count / heads;
+            partition_count      = heads;
+            partition_id         = partition_id / partition_heads;
+        }
         RTP_LLM_CHECK_WITH_INFO(partition_count > 0, "partition_count must be > 0");
         RTP_LLM_CHECK_WITH_INFO(partition_id >= 0 && partition_id < partition_count,
                                 "partition_id out of range: %d / %d",
                                 partition_id,
                                 partition_count);
         RTP_LLM_CHECK_WITH_INFO(heads > 0, "heads must be > 0, got=%d (%s)", heads, debug_name);
-        RTP_LLM_CHECK_WITH_INFO(k_block_bytes + v_block_bytes == full_block_bytes,
-                                "block bytes mismatch (%s): full=%zu k_partition=%zu v_partition=%zu",
-                                debug_name,
-                                full_block_bytes,
-                                k_block_bytes,
-                                v_block_bytes);
         RTP_LLM_CHECK_WITH_INFO(k_block_bytes % static_cast<size_t>(heads) == 0,
                                 "k_block_bytes must be divisible by heads (%s): k_partition=%zu heads=%d",
                                 debug_name,
@@ -115,23 +119,14 @@ struct MHAKVCacheSpec: public KVCacheSpec {
                                 debug_name,
                                 v_block_bytes,
                                 heads);
-        RTP_LLM_CHECK_WITH_INFO(heads % partition_count == 0,
-                                "heads must be divisible by partition_count (%s): heads=%d partition_count=%d",
-                                debug_name,
-                                heads,
-                                partition_count);
 
-        const size_t k_partition_bytes_per_head = k_block_bytes / static_cast<size_t>(heads);
-        const size_t v_partition_bytes_per_head = v_block_bytes / static_cast<size_t>(heads);
+        const size_t k_partition_bytes_per_id = k_block_bytes / static_cast<size_t>(partition_count);
+        const size_t v_partition_bytes_per_id = v_block_bytes / static_cast<size_t>(partition_count);
 
-        // Compute [head_begin, head_cnt] for this partition_id (equal split).
-        const int head_cnt   = heads / partition_count;
-        const int head_begin = partition_id * head_cnt;
-
-        const size_t k_partition_off = static_cast<size_t>(head_begin) * k_partition_bytes_per_head;
-        const size_t v_partition_off = k_block_bytes + static_cast<size_t>(head_begin) * v_partition_bytes_per_head;
-        const size_t k_partition_sz  = static_cast<size_t>(head_cnt) * k_partition_bytes_per_head;
-        const size_t v_partition_sz  = static_cast<size_t>(head_cnt) * v_partition_bytes_per_head;
+        const size_t k_partition_off = static_cast<size_t>(partition_id) * k_partition_bytes_per_id;
+        const size_t v_partition_off = k_block_bytes + static_cast<size_t>(partition_id) * v_partition_bytes_per_id;
+        const size_t k_partition_sz  = k_partition_bytes_per_id;
+        const size_t v_partition_sz  = v_partition_bytes_per_id;
         return {k_partition_off, k_partition_sz, v_partition_off, v_partition_sz};
     }
 

@@ -1,7 +1,23 @@
 #include "rtp_llm/cpp/cache/KVCacheGroup.h"
+#include "rtp_llm/cpp/cache/MemoryLayoutConfig.h"
 #include "rtp_llm/cpp/utils/Logger.h"
 
 namespace rtp_llm {
+
+namespace {
+
+// Filled from CacheConfig::cache_specs[group_id] (see kvcache_spec_ on this group) plus pool MemoryLayoutConfig strides.
+KVPartitionSplitParams makeKvPartitionSplitParams(const KVCacheSpec& spec, const MemoryLayoutConfig& layout) {
+    KVPartitionSplitParams p;
+    p.spec_type           = spec.type;
+    p.kv_full_block_bytes = layout.kv_block_stride_bytes;
+    p.kv_k_bytes          = spec.k_block_size_bytes();
+    p.kv_v_bytes          = spec.v_block_size_bytes();
+    p.kv_heads            = static_cast<int>(spec.local_head_num_kv);
+    return p;
+}
+
+}  // namespace
 
 bool KVCacheGroup::init() {
     auto layer_tensors = block_pool_->allLayerCacheBase();
@@ -102,7 +118,9 @@ KVCacheGroup::convertIndexToBuffer(int layer_id, int block_id, int partition_cou
     auto it = global_layer_to_local_layer.find(layer_id);
     RTP_LLM_CHECK_WITH_INFO(it != global_layer_to_local_layer.end(), "invalid layer_id: " + std::to_string(layer_id));
     int local_layer_id = it->second;
-    return block_pool_->convertIndexToBuffer(local_layer_id, block_id, partition_count, partition_id);
+    const auto&            layout_cfg = block_pool_->layoutConfigForPoolLayerIndex(local_layer_id);
+    KVPartitionSplitParams owned      = makeKvPartitionSplitParams(*kvcache_spec_, layout_cfg);
+    return block_pool_->convertIndexToBuffer(local_layer_id, block_id, partition_count, partition_id, &owned);
 }
 
 void KVCacheGroup::reference(const BlockIndicesType& new_block_indices) {

@@ -130,7 +130,10 @@ struct GptModelInputs {
 
     rtp_llm::BufferPtr kv_cache_layer_to_group;  // [layer_num], int32
     rtp_llm::BufferPtr kv_cache_group_types;     // [group_num], int32, Convention: 0 -> LINEAR, 1 -> FULL.
-    rtp_llm::BufferPtr kv_cache_update_mapping;  // [block_copy_num, 2] kv cache update mapping
+    // Per-group physical kv block sizes (bytes) used when splitting padded kv blocks into k_/v_ payloads.
+    rtp_llm::BufferPtr kv_cache_k_block_bytes_by_group;  // [group_num], uint64
+    rtp_llm::BufferPtr kv_cache_v_block_bytes_by_group;  // [group_num], uint64
+    rtp_llm::BufferPtr kv_cache_update_mapping;          // [block_copy_num, 2] kv cache update mapping
 
     std::optional<std::vector<rtp_llm::BufferPtr>> multimodal_features;  // all features in gathered stream stored here
     rtp_llm::BufferPtr text_tokens_mask;  // text part in multimodal input tokens [cumulated_seq_len]
@@ -562,7 +565,9 @@ struct CacheStoreInputs {
     BufferPtr host_kv_cache_offset;
 
     BufferPtr kv_cache_layer_to_group_host;
-    BufferPtr kv_cache_group_types_host;  // 0 -> LINEAR, 1 -> FULL.
+    BufferPtr kv_cache_group_types_host;             // 0 -> LINEAR, 1 -> FULL.
+    BufferPtr kv_cache_k_block_bytes_by_group_host;  // [group_num], uint64
+    BufferPtr kv_cache_v_block_bytes_by_group_host;  // [group_num], uint64
 
     size_t context_batch_size = 0;
     size_t decoder_batch_size = 0;

@@ -22,12 +22,22 @@ void WriteCacheStoreOp(const torch::Tensor&                         input_length
             (cache_store_inputs.kv_cache_group_types.defined() && cache_store_inputs.kv_cache_group_types.numel() > 0) ?
                 torchTensor2Buffer(cache_store_inputs.kv_cache_group_types) :
                 nullptr;
+        auto k_block_bytes_by_group_buf = (cache_store_inputs.kv_cache_k_block_bytes_by_group.defined()
+                                           && cache_store_inputs.kv_cache_k_block_bytes_by_group.numel() > 0) ?
+                                              torchTensor2Buffer(cache_store_inputs.kv_cache_k_block_bytes_by_group) :
+                                              nullptr;
+        auto v_block_bytes_by_group_buf = (cache_store_inputs.kv_cache_v_block_bytes_by_group.defined()
+                                           && cache_store_inputs.kv_cache_v_block_bytes_by_group.numel() > 0) ?
+                                              torchTensor2Buffer(cache_store_inputs.kv_cache_v_block_bytes_by_group) :
+                                              nullptr;
 
         CacheStoreInputs inputs{torchTensor2Buffer(input_lengths),
                                 torchTensor2Buffer(prefix_lengths),
                                 torchTensor2Buffer(kv_cache_block_id_host),
                                 layer_to_group_buf,
                                 group_types_buf,
+                                k_block_bytes_by_group_buf,
+                                v_block_bytes_by_group_buf,
                                 cache_store_inputs.context_batch_size,
                                 cache_store_inputs.decoder_batch_size,
                                 // (size_t)(attn_inputs.input_lengths.size(0) - attn_inputs.sequence_lengths.size(0)),

@@ -1,9 +1,20 @@
 
 #pragma once
 
+#include "rtp_llm/cpp/cache/KVCacheSpecBase.h"
 #include "rtp_llm/cpp/core/Types.h"
 
 namespace rtp_llm {
+
+// Optional per-call KV partition layout for TP splits. When null, MemoryLayoutStrategy falls back to
+// scalar fields in MemoryLayoutConfig (legacy MHA-oriented path).
+struct KVPartitionSplitParams {
+    KVCacheSpecType spec_type          = KVCacheSpecType::MultiHeadAttention;
+    size_t          kv_full_block_bytes  = 0;
+    size_t          kv_k_bytes         = 0;
+    size_t          kv_v_bytes         = 0;
+    int             kv_heads           = 0;
+};
 
 struct MemoryLayoutConfig {
     uint32_t layer_num = 0;

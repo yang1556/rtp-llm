@@ -659,7 +659,7 @@ ErrorInfo DecodeRpcServer::loadCache(const LoadKVCacheContext& load_context) {
                 };
 
                 // Hybrid Attention not support asymmetric TP, thus transfer the whole kvache blocks
-                if (use_mla || use_hybrid) {
+                if (use_mla) {
                     RTP_LLM_CHECK_WITH_INFO(parts.size() == 1 || parts.size() == 2,
                                             "unexpected mla convertIndexToBuffer parts size=%zu",
                                             parts.size());
@@ -778,7 +778,7 @@ ErrorInfo DecodeRpcServer::loadCache(const LoadKVCacheContext& load_context) {
                                     key, addr, static_cast<uint32_t>(block.size_bytes), true, true);
                             };
 
-                            if (mtp_use_mla || mtp_use_hybrid) {
+                            if (mtp_use_mla) {
                                 RTP_LLM_CHECK_WITH_INFO(parts.size() == 1 || parts.size() == 2,
                                                         "unexpected mtp mla convertIndexToBuffer parts size=%zu",
                                                         parts.size());

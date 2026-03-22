@@ -482,11 +482,26 @@ std::vector<BlockInfo> BlockPool::convertIndexToBuffer(int layer_id, int block_i
 
 std::vector<BlockInfo>
 BlockPool::convertIndexToBuffer(int layer_id, int block_id, int partition_count, int partition_id) const {
+    return convertIndexToBuffer(layer_id, block_id, partition_count, partition_id, nullptr);
+}
+
+std::vector<BlockInfo> BlockPool::convertIndexToBuffer(int                layer_id,
+                                                       int                block_id,
+                                                       int                partition_count,
+                                                       int                partition_id,
+                                                       const KVPartitionSplitParams* partition_params) const {
     auto [layout_index, local_layer_id] = mapGlobalLayerIdToLocal(layer_id);
     checkLayoutValidity(layout_index);
 
     return layout_strategies_[static_cast<size_t>(layout_index)]->convertIndexToBuffer(
-        local_layer_id, block_id, partition_count, partition_id);
+        local_layer_id, block_id, partition_count, partition_id, partition_params);
+}
+
+const MemoryLayoutConfig& BlockPool::layoutConfigForPoolLayerIndex(int pool_layer_flat_index) const {
+    auto [layout_index, local_layer_id] = mapGlobalLayerIdToLocal(pool_layer_flat_index);
+    (void)local_layer_id;
+    checkLayoutValidity(layout_index);
+    return config_.memory_layouts[static_cast<size_t>(layout_index)];
 }
 
 MemoryType BlockPool::where() const {

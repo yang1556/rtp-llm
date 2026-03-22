@@ -167,7 +167,7 @@ ExpertBalancer::ExpertBalancer(size_t                       log_exp_num,
                                DeviceBase*                  device,
                                QuantAlgo                    quant_algo,
                                kmonitor::MetricsReporterPtr metrics_reporter,
-                               const EPLBConfig&             eplb_config):
+                               const EPLBConfig&            eplb_config):
 
     device_(device),
     num_logic_experts_(log_exp_num),
@@ -177,7 +177,6 @@ ExpertBalancer::ExpertBalancer(size_t                       log_exp_num,
     metrics_reporter_(metrics_reporter),
     eplb_python_wrapper_(py_eplb) {
     cout << "ExpertBalancer constructed with " << log_exp_num << " logical experts" << endl;
-    printf("DEBUG: ExpertBalancer constructor called for linker debug\n");
     eplb_control_data_ = eplb_config;
 
     // init memory
@@ -222,8 +221,8 @@ void ExpertBalancer::syncController() {
     // sync control data
     if (eplb_controller_.stepAndCheckSyncStep()) {
         auto eplb_control_data = eplb_controller_.getAndSyncData(device_);
-        if (eplb_control_data.eplb_mode != eplb_control_data_.eplb_mode || 
-            eplb_control_data.eplb_update_time != eplb_control_data_.eplb_update_time) {
+        if (eplb_control_data.eplb_mode != eplb_control_data_.eplb_mode
+            || eplb_control_data.eplb_update_time != eplb_control_data_.eplb_update_time) {
             eplb_control_data_ = eplb_control_data;
             RTP_LLM_LOG_INFO("EPLB config changed to %s", eplb_control_data_.to_string().c_str());
         }
@@ -231,7 +230,8 @@ void ExpertBalancer::syncController() {
 }
 
 void ExpertBalancer::reportStats(OverallExpertStats& stats) {
-    if (metrics_reporter_ && eplb_control_data_.checkEplbMode(eplb_control_data_.eplb_mode, EplbMode::STATS, EplbMode::ALL)) {
+    if (metrics_reporter_
+        && eplb_control_data_.checkEplbMode(eplb_control_data_.eplb_mode, EplbMode::STATS, EplbMode::ALL)) {
         int layer_num = stats.layer_num;
         executor_collector_.gpu_loads.resize(layer_num);
         executor_collector_.ep_rank = ep_rank_;

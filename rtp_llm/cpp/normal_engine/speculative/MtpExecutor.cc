@@ -23,6 +23,37 @@
 
 namespace rtp_llm {
 
+static void
+applyCacheBlockLayoutToModelInput(const CacheConfig& cache_cfg, GptModelInputs& model_input, DeviceBase* device) {
+    model_input.kv_block_stride_bytes = cache_cfg.kv_block_stride_bytes;
+    const size_t group_num            = static_cast<size_t>(cache_cfg.groupNums());
+    if (group_num == 0) {
+        model_input.kv_cache_k_block_bytes_by_group = nullptr;
+        model_input.kv_cache_v_block_bytes_by_group = nullptr;
+        return;
+    }
+
+    auto k_block_bytes_by_group = device->allocateBuffer({DataType::TYPE_INT32, {group_num}, AllocationType::HOST}, {});
+    auto v_block_bytes_by_group = device->allocateBuffer({DataType::TYPE_INT32, {group_num}, AllocationType::HOST}, {});
+    auto* k_dst                 = k_block_bytes_by_group->data<int32_t>();
+    auto* v_dst                 = v_block_bytes_by_group->data<int32_t>();
+
+    for (size_t gid = 0; gid < group_num; ++gid) {
+        const auto& spec = gid < cache_cfg.cache_specs.size() ? cache_cfg.cache_specs[gid] : nullptr;
+        if (spec) {
+            k_dst[gid] = static_cast<int32_t>(spec->k_block_size_bytes());
+            v_dst[gid] = static_cast<int32_t>(spec->v_block_size_bytes());
+        } else {
+            const size_t k_bytes = cache_cfg.kv_block_stride_bytes / 2;
+            k_dst[gid]           = static_cast<int32_t>(k_bytes);
+            v_dst[gid]           = static_cast<int32_t>(cache_cfg.kv_block_stride_bytes - k_bytes);
+        }
+    }
+
+    model_input.kv_cache_k_block_bytes_by_group = std::move(k_block_bytes_by_group);
+    model_input.kv_cache_v_block_bytes_by_group = std::move(v_block_bytes_by_group);
+}
+
 bool MtpExecutor::isTpRank0() const {
     return device_->getDeviceProperties().tp_rank == 0;
 }
@@ -354,8 +385,8 @@ absl::Status MtpExecutor::prefillStep(const std::list<GenerateStreamPtr>& stream
     {
         tpSyncModelInputs(model_input, device_);
         maybePrintModelInput(model_input, "prefill post draft model");
-        const auto& mtp_cache_cfg           = cache_manager_->getMTPModuleCacheConfig(0);
-        model_input.kv_block_stride_bytes   = mtp_cache_cfg.kv_block_stride_bytes;
+        const auto& mtp_cache_cfg = cache_manager_->getMTPModuleCacheConfig(0);
+        applyCacheBlockLayoutToModelInput(mtp_cache_cfg, model_input, device_);
         model_input.kv_cache_layer_to_group = draft_kv_cache_layer_to_group;
         draft_model_output                  = std::move(draft_model_->forward(model_input));
     }
@@ -602,8 +633,8 @@ absl::Status MtpExecutor::decodeStep(const std::list<GenerateStreamPtr>& streams
     tpSyncModelInputs(model_input, device_);
 
     maybePrintModelInput(model_input, "decode post draft model");
-    const auto& mtp_cache_cfg           = cache_manager_->getMTPModuleCacheConfig(0);
-    model_input.kv_block_stride_bytes   = mtp_cache_cfg.kv_block_stride_bytes;
+    const auto& mtp_cache_cfg = cache_manager_->getMTPModuleCacheConfig(0);
+    applyCacheBlockLayoutToModelInput(mtp_cache_cfg, model_input, device_);
     model_input.kv_cache_layer_to_group = draft_kv_cache_layer_to_group;
 
     draft_prefill_model_output = std::move(draft_model_->forward(model_input));
@@ -738,8 +769,8 @@ void MtpExecutor::draftModelDecode(GptModelInputs&             model_input,
     // clear host buffers holder
     buffer_holder_.release();
 
-    const auto& mtp_cache_cfg         = cache_manager_->getMTPModuleCacheConfig(0);
-    model_input.kv_block_stride_bytes = mtp_cache_cfg.kv_block_stride_bytes;
+    const auto& mtp_cache_cfg = cache_manager_->getMTPModuleCacheConfig(0);
+    applyCacheBlockLayoutToModelInput(mtp_cache_cfg, model_input, device_);
 
     GptModelOutputs            draft_decode_model_output;
     std::vector<torch::Tensor> draft_token_ids_list;
@@ -824,8 +855,8 @@ void MtpExecutor::draftModelDecode(GptModelInputs&             model_input,
     }
 
     tpSyncModelInputs(model_input, device_);
-    const auto& cache_cfg             = cache_manager_->cacheConfig();
-    model_input.kv_block_stride_bytes = cache_cfg.kv_block_stride_bytes;
+    const auto& cache_cfg = cache_manager_->cacheConfig();
+    applyCacheBlockLayoutToModelInput(cache_cfg, model_input, device_);
 }
 
 }  // namespace rtp_llm
