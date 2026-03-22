@@ -93,11 +93,13 @@ public:
                                         status.error_code(),
                                         status.error_message().c_str(),
                                         ctx->server_addr.c_str());
-                    all_request_success_.store(false);
+                    grpc_status_failure_seen_ = true;
                 }
             }
         }
 
+        // Match pre-refactor semantics: finalize once all ranks are finished (same as local bool + single store).
+        all_request_success_.store(!grpc_status_failure_seen_);
         already_done_.store(true);
         return true;
     }
@@ -107,7 +109,7 @@ public:
     }
 
     bool success() const {
-        return done() && all_request_success_.load();
+        return all_request_success_.load();
     }
 
     std::vector<ResponsePB> responses() const {
@@ -125,7 +127,8 @@ private:
     std::vector<bool>                              finished_;
     int                                            finished_count_{0};
     std::atomic<bool>                              already_done_{false};
-    std::atomic<bool>                              all_request_success_{true};
+    std::atomic<bool>                              all_request_success_{false};
+    bool                                           grpc_status_failure_seen_{false};
     mutable std::mutex                             wait_done_mutex_;
 };
 
