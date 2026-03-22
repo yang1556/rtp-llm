@@ -34,6 +34,10 @@ cc_test(
         "main.cc",
     ],
     copts = test_copts,
+    env = {
+        # Limit per-process GPU reservation when many cc_tests run in parallel (bazel test //...).
+        "DEVICE_RESERVE_MEMORY_BYTES": "128000000",
+    },
     exec_properties = {'gpu':'A10'},
     deps = [
         "//rtp_llm/cpp/cache/connector/p2p/transfer/tcp:tcp_transfer_service",
@@ -55,6 +59,9 @@ cc_test(
         "main.cc",
     ],
     copts = test_copts,
+    env = {
+        "DEVICE_RESERVE_MEMORY_BYTES": "128000000",
+    },
     exec_properties = {'gpu':'A10'},
     deps = [
         "//rtp_llm/cpp/cache/connector/p2p/transfer/tcp:tcp_backend",

@@ -30,8 +30,8 @@ public:
     /// @brief 注册一次接收任务，返回任务句柄
     transfer::IKVCacheRecvTaskPtr recv(const transfer::RecvRequest& request) override;
 
-    void stealTask(const std::string& unique_key) override;
-    void getTask(const std::string& unique_key) override;
+    void                          stealTask(const std::string& unique_key) override;
+    transfer::IKVCacheRecvTaskPtr getTask(const std::string& unique_key) override;
 
     const std::shared_ptr<TransferTaskStore>& getTransferTaskStore() const {
         return task_store_;

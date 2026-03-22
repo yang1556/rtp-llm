@@ -63,7 +63,7 @@ public:
     virtual void stealTask(const std::string& unique_key) = 0;
 
     /// @brief 从 task store 中查询任务（不转移所有权）
-    virtual void getTask(const std::string& unique_key) = 0;
+    virtual IKVCacheRecvTaskPtr getTask(const std::string& unique_key) = 0;
 };
 
 using IKVCacheReceiverPtr = std::shared_ptr<IKVCacheReceiver>;

@@ -60,8 +60,8 @@ void TcpKVCacheReceiver::stealTask(const std::string& unique_key) {
     task_store_->stealTask(unique_key);
 }
 
-void TcpKVCacheReceiver::getTask(const std::string& unique_key) {
-    task_store_->getTask(unique_key);
+transfer::IKVCacheRecvTaskPtr TcpKVCacheReceiver::getTask(const std::string& unique_key) {
+    return task_store_->getTask(unique_key);
 }
 
 }  // namespace tcp

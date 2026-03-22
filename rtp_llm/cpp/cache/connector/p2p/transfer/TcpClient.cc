@@ -60,9 +60,14 @@ std::shared_ptr<arpc::RPCChannelBase> TcpClient::getChannel(const std::string& i
     std::string spec = "tcp:" + ip + ":" + std::to_string(port);
 
     std::lock_guard<std::mutex> lock(channel_map_mutex_);
-    auto                        channel = channel_map_[spec];
-    if (channel != nullptr && !channel->ChannelBroken()) {
-        return channel;
+    auto                        it = channel_map_.find(spec);
+    if (it != channel_map_.end()) {
+        const auto& channel = it->second;
+        if (channel != nullptr && !channel->ChannelBroken()) {
+            return channel;
+        }
+        // Drop broken or null entries so we never cache unusable channels.
+        channel_map_.erase(it);
     }
 
     auto new_channel = openChannel(spec);
@@ -70,7 +75,7 @@ std::shared_ptr<arpc::RPCChannelBase> TcpClient::getChannel(const std::string& i
         return nullptr;
     }
 
-    channel_map_[spec] = new_channel;
+    channel_map_.emplace(spec, new_channel);
     RTP_LLM_LOG_INFO("tcp client new channel connect to %s", spec.c_str());
     return new_channel;
 }

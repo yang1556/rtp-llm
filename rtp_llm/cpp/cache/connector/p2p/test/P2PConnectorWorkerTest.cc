@@ -235,7 +235,13 @@ public:
     void stealTask(const std::string& /*unique_key*/) override {
         steal_task_count_.fetch_add(1, std::memory_order_relaxed);
     }
-    void getTask(const std::string&) override {}
+    transfer::IKVCacheRecvTaskPtr getTask(const std::string& unique_key) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (auto it = tasks_.find(unique_key); it != tasks_.end()) {
+            return it->second;
+        }
+        return nullptr;
+    }
 
     int stealTaskCount() const {
         return steal_task_count_.load(std::memory_order_relaxed);
