@@ -177,14 +177,9 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
     const int32_t* offset_addr          = nullptr;
     size_t         max_blocks_per_batch = 0;
 
-    bool is_hybrid = false;
-
     if (param.kv_cache_group_types_host && param.kv_cache_group_types_host->shape()[0] > 1) {
         auto group_types_host         = Buffer2torchTensor(*param.kv_cache_group_types_host);
         auto layer_to_group_type_host = Buffer2torchTensor(*param.kv_cache_layer_to_group_host);
-
-        // is_hybrid = !all(group_types_host[layer_to_group_type_host] == 1)
-        is_hybrid = !torch::all(group_types_host.index({layer_to_group_type_host}) == 1).item<bool>();
     }
 
     // const size_t group_num = is_hybrid ? param.kv_cache_group_types_host->shape()[0] : 1;
