@@ -7,6 +7,7 @@
 #include "rtp_llm/cpp/cache/connector/memory/KVCacheMemoryConnector.h"
 #ifdef USE_REMOTE_KV_CACHE
 #include "rtp_llm/cpp/cache/connector/remote_connector/RemoteConnector.h"
+#include "autil/EnvUtil.h"
 #endif
 namespace rtp_llm {
 
@@ -171,12 +172,16 @@ std::shared_ptr<KVCacheMemoryConnector> KVCacheConnectorCoordinator::initMemoryC
 std::shared_ptr<RemoteConnector> KVCacheConnectorCoordinator::initRemoteConnector() {
 #ifdef USE_REMOTE_KV_CACHE
     // TODO(zhaotaonan.ztn) 这里不应该写死
-    RemoteConnectorGroupMode connectorGroupMode = RemoteConnectorGroupMode::RCGM_LAYER_DEFAULT;
-    connectorGroupMode = RemoteConnectorGroupMode::RCGM_FULL_LINEAR_LAYER;
+    RemoteConnectorGroupMode connectorGroupMode = RemoteConnectorGroupMode::RCGM_ONLY_FULL_LAYER;
     // TODO(zhaotaonan.ztn) 从param里获取
-    std::vector<int32_t> full_group_ids = {0}
-    std::vector<int32_t> other_group_ids = {1, 2, 3};
+    std::vector<int32_t> full_group_ids = {0};
+    std::vector<int32_t> other_group_ids = {};
 
+    auto useFullLinearMode = autil::EnvUtil::getEnv("USE_F_L_GROUP_MODE", std::string(""));
+    if (!useFullLinearMode.empty()) {
+        connectorGroupMode = RemoteConnectorGroupMode::RCGM_FULL_LINEAR_LAYER;
+        other_group_ids = {1, 2, 3};
+    }
     // TODO : get lora info map
     // TODO : support different group mode
     auto remote_connector_ = std::make_shared<RemoteConnector>(cache_config_,
