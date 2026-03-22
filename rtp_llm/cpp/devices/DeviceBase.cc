@@ -420,6 +420,7 @@ void DeviceBase::writeCacheToConnector(const WriteCacheParams& params) {
         auto total_block_num = block_num + reuse_block_num;
 
         auto kv_cache_resource = std::make_shared<KVCacheResource>();
+        bool cache_keys_valid = true;
         for (size_t index = 0; index < total_block_num; index++) {
             auto    str_cache_key = param.cache_keys[batch_id * max_blocks_per_batch + index];
             int64_t cache_key     = 0;
@@ -427,9 +428,16 @@ void DeviceBase::writeCacheToConnector(const WriteCacheParams& params) {
                 RTP_LLM_LOG_WARNING(
                     "DeviceBase writeKVCacheConnector failed to convert cache_key to int64_t, cache_key: %s",
                     str_cache_key.c_str());
-                return;
+                cache_keys_valid = false;
+                break;
             }
             kv_cache_resource->cacheKeys().push_back(cache_key);
+        }
+        if (!cache_keys_valid) {
+            RTP_LLM_LOG_WARNING("DeviceBase writeKVCacheConnector failed to convert cache_key to int64_t, request_id=%ld, batch_id=%zu",
+                                request_id,
+                                batch_id);
+            continue;
         }
 
         std::vector<int> layer_to_group_id(global_layer_id + 1, 0);

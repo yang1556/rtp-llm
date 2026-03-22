@@ -17,12 +17,13 @@ PrefillLoadCaller::PrefillLoadCaller(const std::vector<std::string>& worker_addr
         return;
     }
 
-    // 解析 worker_addrs 并构建 tp_worker_infos_
+    // worker_addrs 每项为 ip:cache_store_port:grpc_port（三段），解析 ip 与 cache_store_port 写入 tp_worker_infos_
     for (const auto& worker_addr : worker_addrs_) {
         auto ip_parts = autil::StringUtil::split(worker_addr, ":");
         if (ip_parts.size() != 3) {
-            RTP_LLM_FAIL("PrefillLoadCaller: invalid worker addr format [%s], expected ip:cache_store_port",
-                         worker_addr.c_str());
+            RTP_LLM_FAIL(
+                "PrefillLoadCaller: invalid worker addr format [%s], expected ip:cache_store_port:grpc_port",
+                worker_addr.c_str());
             continue;
         }
         TPWorkerInfoPB tp_worker;

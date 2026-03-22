@@ -17,6 +17,7 @@ namespace rtp_llm {
 
 class PrefillLoadCaller {
 public:
+    /// @param worker_addrs Decode worker 地址列表，每项格式为 ip:cache_store_port:grpc_port（冒号分隔三段）
     PrefillLoadCaller(const std::vector<std::string>& worker_addrs);
     ~PrefillLoadCaller() = default;
 

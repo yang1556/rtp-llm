@@ -94,6 +94,9 @@ private:
     std::atomic<bool>       tp_cancel_broadcast_triggered_{false};
 };
 
+/// @brief P2P 按层写入的异步上下文。
+/// Write-by-layer is fire-and-forget; actual transfer status is tracked separately.
+/// @note done()/success() 恒为 true，仅满足 AsyncContext 接口形态，不得据此推断真实传输结果。
 class P2PConnectorAsyncWriteByLayerContext: public AsyncContext {
 public:
     P2PConnectorAsyncWriteByLayerContext(const KVCacheResourcePtr& resource): resource_(resource) {}

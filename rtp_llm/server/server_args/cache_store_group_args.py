@@ -89,6 +89,56 @@ def init_cache_store_group_args(parser, cache_store_config):
     )
 
     cache_store_group.add_argument(
+        "--cache_store_messager_io_thread_count",
+        env_name="CACHE_STORE_MESSAGER_IO_THREAD_COUNT",
+        bind_to=(cache_store_config, "messager_io_thread_count"),
+        type=int,
+        default=2,
+        help="为 cache store P2P messager 通信层设置 IO 线程数量。",
+    )
+    cache_store_group.add_argument(
+        "--cache_store_messager_worker_thread_count",
+        env_name="CACHE_STORE_MESSAGER_WORKER_THREAD_COUNT",
+        bind_to=(cache_store_config, "messager_worker_thread_count"),
+        type=int,
+        default=16,
+        help="为 cache store P2P messager 通信层设置 worker 线程数量。",
+    )
+    cache_store_group.add_argument(
+        "--cache_store_rdma_transfer_wait_timeout_ms",
+        env_name="CACHE_STORE_RDMA_TRANSFER_WAIT_TIMEOUT_MS",
+        bind_to=(cache_store_config, "rdma_transfer_wait_timeout_ms"),
+        type=int,
+        default=180000,
+        help="RDMA 传输完成最大等待超时时间（毫秒），默认 180 秒。",
+    )
+
+    cache_store_group.add_argument(
+        "--p2p_read_steal_before_deadline_ms",
+        env_name="P2P_READ_STEAL_BEFORE_DEADLINE_MS",
+        bind_to=(cache_store_config, "p2p_read_steal_before_deadline_ms"),
+        type=int,
+        default=250,
+        help="Decode read：距 deadline 小于该毫秒数时从 recv store steal，阻止新 transfer 匹配。",
+    )
+    cache_store_group.add_argument(
+        "--p2p_read_return_before_deadline_ms",
+        env_name="P2P_READ_RETURN_BEFORE_DEADLINE_MS",
+        bind_to=(cache_store_config, "p2p_read_return_before_deadline_ms"),
+        type=int,
+        default=100,
+        help="Decode read 与 Prefill send：transfer 须在 deadline 前该毫秒数内完成（与对端对齐）。",
+    )
+    cache_store_group.add_argument(
+        "--p2p_transfer_not_done_resource_hold_ms",
+        env_name="P2P_TRANSFER_NOT_DONE_RESOURCE_HOLD_MS",
+        bind_to=(cache_store_config, "p2p_transfer_not_done_resource_hold_ms"),
+        type=int,
+        default=10000,
+        help="Scheduler：TRANSFER_NOT_DONE 后延迟 done 以保留显存安全窗口（毫秒）。",
+    )
+
+    cache_store_group.add_argument(
         "--p2p_resource_store_timeout_check_interval_ms",
         env_name="P2P_RESOURCE_STORE_TIMEOUT_CHECK_INTERVAL_MS",
         bind_to=(cache_store_config, "p2p_resource_store_timeout_check_interval_ms"),

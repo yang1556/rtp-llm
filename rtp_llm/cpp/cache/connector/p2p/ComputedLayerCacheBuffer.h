@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rtp_llm/cpp/cache/connector/p2p/LayerCacheBuffer.h"
+#include <atomic>
 #include <condition_variable>
 #include <map>
 #include <mutex>
@@ -26,13 +27,13 @@ public:
     void waitChange(int last_layer_num, int timeout_ms);
 
     int64_t deadlineMs() const {
-        return deadline_ms_;
+        return deadline_ms_.load(std::memory_order_relaxed);
     }
 
 private:
     int64_t                                          request_id_;
     std::map<int, std::shared_ptr<LayerCacheBuffer>> layer_cache_buffers_;
-    int64_t                                          deadline_ms_;
+    std::atomic<int64_t>                             deadline_ms_;
 
     std::mutex              mutex_;
     std::condition_variable condition_variable_;

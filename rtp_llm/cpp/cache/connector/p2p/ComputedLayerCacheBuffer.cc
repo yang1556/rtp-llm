@@ -19,8 +19,9 @@ void ComputedLayerCacheBuffer::addBuffer(const std::shared_ptr<LayerCacheBuffer>
     if (layer_cache_buffer) {
         layer_cache_buffers_[layer_cache_buffer->getLayerId()] = layer_cache_buffer;
     }
-    if (deadline_ms > deadline_ms_) {
-        deadline_ms_ = deadline_ms;
+    int64_t cur = deadline_ms_.load(std::memory_order_relaxed);
+    if (deadline_ms > cur) {
+        deadline_ms_.store(deadline_ms, std::memory_order_relaxed);
     }
     condition_variable_.notify_all();
 }
