@@ -170,6 +170,13 @@ std::shared_ptr<KVCacheMemoryConnector> KVCacheConnectorCoordinator::initMemoryC
 
 std::shared_ptr<RemoteConnector> KVCacheConnectorCoordinator::initRemoteConnector() {
 #ifdef USE_REMOTE_KV_CACHE
+    // TODO(zhaotaonan.ztn) 这里不应该写死
+    RemoteConnectorGroupMode connectorGroupMode = RemoteConnectorGroupMode::RCGM_LAYER_DEFAULT;
+    connectorGroupMode = RemoteConnectorGroupMode::RCGM_FULL_LINEAR_LAYER;
+    // TODO(zhaotaonan.ztn) 从param里获取
+    std::vector<int32_t> full_group_ids = {0}
+    std::vector<int32_t> other_group_ids = {1, 2, 3};
+
     // TODO : get lora info map
     // TODO : support different group mode
     auto remote_connector_ = std::make_shared<RemoteConnector>(cache_config_,
@@ -181,9 +188,9 @@ std::shared_ptr<RemoteConnector> KVCacheConnectorCoordinator::initRemoteConnecto
                                                                allocator_->getBlockPool()->getBaseAddress(),
                                                                allocator_->getBlockPool()->getTotalSizeBytes(),
                                                                allocator_,
-                                                               RemoteConnectorGroupMode::RCGM_ONLY_FULL_LAYER,
-                                                               std::vector<int32_t>({0}),
-                                                               std::vector<int32_t>({}),
+                                                               connectorGroupMode,
+                                                               full_group_ids,
+                                                               other_group_ids,
                                                                metrics_reporter_);
 
     RTP_LLM_CHECK_WITH_INFO(remote_connector_->init(), "remote connector init failed");

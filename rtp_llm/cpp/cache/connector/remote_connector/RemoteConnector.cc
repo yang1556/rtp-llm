@@ -193,21 +193,25 @@ RemoteConnector::RemoteConnector(const CacheConfig&                        cache
         case RemoteConnectorGroupMode::RCGM_LAYER_DEFAULT: {
             group_policy_ =
                 std::make_unique<remote_connector::DefaultLayerGroupPolicy>(allocator, full_group_ids, other_group_ids);
+            RTP_LLM_LOG_INFO("RemoteConnector using policy: DefaultLayerGroupPolicy");
             break;
         }
         case RemoteConnectorGroupMode::RCGM_ONLY_FULL_LAYER: {
             group_policy_ =
                 std::make_unique<remote_connector::FullLayerGroupPolicy>(allocator, full_group_ids, other_group_ids);
+            RTP_LLM_LOG_INFO("RemoteConnector using policy: FullLayerGroupPolicy");
             break;
         }
         case RemoteConnectorGroupMode::RCGM_FULL_LINEAR_LAYER: {
             group_policy_ = std::make_unique<remote_connector::FullLinearLayerGroupPolicy>(
                 allocator, full_group_ids, other_group_ids, linear_attention_write_interval);
+            RTP_LLM_LOG_INFO("RemoteConnector using policy: FullLinearLayerGroupPolicy");
             break;
         }
         case RemoteConnectorGroupMode::RCGM_FULL_SW_LAYER: {
             group_policy_ = std::make_unique<remote_connector::FullSWLayerGroupPolicy>(
                 allocator, full_group_ids, other_group_ids, sink_size, sw_size);
+            RTP_LLM_LOG_INFO("RemoteConnector using policy: FullSWLayerGroupPolicy");
             break;
         }
     }
