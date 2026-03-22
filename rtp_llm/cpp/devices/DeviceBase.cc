@@ -22,6 +22,81 @@ using namespace rtp_llm;
 
 namespace rtp_llm {
 
+namespace {
+
+struct KvCacheOffsetLayout {
+    const int32_t* offset_addr          = nullptr;
+    size_t         max_blocks_per_batch = 0;
+};
+
+void fillKvCacheOffsetLayout(const CacheStoreInputs& param, int gid, KvCacheOffsetLayout& out) {
+    RTP_LLM_CHECK_WITH_INFO(param.host_kv_cache_offset != nullptr, "failed to get host_kv_cache_offset");
+    if (param.host_kv_cache_offset->shape().size() == 3) {
+        const auto group_offset_view = (*param.host_kv_cache_offset)[static_cast<size_t>(gid)];
+        out.max_blocks_per_batch = group_offset_view.shape()[1];
+        out.offset_addr          = group_offset_view.data<int32_t>();
+    } else {
+        out.max_blocks_per_batch = param.host_kv_cache_offset->shape()[1];
+        out.offset_addr          = param.host_kv_cache_offset->data<int32_t>();
+    }
+}
+
+// writeCacheStore semantics shared with writeCacheToConnector: hybrid -> multi group_num; gid from layer only
+// when host_kv_cache_offset is per-group (rank-3); otherwise gid stays 0.
+struct WriteCacheGroupLayout {
+    int     gid        = 0;
+    int     group_num  = 1;
+    bool    is_hybrid  = false;
+};
+
+WriteCacheGroupLayout resolveWriteCacheGroupLayout(const CacheStoreInputs& param) {
+    WriteCacheGroupLayout layout;
+    if (param.kv_cache_group_types_host && param.kv_cache_group_types_host->shape()[0] > 1) {
+        auto group_types_host         = Buffer2torchTensor(*param.kv_cache_group_types_host);
+        auto layer_to_group_type_host = Buffer2torchTensor(*param.kv_cache_layer_to_group_host);
+        layout.is_hybrid =
+            !torch::all(group_types_host.index({layer_to_group_type_host}) == 1).item<bool>();
+    }
+    layout.group_num = layout.is_hybrid ? static_cast<int>(param.kv_cache_group_types_host->shape()[0]) : 1;
+
+    if (param.host_kv_cache_offset->shape().size() == 3) {
+        layout.gid = -1;
+        if (param.kv_cache_layer_to_group_host && param.layer_id >= 0
+            && static_cast<size_t>(param.layer_id) < param.kv_cache_layer_to_group_host->size()) {
+            layout.gid = param.kv_cache_layer_to_group_host->data<int32_t>()[param.layer_id];
+        }
+        RTP_LLM_CHECK_WITH_INFO(layout.gid >= 0 && layout.gid < layout.group_num,
+                                "invalid kv cache group id [%d]",
+                                layout.gid);
+    }
+    return layout;
+}
+
+struct WriteCacheBlockCounts {
+    int reuse_block_num = 0;
+    int block_num       = 0;
+};
+
+WriteCacheBlockCounts computeWriteCacheBlockCounts(const CacheStoreInputs& param,
+                                                   size_t                  batch_id,
+                                                   size_t                  seq_size_per_block) {
+    RTP_LLM_CHECK_WITH_INFO(param.prefix_lengths_host && param.input_lengths_host,
+                            "failed to get prefix_length_host and input_length_host for cache store");
+    RTP_LLM_CHECK_WITH_INFO(param.prefix_lengths_host->data<int>()[batch_id] % seq_size_per_block == 0,
+                            "prefix_length \% seq_size_per_block != 0");
+    WriteCacheBlockCounts counts;
+    counts.reuse_block_num = static_cast<int>(
+        static_cast<size_t>(param.prefix_lengths_host->data<int>()[batch_id]) / seq_size_per_block);
+    counts.block_num = static_cast<int>(
+        (static_cast<size_t>(
+             param.input_lengths_host->data<int>()[param.decoder_batch_size + batch_id])
+         + seq_size_per_block - 1)
+        / seq_size_per_block);
+    return counts;
+}
+
+}  // namespace
+
 DeviceBase::DeviceBase(const DeviceInitParams& params): device_id_(params.device_id), init_params_(params) {
     // 默认stdout输出到文件的逻辑是全缓冲，导致ft_log和autil_log日志刷不出来，手动设置为行缓冲
     setlinebuf(stdout);
@@ -158,6 +233,7 @@ void DeviceBase::setCacheStore(std::shared_ptr<rtp_llm::CacheStore> cache_store)
 void DeviceBase::writeCacheStore(const WriteCacheParams& params) {
     if (params.cache_store_inputs.has_value() && params.kv_cache.has_value()) {
         if (cache_store_) {
+            // will replaced by writeCacheToConnector soon
             writeCacheStore(params.cache_store_inputs.value(), params.kv_cache.value(), params.mla_kvcache);
         }
         if (connector_coordinator_) {
@@ -182,37 +258,13 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
     }
 
     RTP_LLM_CHECK_WITH_INFO(param.host_kv_cache_offset != nullptr, "failed to get host_kv_cache_offset");
-    const int32_t* offset_addr          = nullptr;
-    size_t         max_blocks_per_batch = 0;
-
-    bool is_hybrid = false;
-
-    if (param.kv_cache_group_types_host && param.kv_cache_group_types_host->shape()[0] > 1) {
-        auto group_types_host         = Buffer2torchTensor(*param.kv_cache_group_types_host);
-        auto layer_to_group_type_host = Buffer2torchTensor(*param.kv_cache_layer_to_group_host);
-
-        // is_hybrid = !all(group_types_host[layer_to_group_type_host] == 1)
-        is_hybrid = !torch::all(group_types_host.index({layer_to_group_type_host}) == 1).item<bool>();
-    }
-
-    const size_t group_num = is_hybrid ? param.kv_cache_group_types_host->shape()[0] : 1;
-
-    int gid = 0;
-    if (param.host_kv_cache_offset->shape().size() == 3) {
-        gid = -1;
-        if (param.kv_cache_layer_to_group_host && param.layer_id >= 0
-            && static_cast<size_t>(param.layer_id) < param.kv_cache_layer_to_group_host->size()) {
-            gid = param.kv_cache_layer_to_group_host->data<int32_t>()[param.layer_id];
-        }
-        RTP_LLM_CHECK_WITH_INFO(
-            gid >= 0 && gid < static_cast<int32_t>(group_num), "invalid kv cache group id [%d]", gid);
-        const auto group_offset_view = (*param.host_kv_cache_offset)[static_cast<size_t>(gid)];  // [B, M]
-        max_blocks_per_batch         = group_offset_view.shape()[1];
-        offset_addr                  = group_offset_view.data<int32_t>();
-    } else {
-        max_blocks_per_batch = param.host_kv_cache_offset->shape()[1];
-        offset_addr          = param.host_kv_cache_offset->data<int32_t>();
-    }
+    const auto          write_group = resolveWriteCacheGroupLayout(param);
+    KvCacheOffsetLayout kv_layout;
+    fillKvCacheOffsetLayout(param, write_group.gid, kv_layout);
+    const int32_t* offset_addr          = kv_layout.offset_addr;
+    const size_t   max_blocks_per_batch = kv_layout.max_blocks_per_batch;
+    const int      gid                  = write_group.gid;
+    const bool     is_hybrid            = write_group.is_hybrid;
 
     const auto seq_size_per_block = param.tokens_per_block;
     auto       kv_cache_data      = (uint64_t*)kv_cache.kv_cache_buffer->data();
@@ -226,15 +278,10 @@ void DeviceBase::writeCacheStore(const CacheStoreInputs& cache_store_inputs,
         if (*(param.request_pd_separation->dataWithOffset<bool>(batch_id)) == false) {
             continue;
         }
-        RTP_LLM_CHECK_WITH_INFO(param.prefix_lengths_host && param.input_lengths_host,
-                                "failed to get prefix_length_host and input_length_host for cache store");
-        RTP_LLM_CHECK_WITH_INFO(param.prefix_lengths_host->data<int>()[batch_id] % seq_size_per_block == 0,
-                                "prefix_length \% seq_size_per_block != 0");
-        int reuse_block_num = param.prefix_lengths_host->data<int>()[batch_id] / seq_size_per_block;
-        int block_num =
-            (param.input_lengths_host->data<int>()[param.decoder_batch_size + batch_id] + seq_size_per_block - 1)
-            / seq_size_per_block;
-        auto request_id     = *(param.request_id->dataWithOffset<int64_t>(batch_id));
+        const auto counts         = computeWriteCacheBlockCounts(param, batch_id, seq_size_per_block);
+        const int  reuse_block_num = counts.reuse_block_num;
+        const int  block_num       = counts.block_num;
+        auto       request_id      = *(param.request_id->dataWithOffset<int64_t>(batch_id));
         auto request_blocks = std::make_shared<RequestBlockBuffer>(std::to_string(request_id), createEvent());
         RTP_LLM_LOG_DEBUG(
             "write cache store, request id is %ld, blocks num is %ld", request_id, block_num + reuse_block_num);
@@ -358,6 +405,7 @@ void DeviceBase::writeCacheToConnector(const WriteCacheParams& params) {
         return;
     }
 
+    RTP_LLM_CHECK_WITH_INFO(param.host_kv_cache_offset != nullptr, "failed to get host_kv_cache_offset");
     auto seq_size_per_block = param.tokens_per_block;
     auto global_layer_id    = connector_coordinator_->convertToGlobalLayerId(param.model_id, param.layer_id);
     if (global_layer_id == std::numeric_limits<uint32_t>::max()) {
@@ -367,36 +415,13 @@ void DeviceBase::writeCacheToConnector(const WriteCacheParams& params) {
         return;
     }
 
-    const int group_num =
-        param.kv_cache_group_types_host ? static_cast<int>(param.kv_cache_group_types_host->shape()[0]) : 1;
-
-    int gid = 0;
-    if (param.host_kv_cache_offset->shape().size() == 3) {
-        gid = -1;
-        if (param.kv_cache_layer_to_group_host && param.layer_id >= 0
-            && static_cast<size_t>(param.layer_id) < param.kv_cache_layer_to_group_host->size()) {
-            gid = param.kv_cache_layer_to_group_host->data<int32_t>()[param.layer_id];
-        }
-        RTP_LLM_CHECK_WITH_INFO(gid >= 0 && gid < group_num,
-                                "writeCacheToConnector: invalid group id [%d], group_num=%d, layer_id=%d",
-                                gid,
-                                group_num,
-                                param.layer_id);
-    } else if (param.kv_cache_layer_to_group_host && param.layer_id >= 0
-               && static_cast<size_t>(param.layer_id) < param.kv_cache_layer_to_group_host->size()) {
-        gid = param.kv_cache_layer_to_group_host->data<int32_t>()[param.layer_id];
-    }
-
-    const int32_t* offset_addr          = nullptr;
-    size_t         max_blocks_per_batch = 0;
-    if (param.host_kv_cache_offset->shape().size() == 3) {
-        const auto group_offset_view = (*param.host_kv_cache_offset)[static_cast<size_t>(gid)];
-        max_blocks_per_batch         = group_offset_view.shape()[1];
-        offset_addr                  = group_offset_view.data<int32_t>();
-    } else {
-        max_blocks_per_batch = param.host_kv_cache_offset->shape()[1];
-        offset_addr          = param.host_kv_cache_offset->data<int32_t>();
-    }
+    const auto          write_group = resolveWriteCacheGroupLayout(param);
+    const int           group_num   = write_group.group_num;
+    const int           gid         = write_group.gid;
+    KvCacheOffsetLayout kv_layout;
+    fillKvCacheOffsetLayout(param, gid, kv_layout);
+    const int32_t* offset_addr          = kv_layout.offset_addr;
+    const size_t   max_blocks_per_batch = kv_layout.max_blocks_per_batch;
 
     RTP_LLM_CHECK_WITH_INFO(param.context_batch_size == param.request_pd_separation->size(), "size not same");
     RTP_LLM_CHECK_WITH_INFO(param.context_batch_size == param.request_id->size(),
@@ -408,16 +433,10 @@ void DeviceBase::writeCacheToConnector(const WriteCacheParams& params) {
             continue;
         }
         auto request_id = *(param.request_id->dataWithOffset<int64_t>(batch_id));
-        RTP_LLM_CHECK_WITH_INFO(param.prefix_lengths_host && param.input_lengths_host,
-                                "failed to get prefix_length_host and input_length_host for cache store");
-        RTP_LLM_CHECK_WITH_INFO(param.prefix_lengths_host->data<int>()[batch_id] % seq_size_per_block == 0,
-                                "prefix_length \% seq_size_per_block != 0");
-
-        int block_num =
-            (param.input_lengths_host->data<int>()[param.decoder_batch_size + batch_id] + seq_size_per_block - 1)
-            / seq_size_per_block;
-        auto reuse_block_num = param.prefix_lengths_host->data<int>()[batch_id] / seq_size_per_block;
-        auto total_block_num = block_num + reuse_block_num;
+        const auto counts         = computeWriteCacheBlockCounts(param, batch_id, seq_size_per_block);
+        const int  block_num       = counts.block_num;
+        const int  reuse_block_num = counts.reuse_block_num;
+        const auto total_block_num = static_cast<size_t>(block_num + reuse_block_num);
 
         auto kv_cache_resource = std::make_shared<KVCacheResource>();
         bool cache_keys_valid = true;

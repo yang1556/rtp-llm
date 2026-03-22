@@ -190,7 +190,7 @@ std::tuple<int, int, int, int> IGenerateStreamImpl::getReuseLength() {
                           stream_->memoryReuseLength());
 }
 
-// setPrefillReuseLength - 设置 prefill 返回的 reuse 长度信息
+// setPrefillReuseLength - 设置 prefill 返回的 reuse 长度信息（GenerateStream 内由 output_mutex_ 保护）
 void IGenerateStreamImpl::setPrefillReuseLength(int reuse_length, int local_reuse_length, int remote_reuse_length,
                                                 int memory_reuse_length) {
     stream_->setPrefillReuseLength(reuse_length, local_reuse_length, remote_reuse_length,

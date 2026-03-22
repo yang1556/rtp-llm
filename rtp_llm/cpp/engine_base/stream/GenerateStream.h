@@ -93,7 +93,8 @@ using GenerateStreamPtr = std::shared_ptr<GenerateStream>;
 class GenerateStream: public std::enable_shared_from_this<GenerateStream> {
 public:
     static constexpr uint64_t STREAM_MAGIC = 0xA11CE5DEADBEEF01ULL;
-    GenerateStreamPtr         sharedThis() {
+    GenerateStreamPtr sharedThis() {
+        // stream construct happen with make_shared, and hold in scheduler
         return shared_from_this();
     }
 
@@ -208,18 +209,10 @@ public:
     void    setInitialReuseLength(int initial_reuse_length);
     void    incLastOutputPos();
     void    setPrefillReuseLength(int64_t total, int64_t local, int64_t remote, int64_t memory);
-    int64_t prefillTotalReuseLen() const {
-        return prefill_total_reuse_len_;
-    }
-    int64_t prefillLocalReuseLen() const {
-        return prefill_local_reuse_len_;
-    }
-    int64_t prefillRemoteReuseLen() const {
-        return prefill_remote_reuse_len_;
-    }
-    int64_t prefillMemoryReuseLen() const {
-        return prefill_memory_reuse_len_;
-    }
+    int64_t prefillTotalReuseLen() const;
+    int64_t prefillLocalReuseLen() const;
+    int64_t prefillRemoteReuseLen() const;
+    int64_t prefillMemoryReuseLen() const;
 
     bool                      isContextStream() const;
     const rtp_llm::BufferPtr& cumLogProbs() const;
@@ -566,7 +559,7 @@ protected:
     int                                  remote_reuse_length_  = 0;
     int                                  memory_reuse_length_  = 0;
     int                                  reuse_mm_length_      = 0;
-    // prefill reuse info (returned from prefill to decode)
+    // prefill reuse info (PD-sep); read/write only under output_mutex_
     int64_t prefill_total_reuse_len_   = 0;
     int64_t prefill_local_reuse_len_   = 0;
     int64_t prefill_remote_reuse_len_  = 0;
