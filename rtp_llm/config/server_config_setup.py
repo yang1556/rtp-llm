@@ -206,23 +206,32 @@ def set_parallelism_config(
             n = world_size
         parallelism_config.local_world_size = max(n, 1)
 
-    # The default value of ep_size is 0, meaning EP is not explicitly configured.
-    # When ep_size == 0, fall back to the original behavior: ep_size = tp_size * dp_size.
-    # When ep_size == 1, it indicates pure TP mode, which requires tp_size > 1, dp_size == 1.
-    if parallelism_config.ep_size == 1:
-        assert parallelism_config.tp_size >= 1, (
-            f"Pure TP mode (ep_size=1) requires tp_size >= 1, got tp_size={parallelism_config.tp_size}"
+    # Validate parallelism configuration: three valid modes
+    # 1. Single GPU mode: tp_size == 1, dp_size == 1, ep_size == 1
+    # 2. Pure TP mode: tp_size > 1, dp_size == 1, ep_size == 1
+    # 3. EP mode: ep_size > 1, ep_size == tp_size * dp_size
+    tp_size = parallelism_config.tp_size
+    dp_size = parallelism_config.dp_size
+    ep_size = parallelism_config.ep_size
+
+    if ep_size == 1:
+        # Single GPU mode or Pure TP mode: ep_size == 1 requires dp_size == 1
+        assert dp_size == 1, (
+            f"When ep_size=1 (single GPU or pure TP mode), dp_size must be 1, got dp_size={dp_size}"
         )
-        assert parallelism_config.dp_size == 1, (
-            f"Pure TP mode (ep_size=1) requires dp_size == 1, got dp_size={parallelism_config.dp_size}"
+    elif ep_size > 1:
+        # EP mode: ep_size must equal tp_size * dp_size
+        assert ep_size == tp_size * dp_size, (
+            f"EP mode requires ep_size == tp_size * dp_size, "
+            f"got ep_size={ep_size}, tp_size={tp_size}, dp_size={dp_size}"
         )
-    elif parallelism_config.ep_size == 0:
-        logging.info("parallelism_config.ep_size == 0, auto set to world size")
-        parallelism_config.ep_size = parallelism_config.world_size
-        parallelism_config.ep_size = parallelism_config.tp_size * parallelism_config.dp_size
     else:
-        assert parallelism_config.ep_size == parallelism_config.tp_size * parallelism_config.dp_size, (
-            f"ep_size must be equal to 1 or tp_size * dp_size, got ep_size={parallelism_config.ep_size}, tp_size={parallelism_config.tp_size}, dp_size={parallelism_config.dp_size}"
+        raise ValueError(
+            f"Invalid ep_size={ep_size} (tp_size={tp_size}, dp_size={dp_size}). "
+            f"ep_size must be >= 1. Supported modes: "
+            f"single GPU (tp_size=1, dp_size=1, ep_size=1), "
+            f"pure TP (tp_size>1, dp_size=1, ep_size=1), "
+            f"EP (ep_size>1 and ep_size==tp_size*dp_size)"
         )
 
     ffn_tp_size = parallelism_config.tp_size // parallelism_config.ffn_sp_size

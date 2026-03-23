@@ -24,8 +24,8 @@ def init_parallel_group_args(
         env_name="EP_SIZE",
         bind_to=(parallelism_config, "ep_size"),
         type=int,
-        default=0,
-        help="定义用于专家并行（Expert Parallelism）的模型（专家）实例数量。未设置时默认 1，多进程时由配置阶段按 TP*DP*PP 推导。",
+        default=1,
+        help="定义用于专家并行（Expert Parallelism）的模型（专家）实例数量。默认 1 表示纯 TP 或单卡模式；EP 模式需设置为 tp_size * dp_size。",
     )
     parallel_group.add_argument(
         "--dp_size",

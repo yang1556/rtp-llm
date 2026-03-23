@@ -104,6 +104,7 @@ class GenerateConfigTest(TestCase):
         {
             "TP_SIZE": "4",
             "DP_SIZE": "2",
+            "EP_SIZE": "8",
             "PP_SIZE": "1",
             "WORLD_SIZE": "8",
             "WORLD_RANK": "0",

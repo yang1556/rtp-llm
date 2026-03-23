@@ -182,8 +182,11 @@ class WeightConverter:
                 else pc.world_size
             )
             pc.local_world_size = max(min(n, pc.world_size), 1)
-        if pc.ep_size == 1 and pc.tp_size * pc.dp_size > 1:
-            pc.ep_size = pc.tp_size * pc.dp_size
+        if pc.ep_size > 1:
+            assert pc.ep_size == pc.tp_size * pc.dp_size, (
+                f"EP mode requires ep_size == tp_size * dp_size, "
+                f"got ep_size={pc.ep_size}, tp_size={pc.tp_size}, dp_size={pc.dp_size}"
+            )
 
         pc.tp_rank = _env_int("TP_RANK", pc.world_rank % pc.tp_size)
         pc.dp_rank = _env_int("DP_RANK", pc.world_rank // pc.tp_size)
