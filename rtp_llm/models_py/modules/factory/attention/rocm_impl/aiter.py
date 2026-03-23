@@ -526,6 +526,7 @@ class AiterDecodeAttnOpBase:
         self.head_dim = attn_configs.size_per_head
         self.head_num_kv = attn_configs.kv_head_num
         self.tokens_per_block = attn_configs.kernel_tokens_per_block
+        self.max_seq_len = attn_configs.max_seq_len
         self.enable_cuda_graph = True
 
     def support(self, attn_inputs: PyAttentionInputs) -> bool:
@@ -736,7 +737,7 @@ class AiterDecodeAttnOpTriton(AiterDecodeAttnOpBase):
         return True
 
     def forward(
-        self, query: torch.Tensor, kv_cache: Optional[KVCache], fmha_params
+        self, query: torch.Tensor, kv_cache: Optional[LayerKVCache], fmha_params
     ) -> torch.Tensor:
         num_seqs = query.shape[0]
         paged_kv_cache = self.reshape_kv_cache(kv_cache.kv_cache_base)
@@ -894,7 +895,7 @@ class AiterPrefillImplPaged(FMHAImplBase):
     def forward(
         self,
         qkv: torch.Tensor,
-        kv_cache: Optional[KVCache],
+        kv_cache: Optional[LayerKVCache],
     ) -> torch.Tensor:
         cu_seqlens_q = self.fmha_params.cu_seqlens_q
         batch_size = cu_seqlens_q.shape[0] - 1
@@ -944,10 +945,12 @@ class AiterDecodeImplBase(FMHAImplBase):
         self.fmha_params.fillParams(
             attn_inputs.sequence_lengths,
             attn_inputs.input_lengths,
-            attn_inputs.kv_cache_block_id_host,
-            attn_inputs.kv_cache_block_id_device,
+            attn_inputs.kv_cache_kernel_block_id_host,
+            attn_inputs.kv_cache_kernel_block_id_device,
         )
-        self.rope_params.update_kv_cache_offset(attn_inputs.kv_cache_block_id_device)
+        self.rope_params.update_kv_cache_offset(
+            attn_inputs.kv_cache_kernel_block_id_device
+        )
 
 
 class AiterDecodeImplAsm(AiterDecodeImplBase):
@@ -1070,7 +1073,7 @@ class AiterDecodeImplTriton(AiterDecodeImplBase):
     def forward(
         self,
         qkv: torch.Tensor,
-        kv_cache: Optional[KVCache],
+        kv_cache: Optional[LayerKVCache],
     ) -> torch.Tensor:
         if self.need_rope_kv_cache:
             fmha_input = self.rope_kvcache_impl.forward(qkv, kv_cache, self.rope_params)
