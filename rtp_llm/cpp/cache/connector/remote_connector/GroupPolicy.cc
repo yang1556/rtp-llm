@@ -117,8 +117,13 @@ bool DefaultLayerGroupPolicy::getNeedWriteGroups(const std::shared_ptr<KVCacheRe
                                                  std::vector<std::string>& location_spec_group_names) const {
     const auto& group_block_ids = resource->groupBlocks();
     const auto& cache_keys      = resource->cacheKeys();
-    location_spec_group_names.reserve(cache_keys.size());
-    for (size_t key_idx = 0; key_idx < cache_keys.size(); key_idx++) {
+    assert(!cache_keys.empty());
+    size_t valid_keys_size = cache_keys.size();
+    if (!resource->lastBlockAligned()) {
+        valid_keys_size--;
+    }
+    location_spec_group_names.reserve(valid_keys_size);
+    for (size_t key_idx = 0; key_idx < valid_keys_size; key_idx++) {
         uint64_t groups_name_bithash = 0;
         for (const auto& [group_idx, group] : groups_) {
             const auto gpu_block_idx = group_block_ids.at(group_idx)->blocks().at(key_idx);
@@ -249,11 +254,16 @@ bool FullOtherGroupPolicy::getNeedWriteGroups(const std::shared_ptr<KVCacheResou
         return false;
     }
     const auto& cache_keys = resource->cacheKeys();
-    location_spec_group_names.resize(cache_keys.size(), {});
+    assert(!cache_keys.empty());
+    size_t valid_keys_size = cache_keys.size();
+    if (!resource->lastBlockAligned()) {
+        valid_keys_size--;
+    }
+    location_spec_group_names.resize(valid_keys_size, {});
     bool   exist_full_other  = false;
     size_t count             = write_interval_;
     bool   is_all_full_other = true;
-    for (size_t key_idx = cache_keys.size(); key_idx-- > 0;) {
+    for (size_t key_idx = valid_keys_size; key_idx-- > 0;) {
         uint64_t groups_name_bithash = 0;
         for (const auto& [group_idx, group] : groups_) {
             const auto gpu_block_idx = group_block_ids.at(group_idx)->blocks().at(key_idx);
