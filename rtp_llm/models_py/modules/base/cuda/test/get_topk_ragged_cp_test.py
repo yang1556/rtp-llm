@@ -61,8 +61,6 @@ class GetTopkRaggedCPTest(TestCase):
         rope_head_dim = 64
         total_tokens = 8
         chunk_lengths = [8]
-        cp_rank = 0
-        cp_size = 1
 
         op = IndexerOp(
             index_n_heads=index_n_heads,
@@ -73,15 +71,11 @@ class GetTopkRaggedCPTest(TestCase):
             blocksize=64,
             block_size=block_size,
         )
-        op.kv_len = total_tokens
-        op.total_kv_len = total_tokens
 
         device = self.device
-        op.total_local_ids = torch.arange(total_tokens, device=device, dtype=torch.long)
-        op.total_global_ids = torch.arange(
-            total_tokens, device=device, dtype=torch.long
-        )
-        op.cu_kv_seqlens_global = torch.tensor(
+        total_local_ids = torch.arange(total_tokens, device=device, dtype=torch.long)
+        total_global_ids = torch.arange(total_tokens, device=device, dtype=torch.long)
+        cu_kv_seqlens_global = torch.tensor(
             [0, total_tokens], dtype=torch.int32, device=device
         )
         q_fp8 = torch.randn(
@@ -136,13 +130,8 @@ class GetTopkRaggedCPTest(TestCase):
         fmha_params.expanded_seq_lens = expanded_seq_lens
         fmha_params.topk_indices_offset = topk_indices_offset
 
-        # Set q0/q1 indices and global indices (required by _get_topk_ragged_cp)
-        q0_idx_list, q1_idx_list = generate_q_indices(chunk_lengths)
-        op.q0_idx = torch.tensor(q0_idx_list, device=device, dtype=torch.long)
-        op.q1_idx = torch.tensor(q1_idx_list, device=device, dtype=torch.long)
-        local_tokens = sum(chunk_lengths)
-        op.q0_idx_global = cp_rank * local_tokens + op.q0_idx
-        op.q1_idx_global = cp_rank * local_tokens + op.q1_idx
+        q0_idx_list, _q1_idx_list = generate_q_indices(chunk_lengths)
+        n0 = len(q0_idx_list)
 
         topk_result = op._get_topk_ragged_cp(
             q_fp8,
@@ -150,10 +139,11 @@ class GetTopkRaggedCPTest(TestCase):
             kv_cache,
             fmha_params,
             attn_inputs,
-            cp_rank,
-            cp_size,
+            total_local_ids,
+            total_global_ids,
+            cu_kv_seqlens_global,
+            total_tokens,
         )
-        n0 = op.q0_idx.size(0)
         topk0 = topk_result[:n0]
         topk1 = topk_result[n0:]
 
