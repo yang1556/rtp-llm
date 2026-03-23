@@ -636,6 +636,11 @@ class PyFlashinferDecodeImpl(FMHAImplBase):
     def prepare_cuda_graph(self, attn_inputs: PyAttentionInputs) -> None:
         """Prepare for CUDA graph replay; forbids buffer realloc to match capture."""
         self.fmha_impl.prepare(attn_inputs, forbid_realloc=True)
+        # Update rope params for correct position encoding during cuda graph replay
+        new_rope_params = self.rope_impl.prepare(attn_inputs)
+        common.copy_kv_cache_offset(
+            self.rope_params.kv_cache_offset, new_rope_params.kv_cache_offset
+        )
 
     def support_cuda_graph(self) -> bool:
         return True
