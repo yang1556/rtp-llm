@@ -172,9 +172,9 @@ std::shared_ptr<RemoteConnector> KVCacheConnectorCoordinator::initRemoteConnecto
 #ifdef USE_REMOTE_KV_CACHE
     // TODO(zhaotaonan.ztn) 这里不应该写死
     RemoteConnectorGroupMode connectorGroupMode = RemoteConnectorGroupMode::RCGM_LAYER_DEFAULT;
-    connectorGroupMode = RemoteConnectorGroupMode::RCGM_FULL_LINEAR_LAYER;
+    connectorGroupMode                          = RemoteConnectorGroupMode::RCGM_FULL_LINEAR_LAYER;
     // TODO(zhaotaonan.ztn) 从param里获取
-    std::vector<int32_t> full_group_ids = {0}
+    std::vector<int32_t> full_group_ids  = {0};
     std::vector<int32_t> other_group_ids = {1, 2, 3};
 
     // TODO : get lora info map
