@@ -15,25 +15,25 @@
 namespace rtp_llm {
 namespace {
 // Helper function to prepare prefix prompt param and padding offset, then invoke the kernel
-void invokeFusedQKVBiasTransposeHelper(const torch::Tensor&              qkv,
-                                       std::optional<torch_ext::KVCache> kv_cache,
-                                       const TRTAttnPtr&                 params,
-                                       const AttentionConfigs&           attn_configs,
-                                       CudaDevice*                       device,
-                                       void*                             q_no_transpose_output,
-                                       void*                             q_output,
-                                       void*                             qkv_fp8_output,
-                                       int                               token_num,
-                                       int                               batch_size,
-                                       int                               local_head_num,
-                                       int                               local_head_num_kv,
-                                       int                               size_per_head,
-                                       bool                              use_paged_attention,
-                                       bool                              store_qkv,
-                                       bool                              store_q_no_transpose,
-                                       bool                              store_q,
-                                       bool                              store_kv,
-                                       bool                              store_cache) {
+void invokeFusedQKVBiasTransposeHelper(const torch::Tensor&                   qkv,
+                                       std::optional<torch_ext::LayerKVCache> kv_cache,
+                                       const TRTAttnPtr&                      params,
+                                       const AttentionConfigs&                attn_configs,
+                                       CudaDevice*                            device,
+                                       void*                                  q_no_transpose_output,
+                                       void*                                  q_output,
+                                       void*                                  qkv_fp8_output,
+                                       int                                    token_num,
+                                       int                                    batch_size,
+                                       int                                    local_head_num,
+                                       int                                    local_head_num_kv,
+                                       int                                    size_per_head,
+                                       bool                                   use_paged_attention,
+                                       bool                                   store_qkv,
+                                       bool                                   store_q_no_transpose,
+                                       bool                                   store_q,
+                                       bool                                   store_kv,
+                                       bool                                   store_cache) {
     PrefixPromptBatchWeightsParam prefix_prompt_param;
     if (kv_cache.has_value()) {
         auto kv_block_array            = params->kv_block_array;
@@ -73,7 +73,7 @@ void invokeFusedQKVBiasTransposeHelper(const torch::Tensor&              qkv,
         qkv.data_ptr(),
         qkv_fp8_output,
         position_ids,  // position_ids
-        nullptr,  // qkv_bias
+        nullptr,       // qkv_bias
         padding_offset,
         params->cu_seqlens.data_ptr<int>(),
         rope_cache.used,
@@ -103,15 +103,15 @@ FusedRopeKVCachePrefillOpBase::FusedRopeKVCachePrefillOpBase(const AttentionConf
 
 TRTAttnPtr FusedRopeKVCachePrefillOpBase::prepare(torch_ext::PyAttentionInputs attn_inputs) {
     int       batch_size = attn_inputs.input_lengths.size(0);
-    BufferPtr kv_cache_block_id_host, kv_cache_block_id_device;
-    if (attn_inputs.kv_cache_block_id_host.defined() && attn_inputs.kv_cache_block_id_host.numel() > 0) {
-        kv_cache_block_id_host   = torchTensor2Buffer(attn_inputs.kv_cache_block_id_host);
-        kv_cache_block_id_device = torchTensor2Buffer(attn_inputs.kv_cache_block_id_device);
+    BufferPtr kv_cache_kernel_block_id_host, kv_cache_kernel_block_id_device;
+    if (attn_inputs.kv_cache_kernel_block_id_host.defined() && attn_inputs.kv_cache_kernel_block_id_host.numel() > 0) {
+        kv_cache_kernel_block_id_host   = torchTensor2Buffer(attn_inputs.kv_cache_kernel_block_id_host);
+        kv_cache_kernel_block_id_device = torchTensor2Buffer(attn_inputs.kv_cache_kernel_block_id_device);
     }
 
     TRTAttnPtr attn_params;
     // TODO: should not use device to do that, we will change it later
-    auto params = device_->prepareTrtAttn(attn_configs_, kv_cache_block_id_device, batch_size);
+    auto params = device_->prepareTrtAttn(attn_configs_, kv_cache_kernel_block_id_device, batch_size);
     if (params) {
         attn_params = TRTAttnPtr(params, (TRTAttn*)params.get());
     } else {
@@ -125,10 +125,10 @@ TRTAttnPtr FusedRopeKVCachePrefillOpBase::prepare(torch_ext::PyAttentionInputs a
     attn_params->prefix_lengths            = attn_inputs.prefix_lengths;
     attn_params->kv_block_array.cache_type = attn_configs_.kv_cache_dtype;
     attn_params->padding_offset            = attn_inputs.padding_offset;
-    
+
     if (attn_inputs.context_parallel_info.has_value()
-    && attn_inputs.context_parallel_info->prefill_shuffle_indices.defined()) {
-    attn_params->cp_position_ids = attn_inputs.context_parallel_info->prefill_shuffle_indices;
+        && attn_inputs.context_parallel_info->prefill_shuffle_indices.defined()) {
+        attn_params->cp_position_ids = attn_inputs.context_parallel_info->prefill_shuffle_indices;
     }
     return attn_params;
 }
@@ -136,9 +136,9 @@ TRTAttnPtr FusedRopeKVCachePrefillOpBase::prepare(torch_ext::PyAttentionInputs a
 FusedRopeKVCachePrefillOpQOut::FusedRopeKVCachePrefillOpQOut(const AttentionConfigs& attn_configs):
     FusedRopeKVCachePrefillOpBase(attn_configs) {}
 
-torch::Tensor FusedRopeKVCachePrefillOpQOut::forward(const torch::Tensor&              qkv,
-                                                     std::optional<torch_ext::KVCache> kv_cache,
-                                                     const TRTAttnPtr&                 params) {
+torch::Tensor FusedRopeKVCachePrefillOpQOut::forward(const torch::Tensor&                   qkv,
+                                                     std::optional<torch_ext::LayerKVCache> kv_cache,
+                                                     const TRTAttnPtr&                      params) {
     const int     local_head_num    = attn_configs_.head_num;
     const int     local_head_num_kv = attn_configs_.kv_head_num;
     const int     size_per_head     = attn_configs_.size_per_head;
@@ -175,9 +175,9 @@ torch::Tensor FusedRopeKVCachePrefillOpQOut::forward(const torch::Tensor&       
 FusedRopeKVCachePrefillOpQKVOut::FusedRopeKVCachePrefillOpQKVOut(const AttentionConfigs& attn_configs):
     FusedRopeKVCachePrefillOpBase(attn_configs) {}
 
-torch::Tensor FusedRopeKVCachePrefillOpQKVOut::forward(const torch::Tensor&              qkv,
-                                                       std::optional<torch_ext::KVCache> kv_cache,
-                                                       const TRTAttnPtr&                 params) {
+torch::Tensor FusedRopeKVCachePrefillOpQKVOut::forward(const torch::Tensor&                   qkv,
+                                                       std::optional<torch_ext::LayerKVCache> kv_cache,
+                                                       const TRTAttnPtr&                      params) {
     const int local_head_num    = attn_configs_.head_num;
     const int local_head_num_kv = attn_configs_.kv_head_num;
     const int size_per_head     = attn_configs_.size_per_head;
@@ -211,16 +211,16 @@ FusedRopeKVCacheDecodeOp::FusedRopeKVCacheDecodeOp(const AttentionConfigs& attn_
 
 TRTAttnPtr FusedRopeKVCacheDecodeOp::prepare(torch_ext::PyAttentionInputs attn_inputs) {
     int       batch_size = attn_inputs.sequence_lengths.size(0);
-    BufferPtr kv_cache_block_id_host, kv_cache_block_id_device;
-    if (attn_inputs.kv_cache_block_id_host.defined() && attn_inputs.kv_cache_block_id_host.numel() > 0) {
-        kv_cache_block_id_host   = torchTensor2Buffer(attn_inputs.kv_cache_block_id_host);
-        kv_cache_block_id_device = torchTensor2Buffer(attn_inputs.kv_cache_block_id_device);
+    BufferPtr kv_cache_kernel_block_id_host, kv_cache_kernel_block_id_device;
+    if (attn_inputs.kv_cache_kernel_block_id_host.defined() && attn_inputs.kv_cache_kernel_block_id_host.numel() > 0) {
+        kv_cache_kernel_block_id_host   = torchTensor2Buffer(attn_inputs.kv_cache_kernel_block_id_host);
+        kv_cache_kernel_block_id_device = torchTensor2Buffer(attn_inputs.kv_cache_kernel_block_id_device);
     }
     // not support has_alibi_slopes
 
     TRTAttnPtr attn_params;
     auto       params =
-        device_->prepareTrtAttn(attn_configs_, kv_cache_block_id_device, attn_inputs.sequence_lengths.size(0));
+        device_->prepareTrtAttn(attn_configs_, kv_cache_kernel_block_id_device, attn_inputs.sequence_lengths.size(0));
     RTP_LLM_CHECK_WITH_INFO(params != nullptr, "TRTAttnPtr Build Failed");
     attn_params                            = TRTAttnPtr(params, (TRTAttn*)params.get());
     attn_params->decode_plan               = true;
@@ -233,9 +233,9 @@ TRTAttnPtr FusedRopeKVCacheDecodeOp::prepare(torch_ext::PyAttentionInputs attn_i
     return attn_params;
 }
 
-torch::Tensor FusedRopeKVCacheDecodeOp::forward(const torch::Tensor&              qkv,
-                                                std::optional<torch_ext::KVCache> kv_cache,
-                                                const TRTAttnPtr&                 params) {
+torch::Tensor FusedRopeKVCacheDecodeOp::forward(const torch::Tensor&                   qkv,
+                                                std::optional<torch_ext::LayerKVCache> kv_cache,
+                                                const TRTAttnPtr&                      params) {
     RTP_LLM_CHECK_WITH_INFO(kv_cache.has_value(), "decode should have kv cache.");
     auto kv_block_array            = params->kv_block_array;
     kv_block_array.mPrimaryPoolPtr = kv_cache.value().kv_cache_base.data_ptr();

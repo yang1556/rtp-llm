@@ -48,6 +48,9 @@ class TestCudaGraphDecodePadding(unittest.TestCase):
         model = build_result.model
         self.model_config = build_result.model_config
         self.compute_dtype = build_result.compute_dtype
+        self.kernel_tokens_per_block = int(
+            build_result.model_config.attn_config.kernel_tokens_per_block
+        )
         self.layer_num = build_result.layer_num
         self.block_nums = build_result.block_nums
         self.kv_cache = build_result.kv_cache
@@ -66,6 +69,7 @@ class TestCudaGraphDecodePadding(unittest.TestCase):
             hidden_size,
             self.max_seq_len,
             self.tokens_per_block,
+            self.kernel_tokens_per_block,
             self.decode_capture_batch_sizes,
         )
         print(f"CUDA Graph initialized with batch sizes: 1 to {self.max_batch_size}")
@@ -119,8 +123,14 @@ class TestCudaGraphDecodePadding(unittest.TestCase):
         block_ids = torch.arange(
             1, num_blocks + 1, dtype=torch.int32, device="cuda"
         ).view(batch_size, block_num)
+        attention_inputs.kv_cache_kernel_block_id_device = block_ids
+        attention_inputs.kv_cache_kernel_block_id_host = block_ids.cpu()
+
+        # Keep legacy fields in sync for compatibility with non-cuda-graph paths.
         attention_inputs.kv_cache_block_id_device = block_ids
-        attention_inputs.kv_cache_block_id_host = block_ids.cpu()
+        attention_inputs.kv_cache_block_id_host = (
+            attention_inputs.kv_cache_kernel_block_id_host
+        )
 
         # padding_offset
         attention_inputs.padding_offset = torch.zeros(
@@ -147,12 +157,12 @@ class TestCudaGraphDecodePadding(unittest.TestCase):
         inputs = self.build_inputs(
             batch_size,
             self.max_seq_len,
-            self.tokens_per_block,
+            self.kernel_tokens_per_block,
         )
         inputs2 = self.build_inputs(
             batch_size,
             self.max_seq_len,
-            self.tokens_per_block,
+            self.kernel_tokens_per_block,
         )
 
         # Ensure inputs can run with CUDA graph before calling forward
