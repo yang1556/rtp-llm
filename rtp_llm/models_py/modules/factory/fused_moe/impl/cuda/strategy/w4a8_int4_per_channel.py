@@ -28,6 +28,8 @@ class CudaW4a8Int4PerChannelNoDPStrategy(MoeStrategy):
         quant_method = resolver.get_quant_method(config)
         checker.check(quant_method == "W4A8_INT4_PER_CHANNEL")
         checker.check(config.moe_strategy == "w4a8_int4_per_channel_no_dp" or config.moe_strategy == "auto")
+        # Only handle layers that should use W4A8 (default: all layers; mixed precision: layer_idx < w4a8_max_layer_num)
+        checker.check(resolver.is_mixed_precision_w4a8_layer(config))
 
     def get_attributes(self) -> StrategyAttributes:
         from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutlass_w4a8_moe import (
@@ -57,6 +59,8 @@ class CudaW4a8Int4PerChannelEpLowLatencyStrategy(MoeStrategy):
         quant_method = resolver.get_quant_method(config)
         checker.check(quant_method == "W4A8_INT4_PER_CHANNEL")
         checker.check(config.moe_strategy == "w4a8_int4_per_channel_ep_low_latency" or config.moe_strategy == "auto")
+        # Only handle layers that should use W4A8 (default: all layers; mixed precision: layer_idx < w4a8_max_layer_num)
+        checker.check(resolver.is_mixed_precision_w4a8_layer(config))
 
     def get_attributes(self) -> StrategyAttributes:
         from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutlass_w4a8_moe import (
@@ -86,6 +90,8 @@ class CudaW4a8Int4PerChannelEpNormalStrategy(MoeStrategy):
         quant_method = resolver.get_quant_method(config)
         checker.check(quant_method == "W4A8_INT4_PER_CHANNEL")
         checker.check(config.moe_strategy == "w4a8_int4_per_channel_ep_normal" or config.moe_strategy == "auto")
+        # Only handle layers that should use W4A8 (default: all layers; mixed precision: layer_idx < w4a8_max_layer_num)
+        checker.check(resolver.is_mixed_precision_w4a8_layer(config))
 
     def get_attributes(self) -> StrategyAttributes:
         from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutlass_w4a8_moe import (

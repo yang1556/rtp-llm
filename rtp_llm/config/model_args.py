@@ -28,6 +28,7 @@ class ModelArgs:
         "mla_ops_type",
         "json_model_override_args",
         "phy2log_path",
+        "w4a8_max_layer_num",
     ]
 
     def __init__(self):
@@ -57,3 +58,9 @@ class ModelArgs:
 
         # EPLB config
         self.phy2log_path: str = ""
+
+        # Mixed precision MoE config
+        # Layer index less than this value uses W4A8_INT4_PER_CHANNEL quantization,
+        # layer index >= this value uses FP8_DYNAMIC_PER_TENSOR quantization.
+        # -1 means disabled (no mixed precision).
+        self.w4a8_max_layer_num: int = -1

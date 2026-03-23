@@ -42,6 +42,7 @@ class GenericMoeLayer(nn.Module):
         max_generate_batch_size: int = 0,
         enable_cuda_graph: bool = False,
         hw_kernel_config: Optional["HWKernelConfig"] = None,
+        layer_idx: Optional[int] = None,
     ):
         super().__init__()
         self.config = config
@@ -70,6 +71,7 @@ class GenericMoeLayer(nn.Module):
             moe_config=moe_config,
             quant_config=quant_config,
             enable_cuda_graph=enable_cuda_graph,
+            layer_idx=layer_idx,
         )
         self.fused_moe = FusedMoeFactory().create_fused_moe(config_adapter, weights)
 
@@ -221,6 +223,7 @@ class GenericMoeDecoderLayer(nn.Module):
                 moe_config,
                 max_generate_batch_size,
                 enable_cuda_graph=enable_cuda_graph,
+                layer_idx=layer_idx,
             )
 
         # 使用 RMSResNorm 来 fuse residual add 和 layernorm

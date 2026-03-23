@@ -122,3 +122,49 @@ class MoeConfigResolver:
             Whether use_all_gather is enabled
         """
         return config.moe_config.use_all_gather if config.moe_config else True
+
+    @staticmethod
+    def is_mixed_precision_w4a8_layer(config: MoEConfigAdapter) -> bool:
+        """Check if this layer should use W4A8_INT4_PER_CHANNEL quantization.
+
+        Default behavior (w4a8_max_layer_num < 0): all layers use W4A8_INT4_PER_CHANNEL.
+        When w4a8_max_layer_num >= 0: only layers with layer_idx < w4a8_max_layer_num
+        use W4A8_INT4_PER_CHANNEL; layers with layer_idx >= w4a8_max_layer_num
+        fall back to FP8_DYNAMIC_PER_TENSOR.
+
+        Args:
+            config: MOE configuration adapter
+
+        Returns:
+            True if this layer should use W4A8_INT4_PER_CHANNEL quantization
+        """
+        w4a8_max_layer_num = config.w4a8_max_layer_num
+        if w4a8_max_layer_num < 0:
+            # Mixed precision disabled: all layers use W4A8_INT4_PER_CHANNEL (default)
+            return True
+        layer_idx = config.layer_idx
+        if layer_idx is None:
+            # layer_idx not set, fall back to W4A8
+            return True
+        return layer_idx < w4a8_max_layer_num
+
+    @staticmethod
+    def is_mixed_precision_fp8_layer(config: MoEConfigAdapter) -> bool:
+        """Check if this layer should use FP8_DYNAMIC_PER_TENSOR in mixed precision mode.
+
+        When w4a8_max_layer_num is set (>= 0) and quant_method is W4A8_INT4_PER_CHANNEL,
+        layers with layer_idx >= w4a8_max_layer_num fall back to FP8_DYNAMIC_PER_TENSOR.
+
+        Args:
+            config: MOE configuration adapter
+
+        Returns:
+            True if this layer should use FP8_DYNAMIC_PER_TENSOR quantization
+        """
+        w4a8_max_layer_num = config.w4a8_max_layer_num
+        if w4a8_max_layer_num < 0:
+            return False
+        layer_idx = config.layer_idx
+        if layer_idx is None:
+            return False
+        return layer_idx >= w4a8_max_layer_num

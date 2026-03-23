@@ -23,6 +23,7 @@ class MoEConfigAdapter:
         moe_config: Optional[MoeConfig] = None,
         quant_config: Optional[QuantizationConfig] = None,
         enable_cuda_graph: bool = False,
+        layer_idx: Optional[int] = None,
     ):
         self.model_config = model_config
         self.parallelism_config = parallelism_config
@@ -46,10 +47,16 @@ class MoEConfigAdapter:
         self.hidden_size = model_config.hidden_size
         self.data_type = model_config.data_type
         self.head_num = model_config.attn_config.head_num
-        self.ll_num_max_token = moe_config.ll_num_max_token
-        self.masked_max_token_num = moe_config.masked_max_token_num
-        self.moe_strategy = moe_config.moe_strategy
+        self.ll_num_max_token = moe_config.ll_num_max_token if moe_config else 0
+        self.masked_max_token_num = moe_config.masked_max_token_num if moe_config else 0
+        self.moe_strategy = (self.moe_config.moe_strategy
+                             if self.moe_config else "auto")
         self.enable_cuda_graph = enable_cuda_graph
+
+        # Layer index for mixed precision support
+        self.layer_idx: Optional[int] = layer_idx
+        # w4a8_max_layer_num from model_config (for mixed precision MoE)
+        self.w4a8_max_layer_num: int = getattr(model_config, 'w4a8_max_layer_num', -1)
 
     @property
     def activation_type(self):

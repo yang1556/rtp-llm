@@ -71,6 +71,7 @@ class ModelConfig(CppModelConfig):
         "generate_env_config",
         "render_config",
         "phy2log_path",
+        "w4a8_max_layer_num",
     }
 
     # Known C++ ModelConfig members (from ModelConfig.h)
@@ -507,6 +508,10 @@ class ModelConfig(CppModelConfig):
         self.render_config: Optional[Any] = None  # RenderConfig for renderer factory
         self.mm_related_params = VitParameters()
         self.quant_config = None
+        # Mixed precision MoE config: layer index < w4a8_max_layer_num uses W4A8_INT4_PER_CHANNEL,
+        # layer index >= w4a8_max_layer_num uses FP8_DYNAMIC_PER_TENSOR.
+        # -1 means disabled.
+        self.w4a8_max_layer_num: int = -1
 
     def apply_override_args(self, json_model_override_args: str) -> None:
         """Apply model override arguments to ModelConfig.
@@ -833,3 +838,10 @@ def build_model_config(
     # Apply model override args
     if model_args.json_model_override_args:
         model_config.apply_override_args(model_args.json_model_override_args)
+
+    # Apply w4a8_max_layer_num for mixed precision MoE
+    if hasattr(model_args, 'w4a8_max_layer_num') and model_args.w4a8_max_layer_num >= 0:
+        model_config.w4a8_max_layer_num = model_args.w4a8_max_layer_num
+        logging.info(f"w4a8_max_layer_num set to {model_args.w4a8_max_layer_num}: "
+                     f"MoE layers < {model_args.w4a8_max_layer_num} use W4A8_INT4_PER_CHANNEL, "
+                     f">= {model_args.w4a8_max_layer_num} use FP8_DYNAMIC_PER_TENSOR")

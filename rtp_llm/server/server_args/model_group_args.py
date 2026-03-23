@@ -93,3 +93,11 @@ def init_model_group_args(parser, model_args):
         default=None,
         help="最大序列长度",
     )
+    model_group.add_argument(
+        "--w4a8_max_layer_num",
+        env_name="W4A8_MAX_LAYER_NUM",
+        bind_to=(model_args, "w4a8_max_layer_num"),
+        type=int,
+        default=-1,
+        help="MoE混合精度推理的层号阈值，layer_num < 此值使用W4A8_INT4_PER_CHANNEL量化，layer_num >= 此值使用FP8_DYNAMIC_PER_TENSOR量化，-1表示禁用混合精度",
+    )

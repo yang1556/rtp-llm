@@ -235,6 +235,8 @@ class ModelDeployWeightInfo:
 
         self.tie_word_embeddings = model_config.tie_word_embeddings
         self.weight_style = WeightStyle.NONE
+        # Mixed precision MoE config
+        self.w4a8_max_layer_num_ = getattr(model_config, 'w4a8_max_layer_num', -1)
 
         # for mla
         self.kv_lora_rank = model_config.attn_config.kv_lora_rank
@@ -619,6 +621,7 @@ class ModelDeployWeightInfo:
             exported_device=exported_device,
             use_swizzleA=self._use_swizzleA,
             force_cpu_load_weights=force_cpu_load_weights,
+            w4a8_max_layer_num=self.w4a8_max_layer_num_,
         )
         return load_config
 

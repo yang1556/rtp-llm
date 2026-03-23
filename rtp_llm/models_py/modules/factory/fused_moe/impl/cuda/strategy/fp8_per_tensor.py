@@ -14,6 +14,9 @@ from rtp_llm.models_py.modules.factory.fused_moe.defs.quant_config import (
     FusedMoEQuantConfig,
 )
 from rtp_llm.models_py.modules.factory.fused_moe.defs.strategy_base import MoeStrategy
+from rtp_llm.models_py.modules.factory.fused_moe.utils.config_resolver import (
+    MoeConfigResolver,
+)
 
 
 class CudaFp8PerTensorEpLowLatencyStrategy(MoeStrategy):
@@ -22,6 +25,15 @@ class CudaFp8PerTensorEpLowLatencyStrategy(MoeStrategy):
     @classmethod
     def check_conditions(cls, checker: Any, config: MoEConfigAdapter) -> None:
         checker.check(config.moe_strategy == "fp8_per_tensor_ep_low_latency" or config.moe_strategy == "auto")
+        resolver = MoeConfigResolver()
+        quant_method = resolver.get_quant_method(config)
+        # Support both native FP8 and mixed precision mode (W4A8 model with high layer index)
+        is_native_fp8 = quant_method in ["FP8_PER_TENSOR_COMPRESSED", "FP8_DYNAMIC_PER_TENSOR"]
+        is_mixed_fp8 = (
+            quant_method == "W4A8_INT4_PER_CHANNEL"
+            and resolver.is_mixed_precision_fp8_layer(config)
+        )
+        checker.check(is_native_fp8 or is_mixed_fp8)
 
     def get_attributes(self) -> StrategyAttributes:
         from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutlass_moe import (
@@ -48,6 +60,15 @@ class CudaFp8PerTensorEpNormalStrategy(MoeStrategy):
     @classmethod
     def check_conditions(cls, checker: Any, config: MoEConfigAdapter) -> None:
         checker.check(config.moe_strategy == "fp8_per_tensor_ep_normal" or config.moe_strategy == "auto")
+        resolver = MoeConfigResolver()
+        quant_method = resolver.get_quant_method(config)
+        # Support both native FP8 and mixed precision mode
+        is_native_fp8 = quant_method in ["FP8_PER_TENSOR_COMPRESSED", "FP8_DYNAMIC_PER_TENSOR"]
+        is_mixed_fp8 = (
+            quant_method == "W4A8_INT4_PER_CHANNEL"
+            and resolver.is_mixed_precision_fp8_layer(config)
+        )
+        checker.check(is_native_fp8 or is_mixed_fp8)
 
     def get_attributes(self) -> StrategyAttributes:
         from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutlass_moe import (
@@ -74,6 +95,15 @@ class CudaFp8PerTensorNoDPStrategy(MoeStrategy):
     @classmethod
     def check_conditions(cls, checker: Any, config: MoEConfigAdapter) -> None:
         checker.check(config.moe_strategy == "fp8_per_tensor_no_dp" or config.moe_strategy == "auto")
+        resolver = MoeConfigResolver()
+        quant_method = resolver.get_quant_method(config)
+        # Support both native FP8 and mixed precision mode
+        is_native_fp8 = quant_method in ["FP8_PER_TENSOR_COMPRESSED", "FP8_DYNAMIC_PER_TENSOR"]
+        is_mixed_fp8 = (
+            quant_method == "W4A8_INT4_PER_CHANNEL"
+            and resolver.is_mixed_precision_fp8_layer(config)
+        )
+        checker.check(is_native_fp8 or is_mixed_fp8)
 
     def get_attributes(self) -> StrategyAttributes:
         from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutlass_moe import (

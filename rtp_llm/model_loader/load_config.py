@@ -63,6 +63,9 @@ class LoadConfig(BaseModel):
     phy2log: Optional[List[List[int]]] = None
     use_swizzleA: bool = False
     force_cpu_load_weights: bool = False
+    # Mixed precision MoE: layer_id < w4a8_max_layer_num uses W4A8_INT4_PER_CHANNEL,
+    # layer_id >= w4a8_max_layer_num uses FP8_DYNAMIC_PER_TENSOR. -1 means disabled.
+    w4a8_max_layer_num: int = -1
 
     @field_validator("database", "compute_dtype", "quant_algo", "vit_separation")
     @classmethod
@@ -103,7 +106,7 @@ class LoadConfig(BaseModel):
         expert_per_ep = len(selected_experts) // self.ep_size
         ep_rank = self.ep_rank
         selected_experts = selected_experts[
-            expert_per_ep * ep_rank : expert_per_ep * (ep_rank + 1)
+            expert_per_ep * ep_rank: expert_per_ep * (ep_rank + 1)
         ]
         return selected_experts
 

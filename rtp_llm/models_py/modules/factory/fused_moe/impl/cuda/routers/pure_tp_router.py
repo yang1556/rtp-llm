@@ -164,9 +164,12 @@ class PureTpRouterFp8PerTensor(PureTpRouterBase):
         super().check_conditions(checker, config)
         resolver = MoeConfigResolver()
         quant_method = resolver.get_quant_method(config)
-        checker.check(
-            quant_method in ["FP8_PER_TENSOR_COMPRESSED", "FP8_DYNAMIC_PER_TENSOR"]
+        is_native_fp8 = quant_method in ["FP8_PER_TENSOR_COMPRESSED", "FP8_DYNAMIC_PER_TENSOR"]
+        is_mixed_fp8 = (
+            quant_method == "W4A8_INT4_PER_CHANNEL"
+            and resolver.is_mixed_precision_fp8_layer(config)
         )
+        checker.check(is_native_fp8 or is_mixed_fp8)
 
     def _do_quant(
         self, a1: torch.Tensor

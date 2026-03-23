@@ -160,18 +160,43 @@ class LoadW4a8Int4PerChannelQuantWeight(CompositeWeight, QuantWeight):
             tensor_source, layer_id, device, load_config
         )
         if self.kernel.name in [W.moe_w1, W.moe_w2]:
-            # per expert quant moe w13 and w2 to fp8
+            # Check mixed precision mode: use FP8 for layers >= w4a8_max_layer_num
+            w4a8_max_layer_num = getattr(load_config, 'w4a8_max_layer_num', -1)
+            use_fp8 = (
+                w4a8_max_layer_num >= 0
+                and layer_id is not None
+                and layer_id >= w4a8_max_layer_num
+            )
+
             kernel_tensor = kernel[self.kernel.name]
             assert len(kernel_tensor.shape) == 3
             E = kernel_tensor.shape[0]
             N = kernel_tensor.shape[1]
             K = kernel_tensor.shape[2]
 
-            quant_kernel = torch.empty((E, N, K // 2), device=kernel_tensor.device, dtype=torch.int8)
-            scale = torch.empty((E, K // self.group_size, N, 8), device=kernel_tensor.device, dtype=torch.float8_e4m3fn)
+            if use_fp8:
+                # For layers >= w4a8_max_layer_num: quantize to FP8 per-tensor
+                # This produces per-expert FP8 weights compatible with CutlassExpertsFp8
+                # Keep shape as [E, N, K] (no transpose), scale shape is [E]
+                quant_kernel = torch.empty_like(
+                    kernel_tensor, device=kernel_tensor.device, dtype=torch.float8_e4m3fn
+                )
+                scale = torch.ones(
+                    [E], device=kernel_tensor.device, dtype=torch.float32
+                )
+                for i in range(E):
+                    quant_kernel[i, :, :], scale[i] = quantize_weight_to_fp8(
+                        kernel_tensor[i, :, :], quant_kernel[i, :, :]
+                    )
+            else:
+                # For layers < w4a8_max_layer_num (or when mixed precision disabled):
+                # quantize to W4A8 INT4 per-channel
+                quant_kernel = torch.empty((E, N, K // 2), device=kernel_tensor.device, dtype=torch.int8)
+                scale = torch.empty((E, K // self.group_size, N, 8),
+                                    device=kernel_tensor.device, dtype=torch.float8_e4m3fn)
 
-            for i in range(E):
-                quant_kernel[i, :, :], scale[i] = quantize_weight_to_int4b(kernel_tensor[i, :, :], self.group_size)
+                for i in range(E):
+                    quant_kernel[i, :, :], scale[i] = quantize_weight_to_int4b(kernel_tensor[i, :, :], self.group_size)
 
         else:
             quant_kernel, scale = quantize_weight_to_fp8(kernel.get(self.kernel.name))
