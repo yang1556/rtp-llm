@@ -104,6 +104,7 @@ class Qwen3NextMTP(Qwen3Next):
             fmha_config=fmha_config,
             py_hw_kernel_config=py_hw_kernel_config,
             device_resource_config=self.device_resource_config,
+            profiling_debug_logging_config=self.profiling_debug_logging_config,
         )
 
     @staticmethod
@@ -141,6 +142,7 @@ class Qwen35MoeMTP(Qwen35Moe):
             fmha_config=fmha_config,
             py_hw_kernel_config=py_hw_kernel_config,
             device_resource_config=self.device_resource_config,
+            profiling_debug_logging_config=self.profiling_debug_logging_config,
         )
 
     @staticmethod

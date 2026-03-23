@@ -25,6 +25,7 @@ class Qwen2MtpModel(GptModelBase):
         fmha_config=None,
         py_hw_kernel_config=None,
         device_resource_config=None,
+        profiling_debug_logging_config=None,
     ):
         super().__init__(
             config,
@@ -34,6 +35,7 @@ class Qwen2MtpModel(GptModelBase):
             fmha_config=fmha_config,
             py_hw_kernel_config=py_hw_kernel_config,
             device_resource_config=device_resource_config,
+            profiling_debug_logging_config=profiling_debug_logging_config,
         )
 
         self.embed_tokens = Embedding(
@@ -78,14 +80,20 @@ class Qwen2MtpModel(GptModelBase):
             fmha_impl = self.prepare_fmha_impl(
                 inputs
             )  # pyright: ignore[reportUnreachable]
+        self.tensor_fp.begin_forward()
+        self.tensor_fp.record("mtp_proj", hidden_states)
         for i, decoder_layer in enumerate(self.layers[: self.layer_num]):
             select_block_map_for_layer(attention_inputs, i)
+            self.tensor_fp.set_layer(i)
             hidden_states = decoder_layer(
                 hidden_states,
                 fmha_impl,
                 kv_cache=self.kv_cache.get_layer_cache(i) if self.kv_cache else None,
             )
+            self.tensor_fp.record("layer_out", hidden_states)
         hidden_states = self.norm(hidden_states)
+        self.tensor_fp.record("final_norm", hidden_states)
+        self.tensor_fp.end_forward()
         return PyModelOutputs(hidden_states, fmha_impl.fmha_params)
 
 

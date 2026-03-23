@@ -435,6 +435,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def_readwrite("enable_detail_log", &ProfilingDebugLoggingConfig::enable_detail_log)
         .def_readwrite("check_nan", &ProfilingDebugLoggingConfig::check_nan)
         .def_readwrite("enable_torch_alloc_profile", &ProfilingDebugLoggingConfig::enable_torch_alloc_profile)
+        .def_readwrite("tensor_fp_file", &ProfilingDebugLoggingConfig::tensor_fp_file)
         .def("to_string", &ProfilingDebugLoggingConfig::to_string)
         .def(py::pickle(
             [](const ProfilingDebugLoggingConfig& self) {
@@ -451,10 +452,11 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                                       self.debug_start_fake_process,
                                       self.enable_detail_log,
                                       self.check_nan,
-                                      self.enable_torch_alloc_profile);
+                                      self.enable_torch_alloc_profile,
+                                      self.tensor_fp_file);
             },
             [](py::tuple t) {
-                if (t.size() != 14)
+                if (t.size() < 14)
                     throw std::runtime_error("Invalid state!");
 
                 ProfilingDebugLoggingConfig c;
@@ -473,6 +475,8 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                     c.enable_detail_log          = t[11].cast<bool>();
                     c.check_nan                  = t[12].cast<bool>();
                     c.enable_torch_alloc_profile = t[13].cast<bool>();
+                    if (t.size() > 14)
+                        c.tensor_fp_file         = t[14].cast<std::string>();
                 } catch (const std::exception& e) {
                     throw std::runtime_error(std::string("ProfilingDebugLoggingConfig unpickle error: ") + e.what());
                 }

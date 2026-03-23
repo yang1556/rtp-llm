@@ -98,6 +98,7 @@ class BertModel(GptModelBase):
         fmha_config=None,
         py_hw_kernel_config=None,
         device_resource_config=None,
+        profiling_debug_logging_config=None,
     ):
         super().__init__(
             config,
@@ -107,6 +108,7 @@ class BertModel(GptModelBase):
             fmha_config=fmha_config,
             py_hw_kernel_config=py_hw_kernel_config,
             device_resource_config=device_resource_config,
+            profiling_debug_logging_config=profiling_debug_logging_config,
         )
         self.embed_tokens = EmbeddingBert(
             config, parallelism_config, weights.get_global_weight(W.embedding)
@@ -145,10 +147,15 @@ class BertModel(GptModelBase):
         hidden_states = self.pre_decoder_layernorm(inputs_embeds)
         if fmha_impl is None:
             fmha_impl = self.prepare_fmha_impl(inputs)
+        self.tensor_fp.begin_forward()
+        self.tensor_fp.record("embedding", hidden_states)
         for i, decoder_layer in enumerate(self.layers[: self.layer_num]):
+            self.tensor_fp.set_layer(i)
             hidden_states = decoder_layer(
                 hidden_states,
                 fmha_impl,
                 kv_cache=self.kv_cache.get_layer_cache(i) if self.kv_cache else None,
             )
+            self.tensor_fp.record("layer_out", hidden_states)
+        self.tensor_fp.end_forward()
         return PyModelOutputs(hidden_states, fmha_impl.fmha_params)

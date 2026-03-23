@@ -1383,6 +1383,7 @@ class ProfilingDebugLoggingConfig:
     gen_timeline_sync: bool
     hack_layer_num: int
     log_file_backup_count: int
+    tensor_fp_file: str
     torch_cuda_profiler_dir: str
     trace_malloc_stack: bool
     trace_memory: bool

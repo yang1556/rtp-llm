@@ -121,6 +121,7 @@ class Qwen3Moe(Qwen2Moe):
             fmha_config=fmha_config,
             py_hw_kernel_config=py_hw_kernel_config,
             device_resource_config=self.device_resource_config,
+            profiling_debug_logging_config=self.profiling_debug_logging_config,
         )
         return self.py_model
 

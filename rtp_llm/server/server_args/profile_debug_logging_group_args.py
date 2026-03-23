@@ -112,3 +112,10 @@ def init_profile_debug_logging_group_args(parser, profiling_debug_config):
         default=False,
         help="控制是否在TorchCudaAllocator中启用Python堆栈追踪,用于调试Torch buffer分配。可选值: True (启用), False (禁用)。默认为 False",
     )
+    profile_debug_logging_group.add_argument(
+        "--tensor_fp_file",
+        bind_to=(profiling_debug_config, "tensor_fp_file"),
+        type=str,
+        default="",
+        help="启用 TensorFingerprint 调试工具，指定输出文件路径（safetensors 格式）。用于排查模型推理非确定性问题。",
+    )

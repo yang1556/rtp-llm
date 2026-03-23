@@ -198,6 +198,7 @@ struct ProfilingDebugLoggingConfig {
     bool        enable_detail_log          = false;
     bool        check_nan                  = false;
     bool        enable_torch_alloc_profile = false;
+    std::string tensor_fp_file             = "";
 
     std::string to_string() const;
 };

@@ -67,6 +67,7 @@ class Bert(BaseModel):
             fmha_config=fmha_config,
             py_hw_kernel_config=py_hw_kernel_config,
             device_resource_config=self.device_resource_config,
+            profiling_debug_logging_config=self.profiling_debug_logging_config,
         )
 
     def _init_custom_module(self) -> Optional[CustomModule]:

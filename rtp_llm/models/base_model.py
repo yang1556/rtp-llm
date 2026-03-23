@@ -58,6 +58,7 @@ class BaseModel(object):
         merge_lora: bool,
         device_resource_config: Optional[DeviceResourceConfig],
         force_cpu_load_weights: bool = False,
+        profiling_debug_logging_config: Optional[ProfilingDebugLoggingConfig] = None,
     ) -> None:
         """Initialize BaseModel with independent configuration objects.
         Args:
@@ -86,6 +87,7 @@ class BaseModel(object):
         self.merge_lora = merge_lora
         self.device_resource_config = device_resource_config
         self.force_cpu_load_weights = force_cpu_load_weights
+        self.profiling_debug_logging_config = profiling_debug_logging_config
         self.weight = None
         self.weight_manager = None
 
@@ -217,6 +219,7 @@ class BaseModel(object):
         merge_lora: bool,
         device_resource_config: DeviceResourceConfig,
         force_cpu_load_weights: bool = False,
+        profiling_debug_logging_config: Optional[ProfilingDebugLoggingConfig] = None,
     ) -> "BaseModel":
         """Create model from independent configuration objects.
 
@@ -248,6 +251,7 @@ class BaseModel(object):
             merge_lora=merge_lora,
             device_resource_config=device_resource_config,
             force_cpu_load_weights=force_cpu_load_weights,
+            profiling_debug_logging_config=profiling_debug_logging_config,
         )
 
         import os

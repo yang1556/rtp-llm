@@ -6,6 +6,7 @@ from torch import Tensor, nn
 from rtp_llm.config.model_config import ModelConfig
 from rtp_llm.model_loader.model_weight_info import ModelWeights
 from rtp_llm.models_py.modules import AttnImplFactory
+from rtp_llm.models_py.utils.tensor_fingerprint import create_fingerprint
 from rtp_llm.ops import DeviceResourceConfig
 from rtp_llm.ops.compute_ops import (
     DeviceType,
@@ -30,6 +31,7 @@ class GptModelBase(nn.Module):
         device_resource_config: Optional[
             DeviceResourceConfig
         ] = None,  # Optional DeviceResourceConfig
+        profiling_debug_logging_config=None,  # Optional ProfilingDebugLoggingConfig
     ) -> None:
         super().__init__()
         self.config = config
@@ -51,6 +53,13 @@ class GptModelBase(nn.Module):
 
         ## (batch_size -> fmha_params)
         self.params_dict: dict[int, Any] = {}
+
+        # Tensor fingerprint for debugging non-determinism
+        fp_file = getattr(profiling_debug_logging_config, 'tensor_fp_file', '') if profiling_debug_logging_config else ''
+        self.tensor_fp = create_fingerprint(
+            fp_file=fp_file,
+            tag=f"tp{parallelism_config.tp_rank}" if parallelism_config.tp_size > 1 else "",
+        )
 
     def initialize(self, init_resource: PyModelInitResources) -> bool:
         self.kv_cache = init_resource.kv_cache

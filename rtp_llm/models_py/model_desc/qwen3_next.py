@@ -678,6 +678,7 @@ class Qwen3NextModel(GptModelBase):
         fmha_config=None,
         py_hw_kernel_config=None,
         device_resource_config=None,
+        profiling_debug_logging_config=None,
     ):
         super().__init__(
             model_config,
@@ -687,6 +688,7 @@ class Qwen3NextModel(GptModelBase):
             fmha_config=fmha_config,
             py_hw_kernel_config=py_hw_kernel_config,
             device_resource_config=device_resource_config,
+            profiling_debug_logging_config=profiling_debug_logging_config,
         )
         self.embed_tokens = Embedding(
             model_config, parallelism_config, weights.get_global_weight(W.embedding)
@@ -739,9 +741,12 @@ class Qwen3NextModel(GptModelBase):
         if fmha_impl is None:
             fmha_impl = self.prepare_fmha_impl(inputs)
 
+        self.tensor_fp.begin_forward()
+        self.tensor_fp.record("embedding", hidden_states)
         for i, decoder_layer in enumerate(self.layers):
             # Switch to correct block_map for this layer in hybrid attention mode
             select_block_map_for_layer(attention_inputs, i)
+            self.tensor_fp.set_layer(i)
             hidden_states = decoder_layer(
                 hidden_states,
                 fmha_impl,
@@ -749,6 +754,9 @@ class Qwen3NextModel(GptModelBase):
                 attention_inputs=attention_inputs,
                 attn_meta=attn_meta,
             )
+            self.tensor_fp.record("layer_out", hidden_states)
 
         hidden_states = self.norm(hidden_states)
+        self.tensor_fp.record("final_norm", hidden_states)
+        self.tensor_fp.end_forward()
         return PyModelOutputs(hidden_states, fmha_impl.fmha_params)
