@@ -43,19 +43,13 @@ grpc::Status DecodeRpcServerNew2::GenerateStreamCall(grpc::ServerContext*       
                          && request->generate_config().can_use_pd_separation();
     if (!pd_separation) {
         RTP_LLM_LOG_DEBUG("pd separation is disabled, call prefill server");
-        auto mutable_request = const_cast<GenerateInputPB*>(request);
-        mutable_request->mutable_generate_config()->set_unique_key("");  // set no  unique key for prefill
-        return prefill_server_caller_->callPrefill(server_context, mutable_request, response_writer);
+        GenerateInputPB prefill_forward_request;
+        prefill_forward_request.CopyFrom(*request);
+        prefill_forward_request.mutable_generate_config()->set_unique_key("");
+        return prefill_server_caller_->callPrefill(server_context, &prefill_forward_request, response_writer);
     }
 
-    bool need_prefill = false;
-    if (request->generate_config().unique_key().empty()) {
-        auto unique_key = autil::NetUtil::getBindIp() + "_" + std::to_string(unique_key_id_.fetch_add(1)) + "_"
-                          + std::to_string(currentTimeUs());
-        auto mutable_request = const_cast<GenerateInputPB*>(request);
-        mutable_request->mutable_generate_config()->set_unique_key(unique_key);
-        need_prefill = true;
-    }
+    const bool need_prefill = request->generate_config().unique_key().empty();
 
     AtomicGuard request_guard(onflight_requests_);
     auto        request_id = request->request_id();
@@ -63,7 +57,10 @@ grpc::Status DecodeRpcServerNew2::GenerateStreamCall(grpc::ServerContext*       
     auto generate_context =
         GenerateContext(request_id, request->generate_config().timeout_ms(), server_context, metrics_reporter_, meta_);
     auto input = QueryConverter::transQuery(request);
-    // input->generate_config->pd_separation = true;
+    if (need_prefill) {
+        input->generate_config->unique_key = autil::NetUtil::getBindIp() + "_" + std::to_string(unique_key_id_.fetch_add(1))
+                                             + "_" + std::to_string(currentTimeUs());
+    }
 
     // need to check client has buffer at first
     if (mm_processor_ != nullptr && input->multimodal_inputs) {
@@ -95,7 +92,8 @@ grpc::Status DecodeRpcServerNew2::GenerateStreamCall(grpc::ServerContext*       
         return grpc::Status(grpc::StatusCode::INTERNAL, "prefill_ip or prefill_port is not available");
     }
 
-    int prefill_tp_size = prefill_server_caller_->getPrefillTpSize(prefill_ip, prefill_port);
+    int prefill_tp_size = prefill_server_caller_->getPrefillTpSize(
+        prefill_ip, prefill_port, static_cast<int32_t>(request->generate_config().timeout_ms()));
     if (prefill_tp_size <= 0) {
         RTP_LLM_LOG_WARNING("decode rpc server new2 init failed, prefill_tp_size is not available");
         return grpc::Status(grpc::StatusCode::INTERNAL, "prefill_tp_size is not available");
@@ -105,8 +103,8 @@ grpc::Status DecodeRpcServerNew2::GenerateStreamCall(grpc::ServerContext*       
     // 由 DecodeRpcServerNew2 负责发起异步 prefill 调用；保留局部 context 防止提前销毁导致 prefill 侧 stream 被 cancel
     std::shared_ptr<PrefillServerCallerContext> prefill_caller_ctx;
     if (need_prefill) {
-        auto unique_key  = request->generate_config().unique_key();
-        auto deadline_us = static_cast<int64_t>(request->generate_config().timeout_ms()) * 1000;
+        const auto& unique_key = input->generate_config->unique_key;
+        auto        deadline_us = static_cast<int64_t>(request->generate_config().timeout_ms()) * 1000;
         prefill_caller_ctx =
             prefill_server_caller_->callPrefill(request, prefill_ip, prefill_port, unique_key, deadline_us);
     }

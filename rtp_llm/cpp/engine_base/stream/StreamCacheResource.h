@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -134,7 +135,8 @@ private:
     int  malloc_failed_times_   = 0;
     bool fake_inited_           = false;
     bool resource_released_     = false;
-    bool load_cache_once_       = false;
+    /// Guard for loadCacheSync(); concurrent callers rely on exchange, not external locking.
+    std::atomic<bool> load_cache_once_{false};
 };
 
 }  // namespace rtp_llm

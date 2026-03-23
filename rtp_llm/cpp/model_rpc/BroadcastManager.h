@@ -30,12 +30,20 @@ public:
     ~BroadcastResult() = default;
 
 public:
+    /// Snapshot of internal completion counters, not a live probe of RPC completion.
+    ///
+    /// Progress (polling gRPC completion queues and updating `finished_*`) happens only inside
+    /// `waitDone()` / `waitDone(int)`. This method does not poll or advance completion; it only
+    /// reflects state already updated by prior `waitDone()` work. Callers must not infer that
+    /// work is still in flight from `done() == false` without also driving `waitDone()`, nor
+    /// assume `done() == true` reflects anything that `waitDone()` has not yet observed.
     bool done() const {
         std::unique_lock<std::mutex> lock(wait_done_mutex_);
         return finished_count_ == static_cast<int>(worker_contexts_.size());
     }
 
-    // waitDone with timeout support (timeout_ms=0 means no timeout)
+    /// Polls completion queues until all workers finish or `timeout_ms` elapses (0 = no limit).
+    /// This is what advances completion state observed by `done()`.
     bool waitDone(int timeout_ms) {
         if (already_done_.load()) {
             return true;
@@ -104,6 +112,7 @@ public:
         return true;
     }
 
+    /// Same as `waitDone(0)`; drives completion state for `done()` / `success()`.
     void waitDone() {
         (void)waitDone(/*timeout_ms=*/0);
     }

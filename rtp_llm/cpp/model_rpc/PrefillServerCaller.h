@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include "rtp_llm/cpp/model_rpc/PrefillServerCallerContext.h"
 #include "rtp_llm/cpp/model_rpc/RPCPool.h"
 #include <shared_mutex>
@@ -24,8 +25,11 @@ public:
                              grpc::ServerWriter<GenerateOutputsPB>* response_writer);
 
     /// @brief Get prefill's tp_size via GetPeerInfo RPC, with caching per endpoint.
-    /// Returns 1 on failure (fallback to symmetric TP assumption).
-    int getPrefillTpSize(const std::string& ip, uint32_t port);
+    /// @param request_timeout_ms Stream timeout (generate_config.timeout_ms, ms). GetPeerInfo uses a deadline
+    ///        derived from this value with a bounded min/max so unreachable prefill does not block for the full
+    ///        generation budget.
+    /// @return tp_size on success, -1 on failure.
+    int getPrefillTpSize(const std::string& ip, uint32_t port, int32_t request_timeout_ms);
 
 private:
     std::shared_ptr<RPCPool> rpc_pool_;

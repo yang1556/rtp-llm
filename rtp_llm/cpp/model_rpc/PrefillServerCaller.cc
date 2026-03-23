@@ -6,6 +6,8 @@
 
 namespace rtp_llm {
 
+constexpr int32_t kPeerInfoProbeMaxMs = 500;
+
 PrefillServerCaller::PrefillServerCaller(const std::string& process_id):
     rpc_pool_(std::make_shared<RPCPool>()),
     process_id_(process_id) {}
@@ -112,7 +114,7 @@ grpc::Status PrefillServerCaller::callPrefill(grpc::ServerContext*              
     return status;
 }
 
-int PrefillServerCaller::getPrefillTpSize(const std::string& ip, uint32_t port) {
+int PrefillServerCaller::getPrefillTpSize(const std::string& ip, uint32_t port, int32_t request_timeout_ms) {
     std::string addr = ip + ":" + std::to_string(port);
 
     {
@@ -130,7 +132,8 @@ int PrefillServerCaller::getPrefillTpSize(const std::string& ip, uint32_t port) 
     }
 
     grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(std::max(request_timeout_ms, kPeerInfoProbeMaxMs)));
+
     GetPeerInfoRequestPB  request;
     GetPeerInfoResponsePB response;
     auto status = conn.value().stub->GetPeerInfo(&ctx, request, &response);

@@ -331,10 +331,9 @@ void StreamCacheResource::loadCacheSync() {
     if (!resource_context_.cache_manager || !resource_context_.cache_manager->hasActiveConnectors()) {
         return;
     }
-    if (load_cache_once_) {
+    if (load_cache_once_.exchange(true)) {
         return;
     }
-    load_cache_once_ = true;
     auto meta        = std::make_shared<MetaImpl>(
         reuseCache() && enableMemoryCache(), reuseCache() && enableRemoteCache(), stream_->traceId());
     if (resource_context_.device) {
