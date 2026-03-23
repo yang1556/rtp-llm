@@ -515,23 +515,30 @@ bool KVCacheMemoryConnector::copyCache(const MemoryOperationRequestPB& request, 
     }
 
     if (!dst_buffers.empty()) {
-        // batch_size = buffers per block, from prepareCopyBuffers (layer_num × gpu_buffers per layer).
-        const size_t num_blocks = static_cast<size_t>(request.copy_items_size());
-        const size_t batch_size = dst_buffers.size() / num_blocks;
-        RTP_LLM_CHECK_WITH_INFO(dst_buffers.size() % num_blocks == 0,
-                                "copy buffers size %zu not divisible by copy_items_size %d",
-                                dst_buffers.size(),
-                                request.copy_items_size());
-        // When each logical dst is split into kv_cache + kv_scale (even batch_size), pass sizes for split
-        // scatter/gather.
-        size_t kv_cache_size = 0;
-        size_t kv_scale_size = 0;
-        if (batch_size >= 2 && batch_size % 2 == 0) {
+        // batch_size = slices per copy_item when every item contributes the same count (typical). If counts differ
+        // (e.g. sparse layers per mem_block), total is not divisible by copy_items_size — skip noBlockCopyOpt and
+        // use plain noBlockCopy (per-pair memcpy; ignores batch_size).
+        const size_t num_blocks    = static_cast<size_t>(request.copy_items_size());
+        const size_t total_slices  = dst_buffers.size();
+        const bool   uniform_items = num_blocks > 0 && (total_slices % num_blocks == 0);
+        const size_t batch_size    = uniform_items ? (total_slices / num_blocks) : total_slices;
+        size_t       kv_cache_size = 0;
+        size_t       kv_scale_size = 0;
+        if (uniform_items && cache_config_.kv_scale_stride_bytes > 0 && batch_size >= 2 && (batch_size % 2) == 0) {
             kv_cache_size = dst_buffers[0]->sizeBytes();
             kv_scale_size = dst_buffers[1]->sizeBytes();
         }
-        device_->noBlockCopyOpt(
-            MultiCopyParams{dst_buffers, src_buffers, block_size_, batch_size, kv_cache_size, kv_scale_size});
+        // noBlockCopyOpt (scatter path) regresses at larger page sizes; benchmark: no gain when seq_size_per_block >=
+        // 512
+        const bool use_split_no_block_copy_opt = uniform_items && kv_cache_size > 0 && kv_scale_size > 0
+                                                 && block_size_ == (batch_size / 2) * (kv_cache_size + kv_scale_size)
+                                                 && cache_config_.seq_size_per_block < 512;
+        MultiCopyParams mcp{dst_buffers, src_buffers, block_size_, batch_size, kv_cache_size, kv_scale_size};
+        if (use_split_no_block_copy_opt) {
+            device_->noBlockCopyOpt(mcp);
+        } else {
+            device_->noBlockCopy(mcp);
+        }
     }
 
     response.set_success(true);
