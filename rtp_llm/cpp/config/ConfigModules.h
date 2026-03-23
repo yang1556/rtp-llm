@@ -116,6 +116,7 @@ enum class FMHAType {
     FLASHINFER_MLA_DECODE,
     SPARSE_FLASHMLA,
     CP_FLASH_INFER,
+    CP_SPARSE_FLASHMLA,
 };
 
 struct FMHAConfig {
