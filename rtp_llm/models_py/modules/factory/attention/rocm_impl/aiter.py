@@ -2,6 +2,7 @@ import logging
 from typing import Any, List, Optional
 
 import aiter
+import atrex
 import torch
 from aiter_meta.csrc.cpp_itfs.pa_gluon_aot.pa_decode_gluon_aot import pa_decode_gluon_aot
 
@@ -588,42 +589,36 @@ class AiterDecodeAttnOpNonAsm(AiterDecodeAttnOpBase):
                 alibi_slopes,
             )
         else:
-            _PARTITION_SIZE_ROCM = 256
+            _PARTITION_SIZE_ROCM = 512
 
             max_num_partitions = (
                 max_seq_len + _PARTITION_SIZE_ROCM - 1
             ) // _PARTITION_SIZE_ROCM
-            assert _PARTITION_SIZE_ROCM % block_size == 0
-            # init tmp_output
-            tmp_output = torch.empty(
-                size=(num_seqs, num_heads, max_num_partitions, head_size),
-                dtype=output.dtype,
-                device=output.device,
-            )
-
-            # init exp_sums
+            x = 16 // key_cache.element_size()
+            grp_size = num_heads // num_kv_heads
+            kv_sizes = value_cache.shape
+            # init output
+            output = torch.empty_like(query).view((num_seqs, num_heads, head_size))
             exp_sums = torch.empty(
-                size=(num_seqs, num_heads, max_num_partitions),
+                size=(num_seqs, num_kv_heads, max_num_partitions, grp_size),
                 dtype=torch.float32,
                 device=output.device,
             )
-            fp8_out_scale = None
-            cpa_fp8_out = False
-            # init max_logits
-            max_logits = torch.ones_like(exp_sums)
-
-            kv_cache_dtype = "auto"
-            k_scale = (
-                K_QScale
-                if kv_cache and K_QScale is not None
-                else torch.tensor(1.0, device=query.device, dtype=query.dtype)
+            max_logits = torch.empty_like(exp_sums)
+            # init tmp_output
+            tmp_output = torch.empty(
+                size=(num_seqs, num_kv_heads, max_num_partitions, grp_size, head_size),
+                dtype=output.dtype,
+                device=output.device,
             )
-            v_scale = (
-                V_QScale
-                if kv_cache and V_QScale is not None
-                else torch.tensor(1.0, device=query.device, dtype=query.dtype)
+            query = query.view((num_seqs, num_heads, head_size))
+            key_cache = key_cache.view(
+                (kv_sizes[0], kv_sizes[1], kv_sizes[3] // x, kv_sizes[2], x)
             )
-            aiter.paged_attention_rocm(
+            value_cache = value_cache.view(
+                (kv_sizes[0], kv_sizes[1], kv_sizes[3], kv_sizes[2])
+            )
+            atrex.paged_attention_decode(
                 output,
                 exp_sums,
                 max_logits,
@@ -631,19 +626,12 @@ class AiterDecodeAttnOpNonAsm(AiterDecodeAttnOpBase):
                 query,
                 key_cache,
                 value_cache,
-                num_kv_heads,
-                float(scale),
-                block_tables_id_device,
                 seq_lens,
-                block_size,
+                block_tables_id_device,
+                scale,
                 max_seq_len,
                 alibi_slopes,
-                kv_cache_dtype,  # kv_cache_dtype
-                k_scale,
-                v_scale,
-                fp8_out_scale if cpa_fp8_out else None,
-                _PARTITION_SIZE_ROCM,
-            )
+                )
 
         output_reshaped = output.view(output.shape[0], -1)
         return output_reshaped
