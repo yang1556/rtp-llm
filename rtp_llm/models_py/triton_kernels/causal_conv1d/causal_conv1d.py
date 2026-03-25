@@ -702,6 +702,10 @@ def _causal_conv1d_update_kernel(
     read_block_id = tl.load(
         block_map_ptr + idx_seq * stride_block_map + read_block_offset
     ).to(tl.int64)
+    # Skip padding entries in CudaGraph decode padding mode.
+    # Padding entries have block_id=0, processing them would corrupt block 0's conv state.
+    if read_block_id <= 0:
+        return
     # STEP 1: READ init_state data
     conv_states_base = (
         conv_state_ptr
