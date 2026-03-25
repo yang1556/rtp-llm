@@ -143,7 +143,23 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
         expert_x = payload.expert_x
         expert_num_tokens = payload.expert_tokens_meta.expert_num_tokens
         assert expert_num_tokens is not None
-
+        num_experts = self._w1.size(0)
+        topk_idx = payload.expert_topk_ids
+        masked_m = expert_num_tokens
+        if expert_x.ndim == 2:
+            hidden_states = expert_x
+            hidden_states_expanded = (
+                hidden_states.view(hidden_states.shape[0], -1, hidden_states.shape[1])
+                .repeat(1, 10, 1)
+                .reshape(-1, hidden_states.shape[1])
+            )
+            hidden_states_3d = torch.empty(
+            (num_experts, max(masked_m), hidden_states_expanded.shape[1]), dtype=hidden_states.dtype)
+            hidden_states_3d = hidden_states_3d.to(payload.expert_x.device)
+            for i in range(num_experts):
+                hidden_states_3d[i, : masked_m[i], :] = hidden_states_expanded[topk_idx.view(-1) == i]
+            expert_x = hidden_states_3d
+            payload.expert_x = hidden_states_3d
         assert expert_x.ndim == 3
         E, M, K = expert_x.size()
 
@@ -183,5 +199,5 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
             masked_m=expert_num_tokens,
         )
 
-        return CombineForwardPayload(fused_expert_output=output)
+        return CombineForwardPayload(fused_expert_output=output, expert_num_tokens=expert_num_tokens)
 

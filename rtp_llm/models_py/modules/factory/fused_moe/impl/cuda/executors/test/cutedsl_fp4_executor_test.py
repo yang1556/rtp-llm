@@ -27,15 +27,15 @@ from flashinfer import scaled_fp4_grouped_quantize
 
 
 class CutedslFp4ExecutorTestBase:
-    DP_SIZE = 1
+    DP_SIZE = 2
     TP_SIZE = 1
-    EP_SIZE = 1
-    NUM_EXPERTS = 128
-    BATCH_SIZE = 128
+    EP_SIZE = 2
+    NUM_EXPERTS = 512
+    BATCH_SIZE = 2
     MAX_GENERATE_BATCH_SIZE = 128
-    HIDDEN_SIZE = 4096
-    MOE_INTERMEDIATE_SIZE = 1536
-    TOP_K = 8  # Number of experts per token
+    HIDDEN_SIZE = 1152
+    MOE_INTERMEDIATE_SIZE = 1024
+    TOP_K = 10  # Number of experts per token
 
     M = (MAX_GENERATE_BATCH_SIZE + TP_SIZE - 1) // TP_SIZE * EP_SIZE
     K = HIDDEN_SIZE

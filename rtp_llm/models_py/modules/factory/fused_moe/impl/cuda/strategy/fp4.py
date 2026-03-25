@@ -28,6 +28,9 @@ class CudaFp4NoDPStrategy(MoeStrategy):
         from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.trtllm_fp4_executor import (
             TrtllmFp4Executor,
         )
+        from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutedsl_fp4_executor import (
+            CutedslFp4Executor,
+        )
         from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.routers.pure_tp_router import (
             PureTpRouterFp4PerGroup,
         )
@@ -36,9 +39,14 @@ class CudaFp4NoDPStrategy(MoeStrategy):
             quant_dtype=torch.uint8,
             block_shape=[16, 16],
         )
+        # return StrategyAttributes(
+        #     router_class=PureTpRouterFp4PerGroup,
+        #     executor_class=TrtllmFp4Executor,
+        #     quant_config=quant_config,
+        # )
         return StrategyAttributes(
             router_class=PureTpRouterFp4PerGroup,
-            executor_class=TrtllmFp4Executor,
+            executor_class=CutedslFp4Executor,
             quant_config=quant_config,
         )
 

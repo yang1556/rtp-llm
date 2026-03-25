@@ -608,6 +608,14 @@ class CudaImpl(GpuImpl):
         if kernel_name not in [W.moe_w2, W.moe_w1]:
             return kernel, scale
 
+        if kernel_name == W.moe_w1:
+            kernel = torch.cat([kernel[:, kernel.shape[1] // 2:, :],
+                                kernel[:, :kernel.shape[1] // 2, :]], dim=1)
+            scale = torch.cat([scale[:, scale.shape[1] // 2:, :],
+                                scale[:, :scale.shape[1] // 2, :]], dim=1)
+        swizzled_scale = self.swizzle_blockscale(scale)
+        return kernel, swizzled_scale
+
         if self.py_env_configs.moe_config.fp4_moe_op == "cutedsl":
             # cutedsl moe needs gate+up format for w13
             if kernel_name == W.moe_w1:

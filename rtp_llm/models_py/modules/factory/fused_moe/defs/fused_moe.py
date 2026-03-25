@@ -48,6 +48,7 @@ class CombineForwardPayload:
     """
 
     fused_expert_output: torch.Tensor
+    expert_num_tokens: Optional[torch.Tensor]
 
 
 class FusedMoeDataRouter(ABC):

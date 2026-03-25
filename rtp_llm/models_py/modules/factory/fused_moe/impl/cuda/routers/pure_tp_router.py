@@ -90,7 +90,8 @@ class PureTpRouterBase(FusedMoeDataRouter):
         # Apply quantization
         assert a1_scale is None and a2_scale is None, "not support quanted moe"
         expert_x, expert_x_scale = self._do_quant(a1)
-
+        self.tokens = a1.shape[0]
+        self.hidden_size = a1.shape[1]
         adjusted_topk_ids = topk_ids
         num_recv_tokens_per_expert = None
         # Recompute topk if needed
@@ -109,6 +110,16 @@ class PureTpRouterBase(FusedMoeDataRouter):
             topk_weights,
         )
 
+    def _filter_valid_tokens(
+        self, output: torch.Tensor, expert_num_tokens: torch.Tensor
+    ) -> torch.Tensor:
+        num_local_experts = output.shape[0]
+        for expert_id in range(num_local_experts):
+            num_valid_tokens = expert_num_tokens[expert_id].item()
+            if num_valid_tokens < output.shape[1]:
+                output[expert_id, num_valid_tokens:, :] = 0
+        return output
+
     def finalize(
         self,
         payload: CombineForwardPayload,
@@ -118,8 +129,28 @@ class PureTpRouterBase(FusedMoeDataRouter):
         extra_finalize_args: Optional[dict[str, Any]],
     ) -> torch.Tensor:
         fused_expert_output = payload.fused_expert_output
+        output = self._filter_valid_tokens(fused_expert_output, payload.expert_num_tokens)
+        num_local_experts = self.expert_num // self.ep_size
+        num_tokens = self.tokens
+        hidden_size = self.hidden_size
+        output_aggregated = torch.zeros(
+            num_tokens, hidden_size, device=output.device, dtype=output.dtype
+        )
+        expert_positions = torch.zeros(num_local_experts, dtype=torch.long, device=output.device)
+        
+        for batch_idx in range(num_tokens):
+            for k_pos in range(self.config.moe_k):
+                expert_id = topk_ids[batch_idx, k_pos].item()
+                if expert_id < num_local_experts:
+                    weight = topk_weights[batch_idx, k_pos].item()
+                    expert_pos = expert_positions[expert_id].item()
+                    if expert_pos < payload.expert_num_tokens[expert_id]:
+                        output_aggregated[batch_idx] += (
+                            output[expert_id, expert_pos, :] * weight
+                        )
+                        expert_positions[expert_id] += 1
         if self.tp_size > 1:
-            fused_expert_output = all_reduce(fused_expert_output, group=Group.TP)
+            fused_expert_output = all_reduce(output_aggregated, group=Group.TP)
         return fused_expert_output
 
 
