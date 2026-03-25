@@ -528,11 +528,8 @@ bool KVCacheMemoryConnector::copyCache(const MemoryOperationRequestPB& request, 
             kv_cache_size = dst_buffers[0]->sizeBytes();
             kv_scale_size = dst_buffers[1]->sizeBytes();
         }
-        // noBlockCopyOpt (scatter path) regresses at larger page sizes; benchmark: no gain when seq_size_per_block >=
-        // 512
         const bool use_split_no_block_copy_opt = uniform_items && kv_cache_size > 0 && kv_scale_size > 0
-                                                 && block_size_ == (batch_size / 2) * (kv_cache_size + kv_scale_size)
-                                                 && cache_config_.seq_size_per_block < 512;
+                                                 && block_size_ == (batch_size / 2) * (kv_cache_size + kv_scale_size);
         MultiCopyParams mcp{dst_buffers, src_buffers, block_size_, batch_size, kv_cache_size, kv_scale_size};
         if (use_split_no_block_copy_opt) {
             device_->noBlockCopyOpt(mcp);

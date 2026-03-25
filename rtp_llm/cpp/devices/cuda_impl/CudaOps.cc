@@ -19,6 +19,8 @@
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
 #include "rtp_llm/cpp/core/torch_utils/TorchEvent.h"
 #include <cuda_profiler_api.h>
+#include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <unistd.h>
 #include <vector>
@@ -199,6 +201,17 @@ void CudaDevice::noBlockCopy(const MultiCopyParams& params) {
 }
 
 void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
+    // RTP_LLM_COMPARE_NO_BLOCK_COPY=1: time noBlockCopy(plain) then opt; log both (doubles copy work).
+    const char* cmp           = std::getenv("RTP_LLM_COMPARE_NO_BLOCK_COPY");
+    const bool  compare_plain = cmp != nullptr && cmp[0] != '\0' && cmp[0] != '0';
+    long        plain_us      = -1;
+    if (compare_plain) {
+        const auto plain_t0 = std::chrono::steady_clock::now();
+        noBlockCopy(params);
+        const auto plain_t1 = std::chrono::steady_clock::now();
+        plain_us            = std::chrono::duration_cast<std::chrono::microseconds>(plain_t1 - plain_t0).count();
+    }
+
     check_cuda_value(cudaSetDevice(device_id_));
     int current_device = -1;
     check_cuda_value(cudaGetDevice(&current_device));
@@ -213,6 +226,7 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
         check_cuda_error();
         return;
     }
+    const auto opt_t0 = std::chrono::steady_clock::now();
     RUNTIME_ASSERT_OP_ARG(params.multi_src.size() % params.batch_size == 0,
                           "noBlockCopyOpt: multi_src size not divisible by batch_size");
     const size_t actual_batch_size = params.batch_size;
@@ -249,13 +263,23 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
             free_one_ptr_table(d_dst_kv_cache_ptrs);
             RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_dst_kv_scale_ptrs failed");
         }
+        void* d_src_staging = nullptr;
+        if (cudaMalloc(&d_src_staging, params.block_size) != cudaSuccess) {
+            free_two_ptr_tables(d_dst_kv_cache_ptrs, d_dst_kv_scale_ptrs);
+            RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_src_staging (H2D) failed");
+        }
         std::vector<void*> h_dst_kv_cache(scatter_count), h_dst_kv_scale(scatter_count);
         for (size_t b = 0; b < block_nums; ++b) {
-            const size_t base    = b * actual_batch_size;
-            void*        src_dev = nullptr;
-            if (cudaHostGetDevicePointer(&src_dev, params.multi_src[base]->data(), 0) != cudaSuccess) {
+            const size_t base = b * actual_batch_size;
+            if (cudaMemcpyAsync(d_src_staging,
+                                params.multi_src[base]->data(),
+                                params.block_size,
+                                cudaMemcpyHostToDevice,
+                                no_block_copy_stream_)
+                != cudaSuccess) {
+                check_cuda_value(cudaFreeAsync(d_src_staging, no_block_copy_stream_));
                 free_two_ptr_tables(d_dst_kv_cache_ptrs, d_dst_kv_scale_ptrs);
-                RTP_LLM_FAIL("noBlockCopyOpt: cudaHostGetDevicePointer (H2D src) failed");
+                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (H2D src staging) failed");
             }
             for (size_t j = 0; j < scatter_count; ++j) {
                 h_dst_kv_cache[j] = params.multi_dst[base + j * 2]->data();
@@ -273,10 +297,11 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
                                    cudaMemcpyHostToDevice,
                                    no_block_copy_stream_)
                        != cudaSuccess) {
+                check_cuda_value(cudaFreeAsync(d_src_staging, no_block_copy_stream_));
                 free_two_ptr_tables(d_dst_kv_cache_ptrs, d_dst_kv_scale_ptrs);
                 RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (H2D ptr tables) failed");
             }
-            sDevMPS::launch_scatter_copy_split(src_dev,
+            sDevMPS::launch_scatter_copy_split(d_src_staging,
                                                static_cast<void**>(d_dst_kv_cache_ptrs),
                                                static_cast<void**>(d_dst_kv_scale_ptrs),
                                                params.kv_cache_size,
@@ -287,6 +312,7 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
         }
         // Avoid cudaDeviceSynchronize (waits all streams; can deadlock with NCCL). FreeAsync is ordered after prior
         // work on no_block_copy_stream_; one stream sync waits kernels/memcpy + both frees (see nccl_utils pattern).
+        check_cuda_value(cudaFreeAsync(d_src_staging, no_block_copy_stream_));
         free_two_ptr_tables(d_dst_kv_cache_ptrs, d_dst_kv_scale_ptrs);
     } else if (src_is_gpu && dst_is_host) {
         void* d_src_kv_cache_ptrs = nullptr;
@@ -295,6 +321,11 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
         if (cudaMalloc(&d_src_kv_scale_ptrs, ptr_table_bytes) != cudaSuccess) {
             free_one_ptr_table(d_src_kv_cache_ptrs);
             RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_src_kv_scale_ptrs failed");
+        }
+        void* d_dst_staging = nullptr;
+        if (cudaMalloc(&d_dst_staging, params.block_size) != cudaSuccess) {
+            free_two_ptr_tables(d_src_kv_cache_ptrs, d_src_kv_scale_ptrs);
+            RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_dst_staging (D2H) failed");
         }
         std::vector<const void*> h_src_kv_cache(scatter_count), h_src_kv_scale(scatter_count);
         for (size_t b = 0; b < block_nums; ++b) {
@@ -315,29 +346,47 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
                                    cudaMemcpyHostToDevice,
                                    no_block_copy_stream_)
                        != cudaSuccess) {
+                check_cuda_value(cudaFreeAsync(d_dst_staging, no_block_copy_stream_));
                 free_two_ptr_tables(d_src_kv_cache_ptrs, d_src_kv_scale_ptrs);
                 RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (D2H ptr tables) failed");
-            }
-            void* dst_dev = nullptr;
-            if (cudaHostGetDevicePointer(&dst_dev, params.multi_dst[base]->data(), 0) != cudaSuccess) {
-                free_two_ptr_tables(d_src_kv_cache_ptrs, d_src_kv_scale_ptrs);
-                RTP_LLM_FAIL("noBlockCopyOpt: cudaHostGetDevicePointer (D2H dst) failed");
             }
             sDevMPS::launch_gather_copy_split(static_cast<const void**>(d_src_kv_cache_ptrs),
                                               static_cast<const void**>(d_src_kv_scale_ptrs),
                                               params.kv_cache_size,
                                               params.kv_scale_size,
-                                              dst_dev,
+                                              d_dst_staging,
                                               static_cast<int>(scatter_count),
                                               0,
                                               no_block_copy_stream_);
+            if (cudaMemcpyAsync(params.multi_dst[base]->data(),
+                                d_dst_staging,
+                                params.block_size,
+                                cudaMemcpyDeviceToHost,
+                                no_block_copy_stream_)
+                != cudaSuccess) {
+                check_cuda_value(cudaFreeAsync(d_dst_staging, no_block_copy_stream_));
+                free_two_ptr_tables(d_src_kv_cache_ptrs, d_src_kv_scale_ptrs);
+                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (D2H dst staging) failed");
+            }
         }
+        check_cuda_value(cudaFreeAsync(d_dst_staging, no_block_copy_stream_));
         free_two_ptr_tables(d_src_kv_cache_ptrs, d_src_kv_scale_ptrs);
     } else {
         RTP_LLM_FAIL(
             "noBlockCopyOpt: unsupported layout (only split H2D or D2H host<->GPU with kv_cache/kv_scale set)");
     }
     check_cuda_error();
+    if (compare_plain) {
+        const long opt_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - opt_t0).count();
+        RTP_LLM_LOG_INFO(
+            "noBlockCopy(plain) vs noBlockCopyOpt device=%d pairs=%zu block_nums=%zu plain_us=%ld opt_us=%ld",
+            device_id_,
+            params.multi_src.size(),
+            block_nums,
+            plain_us,
+            opt_us);
+    }
 }
 
 TransposeOutput CudaDevice::transpose(const TransposeParams& params) {
