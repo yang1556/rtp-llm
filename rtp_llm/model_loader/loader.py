@@ -247,6 +247,8 @@ class ModelLoader:
 
         if load_method.lower() == LoadMethod.FASTSAFETENSORS:
             return self._load_from_fastsafetensor(device)
+        elif load_method.lower() == LoadMethod.FASTSAFETENSORS_GDR:
+            return self._load_from_fastsafetensor(device, use_gdr=True)
         elif load_method.lower() == LoadMethod.SCRATCH:
             return self._load_from_scratch(device)
         else:
@@ -288,7 +290,7 @@ class ModelLoader:
                     stacked_key_config[stacked_key] = template
         return stacked_key_config
 
-    def _load_from_fastsafetensor(self, device: str):
+    def _load_from_fastsafetensor(self, device: str, use_gdr: bool = False):
         logging.info(f"load weight by device: {device}")
         model_weights = self._create_model_weights(device)
         tensor_to_weight_map, weight_info_list = self._generate_weight_info()
@@ -301,7 +303,7 @@ class ModelLoader:
 
         all_tensors = self._load_config.database.fastsafetensors_weights_iterator(
             device,
-            True,
+            use_gdr,
             stacked_key_config=stacked_key_config,
         )
 
