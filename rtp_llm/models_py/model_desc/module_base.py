@@ -1,6 +1,9 @@
 import logging
+import os
+import types
 from typing import Any, Optional
 
+import torch
 from torch import Tensor, nn
 
 from rtp_llm.config.model_config import ModelConfig
@@ -51,6 +54,9 @@ class GptModelBase(nn.Module):
 
         ## (batch_size -> fmha_params)
         self.params_dict: dict[int, Any] = {}
+
+        if os.environ.get("TORCH_PROFILE_OUTPUT_DIR"):
+            self._install_profiler_wrapper()
 
     def initialize(self, init_resource: PyModelInitResources) -> bool:
         self.kv_cache = init_resource.kv_cache
@@ -107,3 +113,73 @@ class GptModelBase(nn.Module):
 
     def forward(self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
         raise NotImplementedError("forward method must be implemented in subclass")
+
+    def _install_profiler_wrapper(self) -> None:
+        """Replace self.forward with a profiled version that captures tensor shapes."""
+        self._real_forward = self.__class__.forward.__get__(self, self.__class__)
+
+        def _profiled_forward(model_self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
+            return model_self._forward_with_profiler(inputs, fmha_impl)
+
+        self.forward = types.MethodType(_profiled_forward, self)
+
+    def _build_profiler(self) -> "torch.profiler.profile":
+        warmup_steps = int(os.environ.get("TORCH_PROFILE_WARMUP", "2"))
+        active_steps = int(os.environ.get("TORCH_PROFILE_ACTIVE", "1"))
+        output_dir = os.environ.get("TORCH_PROFILE_OUTPUT_DIR", "/tmp/rtp_llm_profile")
+        os.makedirs(output_dir, exist_ok=True)
+
+        def on_trace_ready(profiler: "torch.profiler.profile") -> None:
+            output_path = os.path.join(output_dir, f"trace_step{profiler.step_num}.json")
+            profiler.export_chrome_trace(output_path)
+            logging.info(f"[torch.profiler] trace saved to {output_path}")
+
+        return torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(
+                wait=0,
+                warmup=warmup_steps,
+                active=active_steps,
+                repeat=1,
+            ),
+            record_shapes=True,
+            profile_memory=False,
+            with_stack=False,
+            on_trace_ready=on_trace_ready,
+        )
+
+    def _forward_with_profiler(self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
+        warmup_steps = int(os.environ.get("TORCH_PROFILE_WARMUP", "2"))
+        active_steps = int(os.environ.get("TORCH_PROFILE_ACTIVE", "1"))
+        total_steps = warmup_steps + active_steps
+
+        if not hasattr(self, "_profiler_state"):
+            self._profiler_state: dict[str, Any] = {
+                "profiler": None,
+                "step": 0,
+                "done": False,
+            }
+
+        state = self._profiler_state
+
+        if state["done"]:
+            return self._real_forward(inputs, fmha_impl)
+
+        if state["profiler"] is None:
+            state["profiler"] = self._build_profiler()
+            state["profiler"].__enter__()
+
+        with torch.profiler.record_function("model_forward"):
+            outputs = self._real_forward(inputs, fmha_impl)
+
+        state["profiler"].step()
+        state["step"] += 1
+
+        if state["step"] >= total_steps:
+            state["profiler"].__exit__(None, None, None)
+            state["done"] = True
+
+        return outputs

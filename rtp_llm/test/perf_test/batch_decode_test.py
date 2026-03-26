@@ -1,7 +1,10 @@
 import argparse
+import glob
 import json
 import logging
 import os
+import re
+from collections import defaultdict
 from typing import Any, Dict, List
 
 import torch
@@ -191,6 +194,7 @@ def parse_args():
     parser.add_argument("--input_len", type=str, default="128,1024,2048,4096,8192")
     parser.add_argument("--test_name", type=str, default="batch_decode_test")
     parser.add_argument("--prec", type=str, default="bf16")
+    parser.add_argument("--ep_size", type=int, default=1)
     parser.add_argument("--disaggregate", type=int, default=0)
     # partial test, 0: test all, 1: test decode only, 2: test prefill only
     parser.add_argument(
@@ -313,9 +317,9 @@ def run_disaggregate_test(args: argparse.Namespace, running_config: RunningConfi
 
 
 def create_test_env(
-    max_len: int, max_concurrency: int, partial: int, tp_size: int, dp_size: int
+    max_len: int, max_concurrency: int, partial: int, tp_size: int, dp_size: int, ep_size: int = 1
 ):
-    return {
+    env = {
         "USE_BATCH_DECODE_SCHEDULER": "1",
         "FAKE_BALANCE_EXPERT": "1",
         "MAX_SEQ_LEN": str(max_len + 20),
@@ -328,8 +332,137 @@ def create_test_env(
         ),
         "TP_SIZE": str(tp_size),
         "DP_SIZE": str(dp_size),
+        "EP_SIZE": str(ep_size),
         "WORLD_SIZE": str(tp_size * dp_size),
     }
+    # 如果设置了 TORCH_PROFILE_OUTPUT_DIR，透传 profiler 相关环境变量到服务子进程
+    # 优先使用用户指定的目录；如果指向 /tmp 下的路径，bazel 测试结束后会清理，
+    # 建议改用 TEST_UNDECLARED_OUTPUTS_DIR（bazel 会把该目录内容保存到 testlogs/test.outputs/）
+    profile_output_dir = os.environ.get("TORCH_PROFILE_OUTPUT_DIR")
+    if profile_output_dir:
+        # 如果用户指定的是 /tmp 路径，自动重定向到 TEST_UNDECLARED_OUTPUTS_DIR 子目录以防止被 bazel 清理
+        undeclared_outputs_dir = os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR")
+        if profile_output_dir.startswith("/tmp") and undeclared_outputs_dir:
+            profile_output_dir = os.path.join(undeclared_outputs_dir, "torch_profile")
+            logging.info(
+                f"[profiler] TORCH_PROFILE_OUTPUT_DIR 指向 /tmp，已自动重定向到 "
+                f"TEST_UNDECLARED_OUTPUTS_DIR: {profile_output_dir}"
+            )
+        env["TORCH_PROFILE_OUTPUT_DIR"] = profile_output_dir
+        env["TORCH_PROFILE_WARMUP"] = os.environ.get("TORCH_PROFILE_WARMUP", "2")
+        env["TORCH_PROFILE_ACTIVE"] = os.environ.get("TORCH_PROFILE_ACTIVE", "1")
+        logging.info(f"[profiler] enabled, output dir: {profile_output_dir}")
+    return env
+
+
+def _is_gemm_kernel(name: str) -> bool:
+    gemm_patterns = [r"Cijk_", r"gemm", r"cutlass", r"sgemm|dgemm|hgemm", r"ampere_.*gemm", r"volta_.*gemm"]
+    name_lower = name.lower()
+    return any(re.search(pattern, name_lower) for pattern in gemm_patterns)
+
+
+def _is_attention_kernel(name: str) -> bool:
+    attn_patterns = [r"pa_fwd", r"flash_attn", r"fmha", r"attention", r"aiter.*attn"]
+    name_lower = name.lower()
+    return any(re.search(pattern, name_lower) for pattern in attn_patterns)
+
+
+def _analyze_trace(trace_path: str, top_n: int = 20) -> None:
+    """解析 torch.profiler 生成的 Chrome Trace JSON，关联 GPU kernel 与 CPU 算子 shape 并打印报告。"""
+    with open(trace_path, "r") as f:
+        data = json.load(f)
+    events = data["traceEvents"] if isinstance(data, dict) and "traceEvents" in data else data
+
+    cpu_ops_by_ext_id: Dict[int, List[Dict]] = defaultdict(list)
+    kernels_by_ext_id: Dict[int, List[Dict]] = defaultdict(list)
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        args = event.get("args", {})
+        ext_id = args.get("External id") or args.get("external id")
+        if ext_id is None:
+            continue
+        cat = event.get("cat", "")
+        if cat == "cpu_op":
+            cpu_ops_by_ext_id[ext_id].append(event)
+        elif cat == "kernel":
+            kernels_by_ext_id[ext_id].append(event)
+
+    # kernel_name -> list of (dur_us, shape_str, op_name)
+    kernel_stats: Dict[str, List[tuple]] = defaultdict(list)
+
+    for ext_id, kernels in kernels_by_ext_id.items():
+        cpu_ops = cpu_ops_by_ext_id.get(ext_id, [])
+        shape_str = "unknown"
+        op_name = "unknown"
+        if cpu_ops:
+            cpu_op = cpu_ops[-1]
+            op_name = cpu_op.get("name", "unknown")
+            input_dims = cpu_op.get("args", {}).get("Input Dims", [])
+            input_types = cpu_op.get("args", {}).get("Input type", [])
+            shape_parts = []
+            for i, dim in enumerate(input_dims):
+                if isinstance(dim, list) and len(dim) > 0:
+                    type_str = input_types[i] if i < len(input_types) else ""
+                    shape_parts.append(f"arg{i}({type_str}):{dim}")
+            shape_str = "  |  ".join(shape_parts) if shape_parts else "no_tensor_inputs"
+
+        for kernel in kernels:
+            kernel_stats[kernel.get("name", "unknown")].append(
+                (kernel.get("dur", 0.0), shape_str, op_name)
+            )
+
+    sorted_kernels = sorted(
+        kernel_stats.items(),
+        key=lambda x: sum(record[0] for record in x[1]),
+        reverse=True,
+    )
+
+    sep = "=" * 100
+    logging.info(f"\n{sep}\n  Kernel Shape 分析报告  |  top={top_n}\n{sep}")
+
+    for rank, (kernel_name, records) in enumerate(sorted_kernels[:top_n], 1):
+        total_dur = sum(record[0] for record in records)
+        avg_dur = total_dur / len(records)
+        op_name = records[0][2]
+        shape_groups: Dict[str, List[float]] = defaultdict(list)
+        for dur, shape_str, _ in records:
+            shape_groups[shape_str].append(dur)
+
+        display_name = kernel_name[:80] + ("..." if len(kernel_name) > 80 else "")
+        logging.info(
+            f"[#{rank}] {display_name}\n"
+            f"      PyTorch op : {op_name}\n"
+            f"      调用次数   : {len(records)}\n"
+            f"      总耗时     : {total_dur:.1f} μs\n"
+            f"      平均耗时   : {avg_dur:.1f} μs\n"
+            f"      Shape 分布 :"
+        )
+        for shape_str, durs in sorted(shape_groups.items(), key=lambda x: -sum(x[1])):
+            logging.info(
+                f"        [{len(durs)}次, avg={sum(durs)/len(durs):.1f}μs] {shape_str[:120]}"
+            )
+
+    total_kernel_time = sum(
+        sum(record[0] for record in records) for records in kernel_stats.values()
+    )
+    logging.info(
+        f"{sep}\n"
+        f"  kernel 总种数: {len(kernel_stats)}  |  总耗时: {total_kernel_time:.1f} μs ({total_kernel_time/1000:.2f} ms)\n"
+        f"{sep}"
+    )
+
+
+def _report_profile_results(profile_output_dir: str) -> None:
+    """在 perf test 结束后自动查找并分析 trace 文件。"""
+    trace_files = sorted(glob.glob(os.path.join(profile_output_dir, "trace_step*.json")))
+    if not trace_files:
+        logging.warning(f"[profiler] 未在 {profile_output_dir} 找到 trace 文件，可能 forward 次数不足")
+        return
+    for trace_path in trace_files:
+        logging.info(f"[profiler] 分析 trace 文件: {trace_path}")
+        _analyze_trace(trace_path)
 
 
 def main():
@@ -354,6 +487,7 @@ def main():
         args.partial,
         args.tp_size,
         args.dp_size,
+        args.ep_size,
     )
 
     input_query_dict = create_query(
@@ -376,10 +510,40 @@ def main():
         decode_result, prefill_result = run_normal_test(args, running_config)
     else:
         decode_result, prefill_result = run_disaggregate_test(args, running_config)
+    profile_output_dir = os.environ.get("TORCH_PROFILE_OUTPUT_DIR")
+    if profile_output_dir:
+        # 计算实际写入路径（与 create_test_env 中的重定向逻辑保持一致）
+        undeclared_outputs_dir = os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR")
+        actual_profile_dir = profile_output_dir
+        if profile_output_dir.startswith('/tmp') and undeclared_outputs_dir:
+            actual_profile_dir = os.path.join(undeclared_outputs_dir, 'torch_profile')
+        _report_profile_results(actual_profile_dir)
+        # 如果实际写入路径与用户指定路径不同，将文件 copy 到用户指定路径
+        if actual_profile_dir != profile_output_dir:
+            import shutil
+            os.makedirs(profile_output_dir, exist_ok=True)
+            
+            # Copy all JSON files from TEST_UNDECLARED_OUTPUTS_DIR
+            if undeclared_outputs_dir and os.path.exists(undeclared_outputs_dir):
+                all_json_files = glob.glob(os.path.join(undeclared_outputs_dir, '**/*.json'), recursive=True)
+                for json_file in all_json_files:
+                    dest = os.path.join(profile_output_dir, os.path.basename(json_file))
+                    shutil.copy2(json_file, dest)
+                    logging.info('[profiler] JSON 文件已 copy 到用户指定路径: ' + dest)
+            
+            # Also copy trace files from torch_profile subdirectory
+            trace_files = glob.glob(os.path.join(actual_profile_dir, 'trace_step*.json'))
+            for trace_file in trace_files:
+                dest = os.path.join(profile_output_dir, os.path.basename(trace_file))
+                if not os.path.exists(dest):
+                    shutil.copy2(trace_file, dest)
+                    logging.info('[profiler] trace 文件已 copy 到用户指定路径: ' + dest)
+
     if args.partial != 0:
         return
+    assert decode_result is not None and prefill_result is not None
     metrics_list = merge_state(decode_result, prefill_result)
-    device_name = os.environ.get("DEVICE_NAME", torch.cuda.get_device_name(0))
+    device_name = os.environ.get("DEVICE_NAME") or torch.cuda.get_device_name(0)
     # use decode parallel config as odps column for current
     write_odps_wrapper(
         device_name,

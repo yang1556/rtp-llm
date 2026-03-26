@@ -7,6 +7,32 @@ from aiter_meta.csrc.cpp_itfs.pa_gluon_aot.pa_decode_gluon_aot import (
     pa_decode_gluon_aot,
 )
 
+# === Profiling monkey patch for PyTorch Profiler visibility ===
+import torch.profiler
+_original_pa_decode_gluon_aot = pa_decode_gluon_aot
+
+def _profiled_pa_decode_gluon_aot(*args, **kwargs):
+    # Build name with shape info embedded
+    parts = ["pa_decode_gluon_aot"]
+    if 'query' in kwargs and kwargs['query'] is not None:
+        q = kwargs['query']
+        parts.append(f"q={list(q.shape)}")
+    if 'key_cache' in kwargs and kwargs['key_cache'] is not None:
+        parts.append(f"k={list(kwargs['key_cache'].shape)}")
+    if 'value_cache' in kwargs and kwargs['value_cache'] is not None:
+        parts.append(f"v={list(kwargs['value_cache'].shape)}")
+    if 'query_length' in kwargs:
+        parts.append(f"qlen={kwargs['query_length']}")
+    if 'context_partition_size' in kwargs:
+        parts.append(f"ps={kwargs['context_partition_size']}")
+    
+    func_name = " ".join(parts)
+    with torch.profiler.record_function(func_name):
+        return _original_pa_decode_gluon_aot(*args, **kwargs)
+
+pa_decode_gluon_aot = _profiled_pa_decode_gluon_aot
+# === End patch ===
+
 from rtp_llm.models_py.modules.factory.attention import common
 from rtp_llm.models_py.modules.factory.attention.fmha_impl_base import FMHAImplBase
 from rtp_llm.ops import AttentionConfigs, FMHAType, ParallelismConfig
