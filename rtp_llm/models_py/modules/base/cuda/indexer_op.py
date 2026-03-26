@@ -608,20 +608,9 @@ class IndexerOp(nn.Module):
             attention_inputs.kv_cache_block_id_device,
             cu_kv_seqlens_global,
         )
-        kv_fp8_full = (k_fp8, k_scale.view(torch.float32))
         assert (
             fmha_params.ks is not None and fmha_params.ke is not None
         ), "ks/ke must be prepared in prefill"
-
-        n_tokens_fmha = fmha_params.ks.shape[0]
-        if total_global_ids.numel() > 0:
-            max_idx = total_global_ids.max().item()
-            if max_idx >= n_tokens_fmha:
-                raise ValueError(
-                    f"total_global_ids out of range for fmha_params.ks: "
-                    f"max(total_global_ids)={max_idx}, fmha_params.ks.shape[0]={n_tokens_fmha}. "
-                    "Check that attn_inputs used for fill_params use global (prefill_actual_input_lengths_cpu) lengths."
-                )
 
         def run_part_logits_topk(
             q_part: torch.Tensor,
