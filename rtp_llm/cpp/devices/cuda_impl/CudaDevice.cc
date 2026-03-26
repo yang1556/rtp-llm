@@ -212,6 +212,22 @@ CudaDevice::~CudaDevice() {
         origin_torch_cuda_allocator_ = nullptr;
     }
     cublas_mm_wrapper_.reset();
+    check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
+    if (no_block_copy_opt_staging_) {
+        check_cuda_value(cudaFreeAsync(no_block_copy_opt_staging_, no_block_copy_stream_));
+        no_block_copy_opt_staging_     = nullptr;
+        no_block_copy_opt_staging_cap_ = 0;
+    }
+    if (no_block_copy_opt_ptr0_) {
+        check_cuda_value(cudaFreeAsync(no_block_copy_opt_ptr0_, no_block_copy_stream_));
+        no_block_copy_opt_ptr0_ = nullptr;
+    }
+    if (no_block_copy_opt_ptr1_) {
+        check_cuda_value(cudaFreeAsync(no_block_copy_opt_ptr1_, no_block_copy_stream_));
+        no_block_copy_opt_ptr1_ = nullptr;
+    }
+    no_block_copy_opt_ptr_table_cap_ = 0;
+    check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
     check_cuda_value(cudaStreamDestroy(no_block_copy_stream_));
     check_cuda_value(cublasDestroy(cublas_handle_));
     check_cuda_value(cublasLtDestroy(cublaslt_handle_));
