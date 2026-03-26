@@ -137,6 +137,7 @@ GreedyOutput CudaDevice::flashinferSampleGreedy(const GreedyParams& params, cons
     torch::Tensor success_t = Buffer2torchTensor(success, false);
     torch::Tensor top_k_t   = Buffer2torchTensor(top_k, false);
     torch::Tensor top_p_t   = Buffer2torchTensor(top_p, false);
+
     torch::Tensor output_all_probs_t;
     if (params.output_all_probs.has_value()) {
         output_all_probs_t = Buffer2torchTensor(*params.output_all_probs, false);
@@ -149,20 +150,18 @@ GreedyOutput CudaDevice::flashinferSampleGreedy(const GreedyParams& params, cons
         return std::abs(t) < 1e-7 ? 1.0 : t;
     });
 
-    bool need_renorm_probs = output_all_probs_t.defined() && !params.return_original_all_probs;
-
     if (std::all_of(top_k.data<uint32_t>(), top_k.data<uint32_t>() + batch_size, [&](auto t) { return t == 1; })) {
         torch::Tensor selected_tokens = torch::argmax(probs_t, -1, /*keepdim=*/false);
         samples_t.copy_(selected_tokens);
         success.reset();
-        if (need_renorm_probs) {
+        if (output_all_probs_t.defined()) {
             top_k_renorm_probs(probs_t, output_all_probs_t, top_k_t, 0, (int64_t)stream_);
         }
     } else if (std::all_of(
                    top_k.data<uint32_t>(), top_k.data<uint32_t>() + batch_size, [&](auto t) { return t <= 0; })) {
         top_p_sampling_from_probs(
             probs_t, uniform_samples, samples_t, success_t, top_p_t, 1.0, deterministic, (int64_t)stream_);
-        if (need_renorm_probs) {
+        if (output_all_probs_t.defined()) {
             top_p_renorm_probs(probs_t, output_all_probs_t, top_p_t, 1.0, (int64_t)stream_);
         }
     } else if (std::all_of(top_p.data<float>(), top_p.data<float>() + batch_size, [&](auto t) {
@@ -174,7 +173,7 @@ GreedyOutput CudaDevice::flashinferSampleGreedy(const GreedyParams& params, cons
                        [&](auto t) { return t <= 0 ? 1 << 30 : t; });
         top_k_sampling_from_probs(
             probs_t, uniform_samples, samples_t, success_t, top_k_t, 0, deterministic, (int64_t)stream_);
-        if (need_renorm_probs) {
+        if (output_all_probs_t.defined()) {
             top_k_renorm_probs(probs_t, output_all_probs_t, top_k_t, 0, (int64_t)stream_);
         }
     } else {
@@ -192,25 +191,30 @@ GreedyOutput CudaDevice::flashinferSampleGreedy(const GreedyParams& params, cons
                                         1.0,
                                         deterministic,
                                         (int64_t)stream_);
-        if (need_renorm_probs) {
+        if (output_all_probs_t.defined()) {
             torch::Tensor temp_t = torch::zeros_like(output_all_probs_t);
             top_k_renorm_probs(probs_t, temp_t, top_k_t, 1.0, (int64_t)stream_);
             top_p_renorm_probs(temp_t, output_all_probs_t, top_p_t, 1.0, (int64_t)stream_);
         }
     }
 
-    if (params.return_original_all_probs) {
-        top_k_renorm_probs(probs_t, output_all_probs_t, std::nullopt, 1 << 30, (int64_t)stream_);
-    }
-
     if (params.cum_log_probs.has_value()) {
-
         // [batch_size]
         auto cum_log_probs_t = Buffer2torchTensor(*params.cum_log_probs, false);
         // [batch_size]
         auto token_probs_t     = output_all_probs_t.gather(1, samples_t.transpose(1, 0).to(torch::kLong)).squeeze(1);
         auto token_probs_t_log = token_probs_t.log();
         cum_log_probs_t.add_(token_probs_t_log.to(cum_log_probs_t.device()));
+    }
+
+    // Compute topk logprobs on GPU
+    if (params.output_top_logprobs.has_value()) {
+        auto output_top_logprobs_t  = Buffer2torchTensor(*params.output_top_logprobs, false);
+        auto output_top_token_ids_t = Buffer2torchTensor(*params.output_top_token_ids, false);
+        int  k                      = (int)params.output_top_logprobs->get().shape()[1];
+        auto [topk_vals, topk_ids]  = torch::topk(probs_t, k, -1, true, true);
+        output_top_logprobs_t.copy_(topk_vals.log());
+        output_top_token_ids_t.copy_(topk_ids.to(torch::kInt32));
     }
 
     auto output_tokens = transpose({*transposed_tokens});
@@ -253,6 +257,7 @@ GreedyOutput CudaDevice::sampleGreedy(const GreedyParams& params) {
     // fast path for topk = 1
     auto& top_k = params.top_k;
     if (std::all_of(top_k.data<uint32_t>(), top_k.data<uint32_t>() + batch_size, [&](auto t) { return t == 1; })
+        && !params.output_top_logprobs.has_value() && !params.cum_log_probs.has_value()
         && !params.output_all_probs.has_value()) {
         BufferPtr     logits_ref      = params.logits.slice(0, params.logits.shape()[0]);
         Buffer        samples         = transposed_tokens->view(transposed_tokens->shape()[0] - 1, 1);

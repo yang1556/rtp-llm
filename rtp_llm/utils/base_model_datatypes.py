@@ -164,7 +164,9 @@ class GenerateOutput:
     aux_info: Optional[AuxInfo] = None
     loss: Optional[torch.Tensor] = None
     logits: Optional[torch.Tensor] = None
-    all_probs: Optional[torch.Tensor] = None
+    all_probs: Optional[torch.Tensor] = None  # deprecated, kept for compatibility
+    top_logprobs: Optional[torch.Tensor] = None
+    top_token_ids: Optional[torch.Tensor] = None
 
     class Config:
         arbitrary_types_allowed = True

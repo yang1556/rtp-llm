@@ -303,10 +303,10 @@ absl::StatusOr<SamplerInputs> NormalBatchStreamProcessor::gatherSamplerInput(
     const StreamGroups& stream_groups, const GptModelInputs& model_inputs, const GptModelOutputs& model_output) const {
     RTP_LLM_LOG_DEBUG(__PRETTY_FUNCTION__);
     RTP_LLM_CHECK(!stream_groups.empty());
-    auto               all_streams          = stream_groups.allStreams();
-    auto               total_batch_size_in  = stream_groups.totalSamplerBatchSizeIn();
-    auto               total_batch_size_out = stream_groups.totalSamplerBatchSizeOut();
-    ReturnAllProbsMode return_all_probs     = stream_groups.needReturnAllProbs();
+    auto all_streams          = stream_groups.allStreams();
+    auto total_batch_size_in  = stream_groups.totalSamplerBatchSizeIn();
+    auto total_batch_size_out = stream_groups.totalSamplerBatchSizeOut();
+    int  max_top_logprobs_num = stream_groups.maxTopLogprobsNum();
 
     SamplerInputs sampler_inputs =
         allocateSamplerInputs(stream_groups, total_batch_size_in, total_batch_size_out, model_inputs.sequence_lengths);
@@ -351,13 +351,13 @@ absl::StatusOr<SamplerInputs> NormalBatchStreamProcessor::gatherSamplerInput(
 
     auto vocab_size           = model_output.logits->shape()[1];
     sampler_inputs.vocab_size = vocab_size;
-    if (return_all_probs != ReturnAllProbsMode::NONE) {
-        sampler_inputs.all_probs = device_->allocateBuffer(
-            {rtp_llm::DataType::TYPE_FP32, {total_batch_size_in, vocab_size}, rtp_llm::AllocationType::DEVICE}, {});
-        device_->bufMemset(*sampler_inputs.all_probs, 0);
-        if (return_all_probs == ReturnAllProbsMode::ORIGINAL) {
-            sampler_inputs.return_original_all_probs = true;
-        }
+    if (max_top_logprobs_num > 0) {
+        size_t k                    = (size_t)max_top_logprobs_num;
+        sampler_inputs.top_logprobs = device_->allocateBuffer(
+            {rtp_llm::DataType::TYPE_FP32, {total_batch_size_in, k}, rtp_llm::AllocationType::DEVICE}, {});
+        sampler_inputs.top_token_ids = device_->allocateBuffer(
+            {rtp_llm::DataType::TYPE_INT32, {total_batch_size_in, k}, rtp_llm::AllocationType::DEVICE}, {});
+        sampler_inputs.top_logprobs_num = max_top_logprobs_num;
     }
 
     // copy logits when needs tiling or returning logits
@@ -505,19 +505,17 @@ absl::Status NormalBatchStreamProcessor::dispatch(const StreamGroups& stream_gro
     RTP_LLM_LOG_DEBUG("new_all_token_ids = [%s]", new_all_token_ids->debugStringWithData<int32_t>().c_str());
     const size_t total_batch_size_out = stream_groups.totalSamplerBatchSizeOut();
     RTP_LLM_CHECK(total_batch_size_out == new_all_token_ids->shape()[0]);
-    int  batch_idx_in     = 0;
-    int  batch_idx_out    = 0;
-    int  token_offset     = 0;
-    bool return_all_probs = stream_groups.needReturnAllProbs() != ReturnAllProbsMode::NONE;
-    auto new_tokens_all   = CACHED_HOST_BUF(TYPE_INT32, {(size_t)total_batch_size_out, (size_t)1});
+    int  batch_idx_in   = 0;
+    int  batch_idx_out  = 0;
+    int  token_offset   = 0;
+    auto new_tokens_all = CACHED_HOST_BUF(TYPE_INT32, {(size_t)total_batch_size_out, (size_t)1});
 
     for (auto& stream : stream_groups.allStreams()) {
         auto cur_batch_size  = stream->currentBatchSize();
         auto next_batch_size = stream->nextBatchSize();
         auto token_size      = stream->currentExecuteTokenSize();
 
-        dispatchSingleStream(
-            stream, merge_outputs, batch_idx_in, batch_idx_out, token_offset, return_all_probs, new_tokens_all);
+        dispatchSingleStream(stream, merge_outputs, batch_idx_in, batch_idx_out, token_offset, new_tokens_all);
 
         batch_idx_in += cur_batch_size;
         batch_idx_out += next_batch_size;
@@ -533,7 +531,6 @@ void NormalBatchStreamProcessor::dispatchSingleStream(GenerateStreamPtr   stream
                                                       int                 batch_idx_in,
                                                       int                 batch_idx_out,
                                                       int                 token_offset,
-                                                      bool                return_all_probs,
                                                       const BufferPtr&    new_tokens_all) const {
 
     const auto&  model_output      = merge_outputs.model_output;
@@ -576,10 +573,13 @@ void NormalBatchStreamProcessor::dispatchSingleStream(GenerateStreamPtr   stream
         batch_logits = model_output.logits->slice(batch_idx_in, cur_batch_size);
     }
 
-    BufferPtr all_probs = nullptr;
-    if (return_all_probs) {
-        all_probs = sampler_output.all_probs->slice(batch_idx_out, next_batch_size, false);
-        all_probs->updateParent(sampler_output.all_probs);
+    BufferPtr top_logprobs  = nullptr;
+    BufferPtr top_token_ids = nullptr;
+    if (sampler_output.top_logprobs) {
+        top_logprobs = sampler_output.top_logprobs->slice(batch_idx_out, next_batch_size, false);
+        top_logprobs->updateParent(sampler_output.top_logprobs);
+        top_token_ids = sampler_output.top_token_ids->slice(batch_idx_out, next_batch_size, false);
+        top_token_ids->updateParent(sampler_output.top_token_ids);
     };
 
     BufferPtr batch_cum_log_probs;
@@ -636,7 +636,8 @@ void NormalBatchStreamProcessor::dispatchSingleStream(GenerateStreamPtr   stream
                     batch_logits,
                     current_softmax_result,
                     batch_cum_log_probs,
-                    all_probs,
+                    top_logprobs,
+                    top_token_ids,
                     loss,
                     src_batch_indices,
                     all_hidden_states});

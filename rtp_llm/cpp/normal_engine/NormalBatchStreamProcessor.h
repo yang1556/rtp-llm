@@ -63,7 +63,6 @@ protected:
                               int                 batch_idx_in,
                               int                 batch_idx_out,
                               int                 token_offset,
-                              bool                return_all_probs,
                               const BufferPtr&    new_tokens_all) const;
 
     void setKVCacheGroupTypes(std::vector<CacheGroupType> kv_cache_group_types) {

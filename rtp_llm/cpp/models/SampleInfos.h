@@ -55,10 +55,11 @@ public:
     rtp_llm::BufferPtr do_sample;             // shape: [batch_size]
     rtp_llm::BufferPtr finished_mask;         // shape: [batch_size]
 
-    bool return_original_all_probs = false;
-
     mutable rtp_llm::BufferPtr cum_log_probs;  // shape: [batch_size]
-    mutable rtp_llm::BufferPtr all_probs;      // shape: [batch_size, vocab_size]
+    mutable rtp_llm::BufferPtr all_probs;      // shape: [batch_size, vocab_size] (used by speculative decoding)
+    mutable rtp_llm::BufferPtr top_logprobs;   // shape: [batch_size, top_logprobs]
+    mutable rtp_llm::BufferPtr top_token_ids;  // shape: [batch_size, top_logprobs]
+    int                        top_logprobs_num = 0;
 
     std::vector<at::Generator> generator;
 };
@@ -67,7 +68,9 @@ struct SamplerOutput {
 public:
     rtp_llm::BufferPtr token_ids;
     rtp_llm::BufferPtr cum_log_probs;
-    rtp_llm::BufferPtr all_probs;
+    rtp_llm::BufferPtr all_probs;  // used by speculative decoding
+    rtp_llm::BufferPtr top_logprobs;
+    rtp_llm::BufferPtr top_token_ids;
     rtp_llm::BufferPtr beam_index;
     rtp_llm::BufferPtr success;
 };

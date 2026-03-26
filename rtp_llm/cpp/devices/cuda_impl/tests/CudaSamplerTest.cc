@@ -42,24 +42,9 @@ TEST_F(CudaSamplerTest, testFlashinferKernelTopK1) {
     generator.resize(batch_size);
 
     GreedyParams params({
-        *logits,
-        *input_lengths,
-        *sequence_lengths,
-        *output_token_ids,
-        step,
-        *top_k,
-        *top_p,
-        *temperture,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        false,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        generator,
+        *logits,     *input_lengths, *sequence_lengths, *output_token_ids, step,      *top_k,  *top_p,
+        *temperture, nullopt,        nullopt,           nullopt,           nullopt,   nullopt, nullopt,
+        nullopt,     nullopt,        nullopt,           nullopt,           generator,
     });
     auto         greedy_output = device_->sampleGreedy(params);
     check_cuda_error();
@@ -68,6 +53,76 @@ TEST_F(CudaSamplerTest, testFlashinferKernelTopK1) {
     ASSERT_EQ(output_token_ids_host[11], 2);
     ASSERT_EQ(output_token_ids_host[17], 7);
     ASSERT_EQ(output_token_ids_host[23], 7);
+}
+
+TEST_F(CudaSamplerTest, testFlashinferKernelTopK1WithOutputAllProbs) {
+    DeviceInitParams device_init_params;
+    device_ = new CudaDevice(device_init_params);
+    device_->init();
+
+    size_t    batch_size = 4;
+    BufferPtr logits     = createBuffer<float>({batch_size, 10},
+                                               {
+                                               0,     0,     0,       0.1, 0.2, 0.3,   0, 0,      0,    0.01,
+                                               0.987, 0.887, 0.99999, 0.1, 0.2, 0.3,   0, 0,      0.99, 0.989,
+                                               0.221, 0,     0,       0.1, 0.2, 0.321, 0, 0.4432, 0.44, 0.01,
+                                               0.221, 0,     0,       0.1, 0.2, 0.321, 0, 0.4432, 0.44, 0.01,
+                                           });
+    size_t    step       = 5;
+    BufferPtr output_token_ids =
+        createBuffer<int32_t>({batch_size, step + 1},
+                              {
+                                  100, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+                              });
+
+    BufferPtr sequence_lengths = createBuffer<int32_t>({4}, {5, 5, 5, 5});
+    BufferPtr input_lengths    = createBuffer<int32_t>({4}, {-1, -1, -1, -1});
+
+    auto top_k      = createBuffer<uint32_t>({4}, {1, 1, 1, 1}, AllocationType::HOST);
+    auto top_p      = createBuffer<float>({4}, {1.0, 1.0, 1.0, 1.0}, AllocationType::HOST);
+    auto temperture = createBuffer<float>({4}, {1.0, 1.0, 1.0, 1.0}, AllocationType::HOST);
+
+    BufferPtr output_all_probs =
+        device_->allocateBuffer({rtp_llm::DataType::TYPE_FP32, {4, 10}, rtp_llm::AllocationType::DEVICE});
+    device_->bufMemset(*output_all_probs, 0);
+
+    std::vector<at::Generator> generator;
+    generator.resize(batch_size);
+
+    GreedyParams params({*logits,
+                         *input_lengths,
+                         *sequence_lengths,
+                         *output_token_ids,
+                         step,
+                         *top_k,
+                         *top_p,
+                         *temperture,
+                         nullopt,
+                         nullopt,
+                         nullopt,
+                         nullopt,
+                         nullopt,
+                         nullopt,
+                         *output_all_probs,
+                         nullopt,
+                         nullopt,
+                         nullopt,
+                         generator});
+    device_->sampleGreedy(params);
+    check_cuda_error();
+
+    auto output_token_ids_host = getBufferValues<int32_t>(*output_token_ids);
+    ASSERT_EQ(output_token_ids_host[5], 5);
+    ASSERT_EQ(output_token_ids_host[11], 2);
+    ASSERT_EQ(output_token_ids_host[17], 7);
+    ASSERT_EQ(output_token_ids_host[23], 7);
+
+    auto output_all_probs_host = getBufferValues<float>(*output_all_probs);
+    // With top_k=1, top_k_renorm_probs gives 1.0 for the selected token and 0.0 for others
+    ASSERT_FLOAT_EQ(output_all_probs_host[5], 1.0f);   // batch 0, token 5 (selected)
+    ASSERT_FLOAT_EQ(output_all_probs_host[12], 1.0f);  // batch 1, token 2 (selected)
+    ASSERT_FLOAT_EQ(output_all_probs_host[27], 1.0f);  // batch 2, token 7 (selected)
+    ASSERT_FLOAT_EQ(output_all_probs_host[37], 1.0f);  // batch 3, token 7 (selected)
 }
 
 TEST_F(CudaSamplerTest, testFlashinferKernelTopK) {
@@ -102,24 +157,9 @@ TEST_F(CudaSamplerTest, testFlashinferKernelTopK) {
     generator.resize(batch_size);
 
     GreedyParams params({
-        *logits,
-        *input_lengths,
-        *sequence_lengths,
-        *output_token_ids,
-        step,
-        *top_k,
-        *top_p,
-        *temperture,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        false,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        generator,
+        *logits,     *input_lengths, *sequence_lengths, *output_token_ids, step,      *top_k,  *top_p,
+        *temperture, nullopt,        nullopt,           nullopt,           nullopt,   nullopt, nullopt,
+        nullopt,     nullopt,        nullopt,           nullopt,           generator,
     });
     auto         greedy_output = device_->sampleGreedy(params);
     check_cuda_error();
@@ -171,24 +211,9 @@ TEST_F(CudaSamplerTest, testFlashinferKernelTopP) {
     generator.resize(batch_size);
 
     GreedyParams params({
-        *logits,
-        *input_lengths,
-        *sequence_lengths,
-        *output_token_ids,
-        step,
-        *top_k,
-        *top_p,
-        *temperture,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        false,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        generator,
+        *logits,     *input_lengths, *sequence_lengths, *output_token_ids, step,      *top_k,  *top_p,
+        *temperture, nullopt,        nullopt,           nullopt,           nullopt,   nullopt, nullopt,
+        nullopt,     nullopt,        nullopt,           nullopt,           generator,
     });
     auto         greedy_output = device_->sampleGreedy(params);
     check_cuda_error();
@@ -244,24 +269,9 @@ TEST_F(CudaSamplerTest, testFlashinferKernelTopKTopP) {
     generator.resize(batch_size);
 
     GreedyParams params({
-        *logits,
-        *input_lengths,
-        *sequence_lengths,
-        *output_token_ids,
-        step,
-        *top_k,
-        *top_p,
-        *temperture,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        false,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        generator,
+        *logits,     *input_lengths, *sequence_lengths, *output_token_ids, step,      *top_k,  *top_p,
+        *temperture, nullopt,        nullopt,           nullopt,           nullopt,   nullopt, nullopt,
+        nullopt,     nullopt,        nullopt,           nullopt,           generator,
     });
     auto         greedy_output = device_->sampleGreedy(params);
     check_cuda_error();
@@ -316,24 +326,9 @@ TEST_F(CudaSamplerTest, testFlashinferKernelFailed) {
     generator.resize(batch_size);
 
     GreedyParams params({
-        *logits,
-        *input_lengths,
-        *sequence_lengths,
-        *output_token_ids,
-        step,
-        *top_k,
-        *top_p,
-        *temperture,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        false,
-        nullopt,
-        nullopt,
-        nullopt,
-        nullopt,
-        generator,
+        *logits,     *input_lengths, *sequence_lengths, *output_token_ids, step,      *top_k,  *top_p,
+        *temperture, nullopt,        nullopt,           nullopt,           nullopt,   nullopt, nullopt,
+        nullopt,     nullopt,        nullopt,           nullopt,           generator,
     });
     auto         greedy_output = device_->sampleGreedy(params);
     check_cuda_error();
@@ -471,7 +466,8 @@ TEST_F(CudaSamplerTest, testPenalty) {
                          nullopt,
                          *cum_log_probs,
                          nullopt,
-                         false,
+                         nullopt,
+                         nullopt,
                          *output_all_probs,
                          *presence_penalty,
                          *frequency_penalty,
@@ -559,7 +555,8 @@ TEST_F(CudaSamplerTest, testDoSample) {
                          nullopt,
                          *cum_log_probs,
                          nullopt,
-                         false,
+                         nullopt,
+                         nullopt,
                          *output_all_probs,
                          nullopt,
                          nullopt,

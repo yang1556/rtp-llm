@@ -137,7 +137,6 @@ class ChatCompletionRequest(BaseModel):
     seed: Optional[int] = None
     n: Optional[int] = None
     logprobs: Optional[bool] = None
-    logprobs_mode: Optional[Literal["original", "default"]] = None
     top_logprobs: Optional[int] = None
 
     # ---- These functions are not implemented yet.

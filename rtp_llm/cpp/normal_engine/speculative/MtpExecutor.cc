@@ -105,7 +105,7 @@ GenerateStreamPtr MtpExecutor::createMinFakeDecodeStream(int                    
     *new_tokens->dataWithOffset<int32_t>(0) = 0;
 
     StreamUpdateInfo update_info{
-        new_tokens, 1, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, false};
+        new_tokens, 1, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, false};
 
     fake_stream->update(update_info);
     fake_stream->setSPOutputBuffer(sp_buffer);
@@ -673,7 +673,7 @@ void MtpExecutor::prepareStreams(const std::list<GenerateStreamPtr>& streams,
         }
 
         // set base properties
-        stream->setReturnAllProbs(ReturnAllProbsMode::DEFAULT);
+        stream->setReturnAllProbs(true);
         if (stream->getSPOutputBuffer() == nullptr) {
             auto sp_output_buffer    = std::make_shared<SpeculativeExecutorStreamOutput>();
             sp_output_buffer->tokens = device_->allocateBuffer(

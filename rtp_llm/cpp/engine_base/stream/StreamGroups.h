@@ -116,21 +116,29 @@ public:
         return false;
     }
 
-    ReturnAllProbsMode needReturnAllProbs() const {
-        ReturnAllProbsMode return_all_probs = ReturnAllProbsMode::NONE;
+    bool needReturnAllProbs() const {
         for (auto& stream : context_streams_) {
-            auto cur_return_all_probs = stream->getReturnAllProbs();
-            if (cur_return_all_probs > return_all_probs) {
-                return_all_probs = cur_return_all_probs;
+            if (stream->getReturnAllProbs()) {
+                return true;
             }
         }
         for (auto& stream : decode_streams_) {
-            auto cur_return_all_probs = stream->getReturnAllProbs();
-            if (cur_return_all_probs > return_all_probs) {
-                return_all_probs = cur_return_all_probs;
+            if (stream->getReturnAllProbs()) {
+                return true;
             }
         }
-        return return_all_probs;
+        return false;
+    }
+
+    int maxTopLogprobsNum() const {
+        int max_val = 0;
+        for (auto& stream : context_streams_) {
+            max_val = std::max(max_val, stream->generateConfig()->top_logprobs_num);
+        }
+        for (auto& stream : decode_streams_) {
+            max_val = std::max(max_val, stream->generateConfig()->top_logprobs_num);
+        }
+        return max_val;
     }
 
     bool needReturnCumLogProbs() const {

@@ -79,9 +79,11 @@ TEST_F(SamplerTest, testGeneralSampling) {
         nullptr,  // no_repeat_ngram_size
         nullptr,  // do_sample
         nullptr,  // finished_mask
-        false,    // return_original_all_probs
         device_->clone({*cum_log_probs}),
         nullptr,  // all_probs
+        nullptr,  // top_logprobs
+        nullptr,  // top_token_ids
+        0,        // top_logprobs
         generator,
     };
 

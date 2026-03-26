@@ -20,7 +20,7 @@ namespace rtp_llm {
 //       For the second part, different samplers should be created for different params.
 //       So they can not be batched together for now.
 
-enum class ReturnAllProbsMode {
+enum class ReturnLogProbsMode {
     NONE     = 0,
     DEFAULT  = 1,
     ORIGINAL = 2
@@ -68,8 +68,8 @@ public:
     bool                          sp_edit                  = false;
     bool                          force_disable_sp_run     = false;
     bool                          force_sp_accept          = false;
-    ReturnAllProbsMode            return_all_probs         = ReturnAllProbsMode::NONE;
     bool                          return_original_probs    = false;
+    int                           top_logprobs_num         = 0;
     bool                          return_softmax_probs     = false;
     bool                          aux_info                 = true;
     std::vector<std::vector<int>> stop_words_list;
@@ -140,7 +140,6 @@ public:
                      << ", is_streaming:" << is_streaming << ", timeout_ms:" << timeout_ms << ", top_k:" << top_k
                      << ", top_p:" << top_p << ", force_disable_sp_run: " << force_disable_sp_run
                      << ", force_sp_accept: " << force_sp_accept
-                     << ", return_all_probs: " << static_cast<int>(return_all_probs)
                      << ", stop_words_list:" << vectorsToString(stop_words_list)
                      << ", can_use_pd_separation: " << can_use_pd_separation << ", pd_separation: " << pd_separation
                      << ", in_think_mode: " << in_think_mode << ", max_thinking_tokens: " << max_thinking_tokens
@@ -215,7 +214,7 @@ public:
         JSONIZE(sp_edit);
         JSONIZE(force_disable_sp_run);
         JSONIZE(force_sp_accept);
-        JSONIZE(return_all_probs);
+        JSONIZE(top_logprobs_num);
         JSONIZE(sp_advice_prompt);
         JSONIZE(sp_advice_prompt_token_ids);
         JSONIZE(in_think_mode);

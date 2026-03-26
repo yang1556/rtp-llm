@@ -25,7 +25,8 @@ struct StreamUpdateInfo {
     const rtp_llm::BufferPtr logits;
     const rtp_llm::BufferPtr softmax_probs;
     const rtp_llm::BufferPtr cum_log_probs;
-    const rtp_llm::BufferPtr all_probs;
+    const rtp_llm::BufferPtr top_logprobs;
+    const rtp_llm::BufferPtr top_token_ids;
     const rtp_llm::BufferPtr loss;
     const rtp_llm::BufferPtr src_batch_indices;
     // for mtp
@@ -60,8 +61,8 @@ public:
         if (hidden_states) {
             debug_string << ", hidden_states: " << hidden_states->debugStringWithData<int32_t>();
         }
-        if (all_probs) {
-            debug_string << ", all_probs" << all_probs->debugStringWithData<int32_t>();
+        if (top_logprobs) {
+            debug_string << ", top_logprobs" << top_logprobs->debugStringWithData<float>();
         }
         if (softmax_probs) {
             debug_string << ", softmax_probs" << softmax_probs->debugStringWithData<float>();
@@ -76,7 +77,9 @@ public:
     rtp_llm::BufferPtr logits        = nullptr;
     rtp_llm::BufferPtr hidden_states = nullptr;
     rtp_llm::BufferPtr loss          = nullptr;
-    rtp_llm::BufferPtr all_probs     = nullptr;
+    rtp_llm::BufferPtr all_probs     = nullptr;  // deprecated, kept for speculative compatibility
+    rtp_llm::BufferPtr top_logprobs  = nullptr;
+    rtp_llm::BufferPtr top_token_ids = nullptr;
     rtp_llm::BufferPtr softmax_probs = nullptr;
 
     // hold tensors from grpc
@@ -287,11 +290,11 @@ public:
 
     void CopyOnWrite(const GenerateStream& other_stream, bool copy_loss = true, bool share = false);
 
-    void setReturnAllProbs(ReturnAllProbsMode return_all_probs) {
+    void setReturnAllProbs(bool return_all_probs) {
         return_all_probs_ = return_all_probs;
     }
 
-    ReturnAllProbsMode getReturnAllProbs() {
+    bool getReturnAllProbs() {
         return return_all_probs_;
     }
 
@@ -535,8 +538,7 @@ protected:
     bool done_                  = false;
     bool released_              = false;
     bool need_release_resource_ = true;
-
-    ReturnAllProbsMode return_all_probs_ = ReturnAllProbsMode::NONE;
+    bool return_all_probs_      = false;
 
     bool          last_block_aligned_   = false;
     volatile bool need_remote_generate_ = false;
@@ -550,7 +552,8 @@ protected:
     kmonitor::MetricsReporterPtr             metrics_reporter_;
     rtp_llm::SpecialTokens                   special_tokens_;
     rtp_llm::BufferPtr                       cum_log_probs_;
-    rtp_llm::BufferPtr                       all_probs_;
+    rtp_llm::BufferPtr                       top_logprobs_;
+    rtp_llm::BufferPtr                       top_token_ids_;
     rtp_llm::BufferPtr                       softmax_probs_;
     rtp_llm::BufferPtr                       loss_;
     rtp_llm::BufferPtr                       last_hidden_states_ = nullptr;

@@ -919,9 +919,9 @@ struct GreedyParams {
     OptionalBufferRef cum_log_probs;
     OptionalBufferRef output_log_probs;
 
-    bool return_original_all_probs = false;
-
-    OptionalBufferRef output_all_probs;
+    OptionalBufferRef output_top_logprobs;
+    OptionalBufferRef output_top_token_ids;
+    OptionalBufferRef output_all_probs;  // used by speculative decoding
     OptionalBufferRef presence_penalty;
     OptionalBufferRef frequency_penalty;
     OptionalBufferRef do_sample;

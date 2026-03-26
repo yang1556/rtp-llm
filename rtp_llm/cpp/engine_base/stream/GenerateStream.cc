@@ -91,8 +91,6 @@ GenerateStream::GenerateStream(const shared_ptr<GenerateInput>& input,
 
     stream_cache_resource_->init(init_batch_size);
 
-    setReturnAllProbs(generate_input_->generate_config->return_all_probs);
-
     logits_processor_list_ = LogitsProcessorFactory::createLogitsProcessors(
         device_, generate_input_, init_batch_size, maxBatchSize(), special_tokens_.eos_token_id);
 
@@ -841,6 +839,7 @@ void GenerateStream::specUpdate(const StreamSpecUpdateInfo& update_info) {
     // update normal output buffer
     updateOutput({new_tokens,
                   num_new_tokens,
+                  nullptr,
                   nullptr,
                   nullptr,
                   nullptr,

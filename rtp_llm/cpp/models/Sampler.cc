@@ -94,6 +94,12 @@ SamplerOutput Sampler::forward(const SamplerInputs& inputs) {
             auto frequency_penalty  = MAY_GET_BUFFER_VIEW(inputs.frequency_penalty, from_batch_idx_in, batch_size_in);
             auto no_repeat_ngram_size =
                 MAY_GET_BUFFER_VIEW(inputs.no_repeat_ngram_size, from_batch_idx_in, batch_size_in);
+            auto top_logprobs =
+                (inputs.top_logprobs.get() ? inputs.top_logprobs->view(from_batch_idx_in, batch_size_in) :
+                                             Buffer::emptyBuffer());
+            auto top_token_ids_buf =
+                (inputs.top_token_ids.get() ? inputs.top_token_ids->view(from_batch_idx_in, batch_size_in) :
+                                              Buffer::emptyBuffer());
             auto all_probs = (inputs.all_probs.get() ? inputs.all_probs->view(from_batch_idx_in, batch_size_in) :
                                                        Buffer::emptyBuffer());
             auto do_sample = MAY_GET_BUFFER_VIEW(inputs.do_sample, from_batch_idx_in, batch_size_in);
@@ -112,7 +118,8 @@ SamplerOutput Sampler::forward(const SamplerInputs& inputs) {
                                        inputs.no_repeat_ngram_size ? (OptionalBufferRef)no_repeat_ngram_size : nullopt,
                                        inputs.cum_log_probs ? (OptionalBufferRef)cum_log_probs_out : nullopt,
                                        nullopt,  // output_log_probs
-                                       inputs.return_original_all_probs,
+                                       inputs.top_logprobs ? (OptionalBufferRef)top_logprobs : nullopt,
+                                       inputs.top_token_ids ? (OptionalBufferRef)top_token_ids_buf : nullopt,
                                        inputs.all_probs ? (OptionalBufferRef)all_probs : nullopt,
                                        inputs.presence_penalty ? (OptionalBufferRef)presence_penalty : nullopt,
                                        inputs.frequency_penalty ? (OptionalBufferRef)frequency_penalty : nullopt,
@@ -175,6 +182,8 @@ SamplerOutput Sampler::forward(const SamplerInputs& inputs) {
     return SamplerOutput({std::move(all_token_ids_out),
                           std::move(all_cum_log_probs_out),
                           std::move(inputs.all_probs),
+                          std::move(inputs.top_logprobs),
+                          std::move(inputs.top_token_ids),
                           std::move(all_beam_indices),
                           std::move(all_success)});
 }
