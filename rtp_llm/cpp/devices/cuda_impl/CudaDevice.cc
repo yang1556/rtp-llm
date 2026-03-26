@@ -44,9 +44,9 @@ CudaDevice::CudaDevice(const DeviceInitParams& params): DeviceBase(params) {
     stream_               = torch_default_stream_->stream();
     communication_stream_ = torch_comm_stream_->stream();
     check_cuda_value(cudaStreamCreateWithFlags(&no_block_copy_stream_, cudaStreamNonBlocking));
-    // Pre-load gather/scatter-split kernels before NCCL init (mitigates first-launch stall / bad interaction).
-    if (!sDevMPS::warmup_sm_copy_split_kernels(no_block_copy_stream_)) {
-        RTP_LLM_LOG_WARNING("warmup_sm_copy_split_kernels failed on device %d", device_id_);
+    // noBlockCopyOpt uses scatter/gather_copy_var_nooffset on this stream
+    if (!sDevMPS::warmup_sm_copy_var_nooffset_kernels(no_block_copy_stream_)) {
+        RTP_LLM_LOG_WARNING("warmup sm_copy var_nooffset kernels failed on device %d", device_id_);
     }
     check_cuda_value(cublasCreate(&cublas_handle_));
     check_cuda_value(cublasLtCreate(&cublaslt_handle_));
@@ -212,6 +212,7 @@ CudaDevice::~CudaDevice() {
         origin_torch_cuda_allocator_ = nullptr;
     }
     cublas_mm_wrapper_.reset();
+    releaseNoBlockCopyOptDeviceBuffers();
     check_cuda_value(cudaStreamDestroy(no_block_copy_stream_));
     check_cuda_value(cublasDestroy(cublas_handle_));
     check_cuda_value(cublasLtDestroy(cublaslt_handle_));

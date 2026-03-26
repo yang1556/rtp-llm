@@ -237,10 +237,6 @@ struct MultiCopyParams {
     size_t block_size = 0;
     /// Optional: layer_all_num * 2 (mla + indexer per layer). When set with block_size, used for gather/scatter.
     size_t batch_size = 0;
-    /// Optional: when both > 0, each logical dst is split into kv_cache (multi_dst[j*2]) and kv_scale
-    /// (multi_dst[j*2+1]).
-    size_t kv_cache_size = 0;
-    size_t kv_scale_size = 0;
 };
 
 struct BatchCopyParams {

@@ -1667,9 +1667,9 @@ TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_SingleLayer) {
     verifyBlockInfosContent(gpu_bufs, 'a');
 }
 
-// FP8 MHA has separate kv + scale blobs per layer; copyCache uses noBlockCopyOpt when
-// kv_scale_stride_bytes > 0 and block_size_ matches (batch_size/2)*(kv_cache_size+kv_scale_size).
-TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_SplitKvScale_NoBlockCopyOpt) {
+// FP8 MHA has separate kv + scale BlockInfos per layer; host side is per-slice views, so copyCache uses
+// noBlockCopy (not noBlockCopyOpt), while correctness matches merged block layout.
+TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_FP8_KvAndScalePerLayer) {
     constexpr int kLayerNum    = 2;
     constexpr int kGpuBlockIdx = 2;
     cache_config_              = createMockCacheConfig(kLayerNum, 10, 8, rtp_llm::DataType::TYPE_FP8_E4M3);

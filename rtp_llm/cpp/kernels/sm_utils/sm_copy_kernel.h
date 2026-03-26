@@ -84,14 +84,10 @@ void launch_gather_copy_split(const void** src_kv_cache_ptrs,
                               int          block_num,
                               cudaStream_t stream);
 
-/**
- * @brief Minimal split gather+scatter launches on \p stream to JIT-load kernels early (e.g. before NCCL init).
- * Then warms launch_scatter_copy_var_nooffset / launch_gather_copy_var_nooffset (noBlockCopyOpt path).
- * @return true on success; frees all temp allocations before return.
- */
+/** JIT launch_scatter_copy_split / launch_gather_copy_split (benchmarks only; not used by noBlockCopyOpt). */
 bool warmup_sm_copy_split_kernels(cudaStream_t stream);
 
-/** Warmup only var_nooffset scatter/gather (used if split warmup is skipped elsewhere). */
+/** JIT launch_scatter_copy_var_nooffset / launch_gather_copy_var_nooffset (CudaDevice noBlockCopyOpt path). */
 bool warmup_sm_copy_var_nooffset_kernels(cudaStream_t stream);
 
 /**

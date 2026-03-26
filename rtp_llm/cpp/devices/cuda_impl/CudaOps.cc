@@ -20,6 +20,7 @@
 #include "rtp_llm/cpp/core/torch_utils/TorchEvent.h"
 #include <cuda_profiler_api.h>
 #include <chrono>
+#include <climits>
 #include <cstdlib>
 #include <memory>
 #include <unistd.h>
@@ -200,6 +201,74 @@ void CudaDevice::noBlockCopy(const MultiCopyParams& params) {
     check_cuda_error();
 }
 
+void CudaDevice::releaseNoBlockCopyOptDeviceBuffers() {
+    check_cuda_value(cudaSetDevice(device_id_));
+    check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
+    if (no_block_copy_opt_d_ptrs_) {
+        check_cuda_value(cudaFreeAsync(no_block_copy_opt_d_ptrs_, no_block_copy_stream_));
+        no_block_copy_opt_d_ptrs_ = nullptr;
+    }
+    if (no_block_copy_opt_d_meta_) {
+        check_cuda_value(cudaFreeAsync(no_block_copy_opt_d_meta_, no_block_copy_stream_));
+        no_block_copy_opt_d_meta_ = nullptr;
+    }
+    if (no_block_copy_opt_staging_) {
+        check_cuda_value(cudaFreeAsync(no_block_copy_opt_staging_, no_block_copy_stream_));
+        no_block_copy_opt_staging_ = nullptr;
+    }
+    check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
+    no_block_copy_opt_ptr_cap_     = 0;
+    no_block_copy_opt_meta_cap_    = 0;
+    no_block_copy_opt_staging_cap_ = 0;
+}
+
+void CudaDevice::ensureNoBlockCopyOptDeviceBuffers(size_t ptr_bytes, size_t meta_bytes, size_t staging_bytes) {
+    const bool need_ptr     = ptr_bytes > no_block_copy_opt_ptr_cap_;
+    const bool need_meta    = meta_bytes > no_block_copy_opt_meta_cap_;
+    const bool need_staging = staging_bytes > no_block_copy_opt_staging_cap_;
+    if (!need_ptr && !need_meta && !need_staging) {
+        return;
+    }
+    check_cuda_value(cudaSetDevice(device_id_));
+    check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
+    if (need_ptr) {
+        if (no_block_copy_opt_d_ptrs_) {
+            check_cuda_value(cudaFreeAsync(no_block_copy_opt_d_ptrs_, no_block_copy_stream_));
+            no_block_copy_opt_d_ptrs_ = nullptr;
+        }
+        check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
+        no_block_copy_opt_ptr_cap_ = 0;
+        if (cudaMalloc(&no_block_copy_opt_d_ptrs_, ptr_bytes) != cudaSuccess) {
+            RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_ptrs failed");
+        }
+        no_block_copy_opt_ptr_cap_ = ptr_bytes;
+    }
+    if (need_meta) {
+        if (no_block_copy_opt_d_meta_) {
+            check_cuda_value(cudaFreeAsync(no_block_copy_opt_d_meta_, no_block_copy_stream_));
+            no_block_copy_opt_d_meta_ = nullptr;
+        }
+        check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
+        no_block_copy_opt_meta_cap_ = 0;
+        if (cudaMalloc(&no_block_copy_opt_d_meta_, meta_bytes) != cudaSuccess) {
+            RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_meta failed");
+        }
+        no_block_copy_opt_meta_cap_ = meta_bytes;
+    }
+    if (need_staging) {
+        if (no_block_copy_opt_staging_) {
+            check_cuda_value(cudaFreeAsync(no_block_copy_opt_staging_, no_block_copy_stream_));
+            no_block_copy_opt_staging_ = nullptr;
+        }
+        check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
+        no_block_copy_opt_staging_cap_ = 0;
+        if (cudaMalloc(&no_block_copy_opt_staging_, staging_bytes) != cudaSuccess) {
+            RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc staging failed");
+        }
+        no_block_copy_opt_staging_cap_ = staging_bytes;
+    }
+}
+
 void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
     check_cuda_value(cudaSetDevice(device_id_));
     int current_device = -1;
@@ -211,20 +280,20 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
     RUNTIME_ASSERT_OP_ARG(params.multi_src.size() == params.multi_dst.size(),
                           "multi_src and multi_dst must have the same size");
     if (params.multi_src.empty()) {
-        cudaStreamSynchronize(no_block_copy_stream_);
+        check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
         check_cuda_error();
         return;
     }
     RUNTIME_ASSERT_OP_ARG(params.multi_src.size() % params.batch_size == 0,
                           "noBlockCopyOpt: multi_src size not divisible by batch_size");
     const size_t actual_batch_size = params.batch_size;
-    const size_t block_nums        = params.multi_src.size() / actual_batch_size;
-    const size_t scatter_count     = actual_batch_size / 2;
-    RUNTIME_ASSERT_OP_ARG(params.kv_cache_size > 0 && params.kv_scale_size > 0,
-                          "noBlockCopyOpt: kv_cache_size and kv_scale_size must be set (split KV copy only)");
-    RUNTIME_ASSERT_OP_ARG(params.block_size == scatter_count * (params.kv_cache_size + params.kv_scale_size),
-                          "noBlockCopyOpt: block_size mismatch for split KV copy");
-    const bool src_is_host = params.multi_src[0]
+    RUNTIME_ASSERT_OP_ARG(actual_batch_size <= static_cast<size_t>(INT_MAX),
+                          "noBlockCopyOpt: batch_size too large for scatter/gather kernel");
+    const int    n_slices    = static_cast<int>(actual_batch_size);
+    const size_t block_nums  = params.multi_src.size() / actual_batch_size;
+    const size_t ptr_bytes   = actual_batch_size * sizeof(void*);
+    const size_t meta_bytes  = 2 * actual_batch_size * sizeof(size_t);
+    const bool   src_is_host = params.multi_src[0]
                              && (params.multi_src[0]->where() == MemoryType::MEMORY_CPU
                                  || params.multi_src[0]->where() == MemoryType::MEMORY_CPU_PINNED);
     const bool dst_is_gpu  = params.multi_dst[0] && params.multi_dst[0]->where() == MemoryType::MEMORY_GPU;
@@ -232,137 +301,96 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
     const bool dst_is_host = params.multi_dst[0]
                              && (params.multi_dst[0]->where() == MemoryType::MEMORY_CPU
                                  || params.multi_dst[0]->where() == MemoryType::MEMORY_CPU_PINNED);
-    const size_t ptr_table_bytes    = scatter_count * sizeof(void*);
-    const auto   free_one_ptr_table = [this](void* p) {
-        check_cuda_value(cudaFreeAsync(p, no_block_copy_stream_));
-        check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
-    };
-    const auto free_two_ptr_tables = [this](void* p0, void* p1) {
-        check_cuda_value(cudaFreeAsync(p0, no_block_copy_stream_));
-        check_cuda_value(cudaFreeAsync(p1, no_block_copy_stream_));
-        check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
-    };
 
     if (src_is_host && dst_is_gpu) {
-        void* d_dst_kv_cache_ptrs = nullptr;
-        void* d_dst_kv_scale_ptrs = nullptr;
-        check_cuda_value(cudaMalloc(&d_dst_kv_cache_ptrs, ptr_table_bytes));
-        if (cudaMalloc(&d_dst_kv_scale_ptrs, ptr_table_bytes) != cudaSuccess) {
-            free_one_ptr_table(d_dst_kv_cache_ptrs);
-            RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_dst_kv_scale_ptrs failed");
-        }
-        void* d_src_staging = nullptr;
-        if (cudaMalloc(&d_src_staging, params.block_size) != cudaSuccess) {
-            free_two_ptr_tables(d_dst_kv_cache_ptrs, d_dst_kv_scale_ptrs);
-            RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_src_staging (H2D) failed");
-        }
-        std::vector<void*> h_dst_kv_cache(scatter_count), h_dst_kv_scale(scatter_count);
+        ensureNoBlockCopyOptDeviceBuffers(ptr_bytes, meta_bytes, params.block_size);
+        void* const d_ptrs = no_block_copy_opt_d_ptrs_;
+        void* const d_meta = no_block_copy_opt_d_meta_;
+        void* const d_stg  = no_block_copy_opt_staging_;
+        // scatter_copy_var_nooffset(d_stg, src_offsets, sizes, ...): one H2D h_meta blob —
+        // first batch_size words = byte offset of slice i in contiguous d_stg; rest = sizes[i].
+        auto* const         d_off_scatter   = static_cast<size_t*>(d_meta);
+        auto* const         d_sizes_scatter = d_off_scatter + actual_batch_size;
+        std::vector<void*>  h_ptrs(actual_batch_size);
+        std::vector<size_t> h_meta(2 * actual_batch_size);
         for (size_t b = 0; b < block_nums; ++b) {
-            const size_t base = b * actual_batch_size;
-            if (cudaMemcpyAsync(d_src_staging,
+            const size_t base    = b * actual_batch_size;
+            size_t       row_sum = 0;
+            for (size_t i = 0; i < actual_batch_size; ++i) {
+                const size_t sz               = params.multi_dst[base + i]->sizeBytes();
+                h_meta[i]                     = row_sum;  // src_offsets[i]: start of slice i in d_stg
+                h_meta[actual_batch_size + i] = sz;       // sizes[i]: bytes to scatter to dst_ptrs[i]
+                h_ptrs[i]                     = params.multi_dst[base + i]->data();
+                row_sum += sz;
+            }
+            RUNTIME_ASSERT_OP_ARG(row_sum == params.block_size,
+                                  "noBlockCopyOpt H2D: sum(slice sizes) must equal block_size");
+            if (cudaMemcpyAsync(d_stg,
                                 params.multi_src[base]->data(),
                                 params.block_size,
                                 cudaMemcpyHostToDevice,
                                 no_block_copy_stream_)
                 != cudaSuccess) {
-                check_cuda_value(cudaFreeAsync(d_src_staging, no_block_copy_stream_));
-                free_two_ptr_tables(d_dst_kv_cache_ptrs, d_dst_kv_scale_ptrs);
-                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (H2D src staging) failed");
+                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (H2D staging) failed");
             }
-            for (size_t j = 0; j < scatter_count; ++j) {
-                h_dst_kv_cache[j] = params.multi_dst[base + j * 2]->data();
-                h_dst_kv_scale[j] = params.multi_dst[base + j * 2 + 1]->data();
-            }
-            if (cudaMemcpyAsync(d_dst_kv_cache_ptrs,
-                                h_dst_kv_cache.data(),
-                                ptr_table_bytes,
-                                cudaMemcpyHostToDevice,
-                                no_block_copy_stream_)
+            if (cudaMemcpyAsync(d_ptrs, h_ptrs.data(), ptr_bytes, cudaMemcpyHostToDevice, no_block_copy_stream_)
                     != cudaSuccess
-                || cudaMemcpyAsync(d_dst_kv_scale_ptrs,
-                                   h_dst_kv_scale.data(),
-                                   ptr_table_bytes,
-                                   cudaMemcpyHostToDevice,
-                                   no_block_copy_stream_)
+                || cudaMemcpyAsync(d_meta, h_meta.data(), meta_bytes, cudaMemcpyHostToDevice, no_block_copy_stream_)
                        != cudaSuccess) {
-                check_cuda_value(cudaFreeAsync(d_src_staging, no_block_copy_stream_));
-                free_two_ptr_tables(d_dst_kv_cache_ptrs, d_dst_kv_scale_ptrs);
-                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (H2D ptr tables) failed");
+                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (H2D ptr/meta) failed");
             }
-            sDevMPS::launch_scatter_copy_split(d_src_staging,
-                                               static_cast<void**>(d_dst_kv_cache_ptrs),
-                                               static_cast<void**>(d_dst_kv_scale_ptrs),
-                                               params.kv_cache_size,
-                                               params.kv_scale_size,
-                                               static_cast<int>(scatter_count),
-                                               0,
-                                               no_block_copy_stream_);
+            sDevMPS::launch_scatter_copy_var_nooffset(
+                d_stg, d_off_scatter, d_sizes_scatter, static_cast<void**>(d_ptrs), n_slices, 0, no_block_copy_stream_);
         }
-        // Avoid cudaDeviceSynchronize (waits all streams; can deadlock with NCCL). FreeAsync is ordered after prior
-        // work on no_block_copy_stream_; one stream sync waits kernels/memcpy + both frees (see nccl_utils pattern).
-        check_cuda_value(cudaFreeAsync(d_src_staging, no_block_copy_stream_));
-        free_two_ptr_tables(d_dst_kv_cache_ptrs, d_dst_kv_scale_ptrs);
     } else if (src_is_gpu && dst_is_host) {
-        void* d_src_kv_cache_ptrs = nullptr;
-        void* d_src_kv_scale_ptrs = nullptr;
-        check_cuda_value(cudaMalloc(&d_src_kv_cache_ptrs, ptr_table_bytes));
-        if (cudaMalloc(&d_src_kv_scale_ptrs, ptr_table_bytes) != cudaSuccess) {
-            free_one_ptr_table(d_src_kv_cache_ptrs);
-            RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_src_kv_scale_ptrs failed");
-        }
-        void* d_dst_staging = nullptr;
-        if (cudaMalloc(&d_dst_staging, params.block_size) != cudaSuccess) {
-            free_two_ptr_tables(d_src_kv_cache_ptrs, d_src_kv_scale_ptrs);
-            RTP_LLM_FAIL("noBlockCopyOpt: cudaMalloc d_dst_staging (D2H) failed");
-        }
-        std::vector<const void*> h_src_kv_cache(scatter_count), h_src_kv_scale(scatter_count);
+        ensureNoBlockCopyOptDeviceBuffers(ptr_bytes, meta_bytes, params.block_size);
+        void* const d_ptrs = no_block_copy_opt_d_ptrs_;
+        void* const d_meta = no_block_copy_opt_d_meta_;
+        void* const d_stg  = no_block_copy_opt_staging_;
+        // gather_copy_var_nooffset(..., sizes, dst_offsets, d_stg): first batch_size words = sizes[i];
+        // next batch_size = dst_offsets[i] (prefix into contiguous d_stg for slice i).
+        auto* const         d_sizes_gather = static_cast<size_t*>(d_meta);
+        auto* const         d_dst_off      = d_sizes_gather + actual_batch_size;
+        std::vector<void*>  h_ptrs(actual_batch_size);
+        std::vector<size_t> h_meta(2 * actual_batch_size);
         for (size_t b = 0; b < block_nums; ++b) {
-            const size_t base = b * actual_batch_size;
-            for (size_t j = 0; j < scatter_count; ++j) {
-                h_src_kv_cache[j] = params.multi_src[base + j * 2]->data();
-                h_src_kv_scale[j] = params.multi_src[base + j * 2 + 1]->data();
+            const size_t base    = b * actual_batch_size;
+            size_t       row_sum = 0;
+            for (size_t i = 0; i < actual_batch_size; ++i) {
+                const size_t sz               = params.multi_src[base + i]->sizeBytes();
+                h_meta[i]                     = sz;       // sizes[i]: bytes from GPU src i
+                h_meta[actual_batch_size + i] = row_sum;  // dst_offsets[i]: where slice i lands in d_stg
+                h_ptrs[i]                     = params.multi_src[base + i]->data();
+                row_sum += sz;
             }
-            if (cudaMemcpyAsync(d_src_kv_cache_ptrs,
-                                h_src_kv_cache.data(),
-                                ptr_table_bytes,
-                                cudaMemcpyHostToDevice,
-                                no_block_copy_stream_)
+            RUNTIME_ASSERT_OP_ARG(row_sum == params.block_size,
+                                  "noBlockCopyOpt D2H: sum(slice sizes) must equal block_size");
+            if (cudaMemcpyAsync(d_ptrs, h_ptrs.data(), ptr_bytes, cudaMemcpyHostToDevice, no_block_copy_stream_)
                     != cudaSuccess
-                || cudaMemcpyAsync(d_src_kv_scale_ptrs,
-                                   h_src_kv_scale.data(),
-                                   ptr_table_bytes,
-                                   cudaMemcpyHostToDevice,
-                                   no_block_copy_stream_)
+                || cudaMemcpyAsync(d_meta, h_meta.data(), meta_bytes, cudaMemcpyHostToDevice, no_block_copy_stream_)
                        != cudaSuccess) {
-                check_cuda_value(cudaFreeAsync(d_dst_staging, no_block_copy_stream_));
-                free_two_ptr_tables(d_src_kv_cache_ptrs, d_src_kv_scale_ptrs);
-                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (D2H ptr tables) failed");
+                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (D2H ptr/meta) failed");
             }
-            sDevMPS::launch_gather_copy_split(static_cast<const void**>(d_src_kv_cache_ptrs),
-                                              static_cast<const void**>(d_src_kv_scale_ptrs),
-                                              params.kv_cache_size,
-                                              params.kv_scale_size,
-                                              d_dst_staging,
-                                              static_cast<int>(scatter_count),
-                                              0,
-                                              no_block_copy_stream_);
+            sDevMPS::launch_gather_copy_var_nooffset(static_cast<const void**>(d_ptrs),
+                                                     d_sizes_gather,
+                                                     d_dst_off,
+                                                     d_stg,
+                                                     n_slices,
+                                                     0,
+                                                     no_block_copy_stream_);
             if (cudaMemcpyAsync(params.multi_dst[base]->data(),
-                                d_dst_staging,
+                                d_stg,
                                 params.block_size,
                                 cudaMemcpyDeviceToHost,
                                 no_block_copy_stream_)
                 != cudaSuccess) {
-                check_cuda_value(cudaFreeAsync(d_dst_staging, no_block_copy_stream_));
-                free_two_ptr_tables(d_src_kv_cache_ptrs, d_src_kv_scale_ptrs);
-                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (D2H dst staging) failed");
+                RTP_LLM_FAIL("noBlockCopyOpt: cudaMemcpyAsync (D2H staging) failed");
             }
         }
-        check_cuda_value(cudaFreeAsync(d_dst_staging, no_block_copy_stream_));
-        free_two_ptr_tables(d_src_kv_cache_ptrs, d_src_kv_scale_ptrs);
     } else {
-        RTP_LLM_FAIL(
-            "noBlockCopyOpt: unsupported layout (only split H2D or D2H host<->GPU with kv_cache/kv_scale set)");
+        RTP_LLM_FAIL("noBlockCopyOpt: unsupported layout (only H2D or D2H host<->GPU with per-slice buffers)");
     }
+    check_cuda_value(cudaStreamSynchronize(no_block_copy_stream_));
     check_cuda_error();
 }
 

@@ -111,6 +111,8 @@ private:
     void         checkUseGroupGemm();
     NcclParam    getNcclParam(ParallelMode mode);
     cudaStream_t getCommStream(ParallelMode mode, bool overlap);
+    void         ensureNoBlockCopyOptDeviceBuffers(size_t ptr_bytes, size_t meta_bytes, size_t staging_bytes);
+    void         releaseNoBlockCopyOptDeviceBuffers();
     template<typename QuantType>
     LayernormOutput _layernorm(const LayernormParams& params);
     GreedyOutput    flashinferSampleGreedy(const GreedyParams& params, const BufferPtr& transposed_tokens);
@@ -259,6 +261,15 @@ protected:
     cudaStream_t                          eplb_stream_;
     cudaStream_t                          no_block_copy_stream_;
     cudaStream_t                          communication_stream_;
+
+    // noBlockCopyOpt: reuse device slabs (grow-only). Scatter: d_meta = [src_offsets][sizes]; gather:
+    // [sizes][dst_offsets].
+    void*  no_block_copy_opt_d_ptrs_      = nullptr;
+    void*  no_block_copy_opt_d_meta_      = nullptr;
+    void*  no_block_copy_opt_staging_     = nullptr;
+    size_t no_block_copy_opt_ptr_cap_     = 0;
+    size_t no_block_copy_opt_meta_cap_    = 0;
+    size_t no_block_copy_opt_staging_cap_ = 0;
 
     std::unique_ptr<cublasMMWrapper> cublas_mm_wrapper_;
 

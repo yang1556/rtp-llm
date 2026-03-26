@@ -635,8 +635,6 @@ void launch_scatter_copy_var_nooffset(const void*   src,          // 源内存�
         src, src_offsets, sizes, dst_ptrs, num_dsts);
 }
 
-bool warmup_sm_copy_var_nooffset_kernels(cudaStream_t stream);
-
 bool warmup_sm_copy_split_kernels(cudaStream_t stream) {
     constexpr size_t kv_cache_size = 32;
     constexpr size_t kv_scale_size = 32;
@@ -735,7 +733,7 @@ bool warmup_sm_copy_split_kernels(cudaStream_t stream) {
     }
 
     free_all();
-    return warmup_sm_copy_var_nooffset_kernels(stream);
+    return true;
 }
 
 bool warmup_sm_copy_var_nooffset_kernels(cudaStream_t stream) {
