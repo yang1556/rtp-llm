@@ -389,11 +389,17 @@ void CudaGraphRunner::initCaptureAttentionInputs(PyModelInputs& inputs, int max_
         inputs.attention_inputs.prefix_lengths = torch::zeros({int(max_bs_)}, options_cpu_int32_).pin_memory();
     }
     // padding_offset [max_num_token_, int32] (for attention padding)
-    inputs.attention_inputs.padding_offset            = torch::zeros({int(max_seq_len_ * max_bs_)}, options_cpu_int32_);
-    inputs.attention_inputs.padding_offset            = inputs.attention_inputs.padding_offset.pin_memory();
-    inputs.attention_inputs.dtype                     = model_data_type_;
-    inputs.attention_inputs.is_s_padded               = true;
-    inputs.attention_inputs.sequence_lengths_plus_1_d = torch::zeros({int(max_bs_)}, options_cuda_int32_);
+    inputs.attention_inputs.padding_offset = torch::zeros({int(max_seq_len_ * max_bs_)}, options_cpu_int32_);
+    inputs.attention_inputs.padding_offset = inputs.attention_inputs.padding_offset.pin_memory();
+    inputs.attention_inputs.dtype          = model_data_type_;
+    inputs.attention_inputs.is_s_padded    = true;
+    // sequence_lengths_plus_1_d must be a small positive value during capture.
+    // GatedDeltaNet Triton kernels compute cal_block_idx(seq_len - 1, block_size):
+    //   - seq_len=0 → negative offset → OOB crash
+    //   - seq_len=max_seq_len → offset may exceed block_map columns → OOB crash
+    // Using 2 gives offset 0, safely within block_map bounds. The block_map[*][0]=0
+    // causes fused_recurrent kernel to early-return (read_block_id <= 0).
+    inputs.attention_inputs.sequence_lengths_plus_1_d = torch::full({int(max_bs_)}, 2, options_cuda_int32_);
     // inputs.attention_inputs.decode_cu_seqlens_d       = torch::zeros({int(max_bs_)}, options_cuda_int32_);
     inputs.attention_inputs.decode_cu_seqlens_d =
         torch::arange(0, max_bs_ + 1, 1, torch::TensorOptions(torch::kInt32).device(torch::kCUDA));
