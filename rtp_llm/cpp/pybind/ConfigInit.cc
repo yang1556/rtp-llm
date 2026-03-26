@@ -291,6 +291,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def_readwrite("linear_step", &KVCacheConfig::linear_step)
         .def_readwrite("int8_kv_cache", &KVCacheConfig::int8_kv_cache)
         .def_readwrite("fp8_kv_cache", &KVCacheConfig::fp8_kv_cache)
+        .def_readwrite("ssm_state_dtype", &KVCacheConfig::ssm_state_dtype)
         .def_readwrite("kv_cache_mem_mb", &KVCacheConfig::kv_cache_mem_mb)
         .def_readwrite("seq_size_per_block", &KVCacheConfig::seq_size_per_block)
         .def_readwrite("test_block_num", &KVCacheConfig::test_block_num)
@@ -335,6 +336,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                                       self.linear_step,
                                       self.int8_kv_cache,
                                       self.fp8_kv_cache,
+                                      self.ssm_state_dtype,
                                       self.kv_cache_mem_mb,
                                       self.seq_size_per_block,
                                       self.test_block_num,
@@ -367,7 +369,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                                       self.reco_client_config);
             },
             [](py::tuple t) {
-                if (t.size() != 41)
+                if (t.size() != 42)
                     throw std::runtime_error("Invalid state!");
                 KVCacheConfig c;
                 try {
@@ -382,36 +384,37 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                     c.linear_step                          = t[8].cast<int>();
                     c.int8_kv_cache                        = t[9].cast<int>();
                     c.fp8_kv_cache                         = t[10].cast<int>();
-                    c.kv_cache_mem_mb                      = t[11].cast<int64_t>();
-                    c.seq_size_per_block                   = t[12].cast<int>();
-                    c.test_block_num                       = t[13].cast<int>();
-                    c.use_block_cache                      = t[14].cast<int>();
-                    c.enable_device_cache                  = t[15].cast<bool>();
-                    c.enable_memory_cache                  = t[16].cast<bool>();
-                    c.enable_remote_cache                  = t[17].cast<bool>();
-                    c.write_cache_sync                     = t[18].cast<bool>();
-                    c.enable_tiered_memory_cache           = t[19].cast<bool>();
-                    c.device_cache_min_free_blocks         = t[20].cast<int64_t>();
-                    c.reco_enable_vipserver                = t[21].cast<bool>();
-                    c.reco_vipserver_domain                = t[22].cast<std::string>();
-                    c.reco_server_address                  = t[23].cast<std::string>();
-                    c.reco_instance_group                  = t[24].cast<std::string>();
-                    c.reco_meta_channel_retry_time         = t[25].cast<uint32_t>();
-                    c.reco_meta_channel_connection_timeout = t[26].cast<uint32_t>();
-                    c.reco_meta_channel_call_timeout       = t[27].cast<uint32_t>();
-                    c.reco_storage_thread_num              = t[28].cast<uint32_t>();
-                    c.reco_storage_queue_size              = t[29].cast<uint32_t>();
-                    c.reco_put_timeout_ms                  = t[30].cast<int>();
-                    c.reco_get_timeout_ms                  = t[31].cast<int>();
-                    c.reco_model_sdk_config                = t[32].cast<std::string>();
-                    c.reco_model_user_data                 = t[33].cast<std::string>();
-                    c.reco_model_extra_info                = t[34].cast<std::string>();
-                    c.reco_instance_id_salt                = t[35].cast<std::string>();
-                    c.reco_asyncwrapper_thread_num         = t[36].cast<size_t>();
-                    c.reco_asyncwrapper_queue_size         = t[37].cast<size_t>();
-                    c.reco_get_broadcast_timeout           = t[38].cast<int>();
-                    c.reco_put_broadcast_timeout           = t[39].cast<int>();
-                    c.reco_client_config                   = t[40].cast<std::string>();
+                    c.ssm_state_dtype                      = t[11].cast<std::string>();
+                    c.kv_cache_mem_mb                      = t[12].cast<int64_t>();
+                    c.seq_size_per_block                   = t[13].cast<int>();
+                    c.test_block_num                       = t[14].cast<int>();
+                    c.use_block_cache                      = t[15].cast<int>();
+                    c.enable_device_cache                  = t[16].cast<bool>();
+                    c.enable_memory_cache                  = t[17].cast<bool>();
+                    c.enable_remote_cache                  = t[18].cast<bool>();
+                    c.write_cache_sync                     = t[19].cast<bool>();
+                    c.enable_tiered_memory_cache           = t[20].cast<bool>();
+                    c.device_cache_min_free_blocks         = t[21].cast<int64_t>();
+                    c.reco_enable_vipserver                = t[22].cast<bool>();
+                    c.reco_vipserver_domain                = t[23].cast<std::string>();
+                    c.reco_server_address                  = t[24].cast<std::string>();
+                    c.reco_instance_group                  = t[25].cast<std::string>();
+                    c.reco_meta_channel_retry_time         = t[26].cast<uint32_t>();
+                    c.reco_meta_channel_connection_timeout = t[27].cast<uint32_t>();
+                    c.reco_meta_channel_call_timeout       = t[28].cast<uint32_t>();
+                    c.reco_storage_thread_num              = t[29].cast<uint32_t>();
+                    c.reco_storage_queue_size              = t[30].cast<uint32_t>();
+                    c.reco_put_timeout_ms                  = t[31].cast<int>();
+                    c.reco_get_timeout_ms                  = t[32].cast<int>();
+                    c.reco_model_sdk_config                = t[33].cast<std::string>();
+                    c.reco_model_user_data                 = t[34].cast<std::string>();
+                    c.reco_model_extra_info                = t[35].cast<std::string>();
+                    c.reco_instance_id_salt                = t[36].cast<std::string>();
+                    c.reco_asyncwrapper_thread_num         = t[37].cast<size_t>();
+                    c.reco_asyncwrapper_queue_size         = t[38].cast<size_t>();
+                    c.reco_get_broadcast_timeout           = t[39].cast<int>();
+                    c.reco_put_broadcast_timeout           = t[40].cast<int>();
+                    c.reco_client_config                   = t[41].cast<std::string>();
                 } catch (const std::exception& e) {
                     throw std::runtime_error(std::string("KVCacheConfig unpickle error: ") + e.what());
                 }
@@ -661,21 +664,6 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                 }
                 return c;
             }));
-
-    // LinearAttentionConfig
-    pybind11::class_<LinearAttentionConfig>(m, "LinearAttentionConfig")
-        .def(pybind11::init<int, int, int, int, int>(),
-             pybind11::arg("linear_conv_kernel_dim") = 0,
-             pybind11::arg("linear_key_head_dim")    = 0,
-             pybind11::arg("linear_num_key_heads")   = 0,
-             pybind11::arg("linear_num_value_heads") = 0,
-             pybind11::arg("linear_value_head_dim")  = 0)
-        .def("to_string", &LinearAttentionConfig::to_string)
-        .def_readwrite("linear_conv_kernel_dim", &LinearAttentionConfig::linear_conv_kernel_dim)
-        .def_readwrite("linear_key_head_dim", &LinearAttentionConfig::linear_key_head_dim)
-        .def_readwrite("linear_num_key_heads", &LinearAttentionConfig::linear_num_key_heads)
-        .def_readwrite("linear_num_value_heads", &LinearAttentionConfig::linear_num_value_heads)
-        .def_readwrite("linear_value_head_dim", &LinearAttentionConfig::linear_value_head_dim);
 
     // HybridAttentionConfig
     py::enum_<HybridAttentionType>(m, "HybridAttentionType")
@@ -1160,6 +1148,25 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .value("TYPE_INT4X2", DataType::TYPE_INT4X2)
         .value("TYPE_QINT4X2", DataType::TYPE_QINT4X2)
         .value("TYPE_QFP8_E4M3", DataType::TYPE_QFP8_E4M3);
+
+    // LinearAttentionConfig
+    pybind11::class_<LinearAttentionConfig>(m, "LinearAttentionConfig")
+        .def(pybind11::init<int, int, int, int, int, DataType, DataType>(),
+             pybind11::arg("linear_conv_kernel_dim") = 0,
+             pybind11::arg("linear_key_head_dim")    = 0,
+             pybind11::arg("linear_num_key_heads")   = 0,
+             pybind11::arg("linear_num_value_heads") = 0,
+             pybind11::arg("linear_value_head_dim")  = 0,
+             pybind11::arg("ssm_state_dtype")        = DataType::TYPE_BF16,
+             pybind11::arg("conv_state_dtype")       = DataType::TYPE_BF16)
+        .def("to_string", &LinearAttentionConfig::to_string)
+        .def_readwrite("linear_conv_kernel_dim", &LinearAttentionConfig::linear_conv_kernel_dim)
+        .def_readwrite("linear_key_head_dim", &LinearAttentionConfig::linear_key_head_dim)
+        .def_readwrite("linear_num_key_heads", &LinearAttentionConfig::linear_num_key_heads)
+        .def_readwrite("linear_num_value_heads", &LinearAttentionConfig::linear_num_value_heads)
+        .def_readwrite("linear_value_head_dim", &LinearAttentionConfig::linear_value_head_dim)
+        .def_readwrite("ssm_state_dtype", &LinearAttentionConfig::ssm_state_dtype)
+        .def_readwrite("conv_state_dtype", &LinearAttentionConfig::conv_state_dtype);
 
     // Register KvCacheDataType enum
     py::enum_<KvCacheDataType>(m, "KvCacheDataType")
