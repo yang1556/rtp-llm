@@ -234,6 +234,15 @@ void CudaDevice::ensureNoBlockCopyOptBuffers(size_t staging_bytes, size_t ptr_ta
 }
 
 void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
+    const char* cmp           = std::getenv("RTP_LLM_COMPARE_NO_BLOCK_COPY");
+    const bool  compare_plain = cmp != nullptr && cmp[0] != '\0' && cmp[0] != '0';
+    long        plain_us      = -1;
+    if (compare_plain) {
+        const auto plain_t0 = std::chrono::steady_clock::now();
+        noBlockCopy(params);
+        const auto plain_t1 = std::chrono::steady_clock::now();
+        plain_us            = std::chrono::duration_cast<std::chrono::microseconds>(plain_t1 - plain_t0).count();
+    }
     check_cuda_value(cudaSetDevice(device_id_));
     int current_device = -1;
     check_cuda_value(cudaGetDevice(&current_device));
@@ -266,6 +275,7 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
                                  || params.multi_dst[0]->where() == MemoryType::MEMORY_CPU_PINNED);
     const size_t ptr_table_bytes = scatter_count * sizeof(void*);
     RUNTIME_ASSERT_OP_ARG(ptr_table_bytes > 0, "noBlockCopyOpt: ptr_table_bytes is 0");
+    const auto opt_t0 = std::chrono::steady_clock::now();
     ensureNoBlockCopyOptBuffers(params.block_size, ptr_table_bytes);
     if (src_is_host && dst_is_gpu) {
         void* const        d_dst_kv_cache_ptrs = no_block_copy_opt_ptr0_;
@@ -344,6 +354,17 @@ void CudaDevice::noBlockCopyOpt(const MultiCopyParams& params) {
             "noBlockCopyOpt: unsupported layout (only split H2D or D2H host<->GPU with kv_cache/kv_scale set)");
     }
     check_cuda_error();
+    if (compare_plain) {
+        const long opt_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - opt_t0).count();
+        RTP_LLM_LOG_INFO(
+            "noBlockCopy(plain) vs noBlockCopyOpt device=%d pairs=%zu block_nums=%zu plain_us=%ld opt_us=%ld",
+            device_id_,
+            params.multi_src.size(),
+            block_nums,
+            plain_us,
+            opt_us);
+    }
 }
 
 TransposeOutput CudaDevice::transpose(const TransposeParams& params) {
