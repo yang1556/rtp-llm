@@ -91,3 +91,11 @@ def init_parallel_group_args(
         default=512 * 1024 * 1024,
         help="指定用于上下文并行通信的缓冲区大小，单位为字节。默认值为 512MB。",
     )
+    parallel_group.add_argument(
+        "--use_ub_comm",
+        env_name="USE_UB_COMM",
+        bind_to=(parallelism_config, "use_ub_comm"),
+        type=str2bool,
+        default=False,
+        help="启用 CUDA IPC user-buffer 通信器用于上下文并行。仅支持单机场景，需要 CP 已启用且非 ALL_GATHER 方法。",
+    )
