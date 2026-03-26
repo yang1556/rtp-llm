@@ -1,5 +1,6 @@
 #include "rtp_llm/models_py/bindings/rocm/FusedRopeKVCacheOp.h"
 #include "rtp_llm/cpp/kernels/unfused_attention_kernels.h"
+#include "rtp_llm/cpp/kernels/kv_cache_kernels.h"
 #include "rtp_llm/cpp/core/Dispatch.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
 #include <stdexcept>
@@ -10,6 +11,20 @@
 #include "rtp_llm/cpp/devices/utils/DebugUtils.h"
 
 namespace rtp_llm {
+
+void updateKvCacheOffset(CKAttn& params, const torch::Tensor& kv_cache_block_id_device) {
+    if (!params.kv_cache_offset || !kv_cache_block_id_device.defined() || kv_cache_block_id_device.numel() == 0) {
+        return;
+    }
+    const int   batch_size        = kv_cache_block_id_device.size(0);
+    const int   max_blocks_per_bs = kv_cache_block_id_device.size(1);
+    hipStream_t stream            = GET_CURRENT_STREAM();
+    invokeConvertOffsetToBlockArrayData(params.kv_cache_offset->data<int>(),
+                                        kv_cache_block_id_device.data_ptr<int>(),
+                                        batch_size,
+                                        max_blocks_per_bs,
+                                        stream);
+}
 
 static at::ScalarType get_fp8_dtype(ROCmDevice* device) {
     std::string arch(device->getRocmDeviceProperties()->gcnArchName);
@@ -83,19 +98,16 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> FusedRopeKVCachePrefillO
     }
     const int seq_len_with_prefix = seq_len + max_prefix_length;
 
-    const int q_output_token_num = (use_paged_fmha && pad_query) ? batch_size * seq_len : token_num;
-    const bool paged_fp8 = use_paged_fmha
-                        && attn_configs_.kv_cache_dtype == KvCacheDataType::FP8;
-    torch::Tensor q_output = use_paged_fmha ?
-        torch::zeros({q_output_token_num, local_head_num, size_per_head},
-                     torch::TensorOptions(qkv.dtype()).device(qkv.device())) :
-        torch::zeros({batch_size, local_head_num, seq_len, size_per_head},
-                     torch::TensorOptions(qkv.dtype()).device(qkv.device()));
+    const int     q_output_token_num = (use_paged_fmha && pad_query) ? batch_size * seq_len : token_num;
+    const bool    paged_fp8          = use_paged_fmha && attn_configs_.kv_cache_dtype == KvCacheDataType::FP8;
+    torch::Tensor q_output = use_paged_fmha ? torch::zeros({q_output_token_num, local_head_num, size_per_head},
+                                                           torch::TensorOptions(qkv.dtype()).device(qkv.device())) :
+                                              torch::zeros({batch_size, local_head_num, seq_len, size_per_head},
+                                                           torch::TensorOptions(qkv.dtype()).device(qkv.device()));
     torch::Tensor q_fp8_buf;
     if (paged_fp8) {
-        q_fp8_buf = torch::empty(
-            {q_output_token_num, local_head_num, size_per_head},
-            torch::TensorOptions(get_fp8_dtype(device_)).device(qkv.device()));
+        q_fp8_buf = torch::empty({q_output_token_num, local_head_num, size_per_head},
+                                 torch::TensorOptions(get_fp8_dtype(device_)).device(qkv.device()));
     }
     torch::Tensor k_output = torch::zeros({batch_size, local_head_num_kv, seq_len_with_prefix, size_per_head},
                                           torch::TensorOptions(qkv.dtype()).device(qkv.device()));
@@ -195,70 +207,51 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> FusedRopeKVCachePrefillO
     if (use_fmha_fp8) {
         qkv_buf_fp8 = torch::empty(qkv.sizes(), torch::TensorOptions(get_fp8_dtype(device_)).device(qkv.device()));
     }
-
-    if (use_asm()) {
-        DISPATCH_CUDA_FUNCTION_DATA_TYPE(torchDTypeToDataType(qkv.dtype()),
-                                         invokeAddFusedQKVBiasTransposePrefill,
-                                         q_output.data_ptr(),
-                                         k_output.data_ptr(),
-                                         v_output.data_ptr(),
-                                         &prefix_prompt_param,
-                                         qkv.data_ptr(),
-                                         paged_fp8 ? q_fp8_buf.data_ptr() :
-                                         (use_fmha_fp8 && qkv_buf_fp8.defined() ? qkv_buf_fp8.data_ptr() : nullptr),
-                                         nullptr,  // position_ids - 需要根据实际需求传入，暂时保持 nullptr
-                                         nullptr,  // qkv_bias - 需要根据实际需求传入，暂时保持 nullptr
-                                         params->padding_offset.data_ptr<int>(),
-                                         params->cu_seqlens.data_ptr<int>(),
-                                         batch_size,
-                                         seq_len,
-                                         token_num,
-                                         local_head_num,
-                                         local_head_num_kv,
-                                         size_per_head,
-                                         attn_configs_.rope_config,
-                                         attn_configs_.use_logn_attn,
-                                         scale_out_ptr,
-                                         int8_mode,
-                                         use_paged_fmha,   // use_paged_fmha
-                                         store_qkv,    // store_qkv
-                                         store_q,      // store_q
-                                         store_kv,     // store_kv
-                                         store_cache,  // store_cache
-                                         nullptr,
-                                         pad_query,
-                                         stream_  // 必须作为最后一个参数
-        );
-    } else {
-        DISPATCH_CUDA_FUNCTION_DATA_TYPE(torchDTypeToDataType(qkv.dtype()),
-                                         invokeAddFusedQKVBiasTransposePrefillV1,
-                                         q_output.data_ptr(),
-                                         k_output.data_ptr(),
-                                         v_output.data_ptr(),
-                                         &prefix_prompt_param,
-                                         qkv.data_ptr(),
-                                         nullptr,
-                                         nullptr,
-                                         nullptr,
-                                         nullptr,
-                                         params->cu_seqlens.data_ptr<int>(),
-                                         batch_size,
-                                         seq_len,
-                                         token_num,
-                                         local_head_num,
-                                         local_head_num_kv,
-                                         size_per_head,
-                                         attn_configs_.rope_config,
-                                         attn_configs_.use_logn_attn,
-                                         nullptr,
-                                         0,
-                                         use_paged_fmha,   // use_paged_fmha
-                                         store_qkv,    // store_qkv
-                                         store_q,      // store_q
-                                         store_kv,     // store_kv
-                                         store_cache,  // store_cache
-                                         nullptr,
-                                         stream_  // 必须作为最后一个参数
+}
+else {
+    // V1 kernel does not support use_paged_fmha=true, fall back to legacy path
+    // with temporary K/V output buffers (only used internally by the kernel).
+    torch::Tensor k_output_v1  = k_output;
+    torch::Tensor v_output_v1  = v_output;
+    bool          v1_store_qkv = store_qkv;
+    bool          v1_store_kv  = store_kv;
+    if (use_paged_fmha) {
+        k_output_v1  = torch::zeros({batch_size, local_head_num_kv, seq_len_with_prefix, size_per_head},
+                                   torch::TensorOptions(qkv.dtype()).device(qkv.device()));
+        v_output_v1  = torch::zeros({batch_size, local_head_num_kv, seq_len_with_prefix, size_per_head},
+                                   torch::TensorOptions(qkv.dtype()).device(qkv.device()));
+        v1_store_qkv = true;
+        v1_store_kv  = true;
+    }
+    DISPATCH_CUDA_FUNCTION_DATA_TYPE(torchDTypeToDataType(qkv.dtype()),
+                                     invokeAddFusedQKVBiasTransposePrefillV1,
+                                     q_output.data_ptr(),
+                                     k_output_v1.data_ptr(),
+                                     v_output_v1.data_ptr(),
+                                     &prefix_prompt_param,
+                                     qkv.data_ptr(),
+                                     nullptr,
+                                     nullptr,
+                                     nullptr,
+                                     nullptr,
+                                     params->cu_seqlens.data_ptr<int>(),
+                                     batch_size,
+                                     seq_len,
+                                     token_num,
+                                     local_head_num,
+                                     local_head_num_kv,
+                                     size_per_head,
+                                     attn_configs_.rope_config,
+                                     attn_configs_.use_logn_attn,
+                                     nullptr,
+                                     0,
+                                     false,         // V1 does not support paged fmha
+                                     v1_store_qkv,  // store_qkv
+                                     store_q,       // store_q
+                                     v1_store_kv,   // store_kv
+                                     store_cache,   // store_cache
+                                     nullptr,
+                                     stream_  // 必须作为最后一个参数
         );
     }
     if (use_paged_fmha) {
@@ -271,11 +264,11 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> FusedRopeKVCachePrefillO
         return std::make_tuple(qkv_buf_fp8, torch::Tensor(), torch::Tensor());
     }
     // local_head_num, seq_len * batch_size, size_per_head
-    torch::Tensor q_contiguous = torch::zeros({local_head_num, seq_len * batch_size, size_per_head},
+    torch::Tensor q_contiguous = torch::zeros({local_head_num, seq_len* batch_size, size_per_head},
                                               torch::TensorOptions(qkv.dtype()).device(qkv.device()));
-    torch::Tensor k_contiguous = torch::zeros({local_head_num_kv, seq_len_with_prefix * batch_size, size_per_head},
+    torch::Tensor k_contiguous = torch::zeros({local_head_num_kv, seq_len_with_prefix* batch_size, size_per_head},
                                               torch::TensorOptions(qkv.dtype()).device(qkv.device()));
-    torch::Tensor v_contiguous = torch::zeros({local_head_num_kv, seq_len_with_prefix * batch_size, size_per_head},
+    torch::Tensor v_contiguous = torch::zeros({local_head_num_kv, seq_len_with_prefix* batch_size, size_per_head},
                                               torch::TensorOptions(qkv.dtype()).device(qkv.device()));
     DISPATCH_CUDA_FUNCTION_DATA_TYPE(torchDTypeToDataType(qkv.dtype()),
                                      invokeGatherSequencesCombined,
@@ -471,7 +464,9 @@ torch::Tensor FusedRopeKVCacheDecodeOpBase::forward(const torch::Tensor&        
 
 void registerFusedRopeKVCacheOp(const py::module& m) {
     pybind11::class_<KVBlockArray>(m, "KVBlockArray").def(pybind11::init<>());
-    pybind11::class_<CKAttn, std::shared_ptr<CKAttn>>(m, "CKAttn").def(pybind11::init<>());
+    pybind11::class_<CKAttn, std::shared_ptr<CKAttn>>(m, "CKAttn")
+        .def(pybind11::init<>())
+        .def("update_kv_cache_offset", &updateKvCacheOffset, py::arg("kv_cache_block_id_device"));
 
     // Prefill ASM
     pybind11::class_<FusedRopeKVCachePrefillOpAsm>(m, "FusedRopeKVCachePrefillOpAsm")
