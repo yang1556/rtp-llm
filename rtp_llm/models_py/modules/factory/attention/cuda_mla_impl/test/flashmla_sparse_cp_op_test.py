@@ -260,6 +260,234 @@ class SparseMlaFp8CPOpTest(TestCase):
             "CP output should match non-CP when tp_size=1 (all_gather identity)",
         )
 
+    def test_cp_op_forward_with_prefix_lens(self):
+        """
+        With tp_size=1 and prefix_lengths=64 (page-aligned), CP path all_gather is identity.
+        Total KV = prefix(64) + input(8) = 72 tokens.
+
+        Strategy:
+        1. Generate full KV data for all 72 tokens (prefix + input).
+        2. Build two identical KV caches (same block_table layout).
+        3. For non-CP reference: write all 72 tokens via MlaKVCacheWriteOp, run SparseMlaFp8Op.
+        4. For CP path: pre-fill prefix (first 64 tokens) into cache, then let CP op
+           all-gather + write the remaining 8 input tokens. Run CP forward.
+        5. Compare outputs.
+        """
+        from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl import (
+            SparseMlaFp8CPOp,
+        )
+        from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_impl import (
+            SparseMlaFp8Op,
+        )
+        from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.mla_kv_cache_write_op import (
+            MlaKVCacheWriteOp,
+        )
+        from rtp_llm.ops import CPRotateMethod, ParallelismConfig, PrefillCPConfig
+
+        _set_seed(42)
+        device = self.device
+
+        num_heads = 64
+        kv_lora_rank = 512
+        qk_rope_head_dim = 64
+        qk_nope_head_dim = 512
+        page_size = 64
+        softmax_extra_scale = 1.0
+        top_k = 128
+        prefix_length = 64
+        input_tokens = 8
+        total_kv_len = prefix_length + input_tokens  # 72
+        total_q_len = input_tokens
+        qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+        # --- Generate full KV data for all 72 tokens ---
+        all_compressed_kv = (
+            torch.randn(total_kv_len, kv_lora_rank, dtype=torch.bfloat16, device=device) * 0.1
+        )
+        all_k_pe = (
+            torch.randn(total_kv_len, qk_rope_head_dim, dtype=torch.bfloat16, device=device) * 0.1
+        )
+        prefix_ckv = all_compressed_kv[:prefix_length]
+        prefix_k_pe = all_k_pe[:prefix_length]
+        input_ckv = all_compressed_kv[prefix_length:]
+        input_k_pe = all_k_pe[prefix_length:]
+
+        # --- Shared tensors ---
+        q = (
+            torch.randn(total_q_len, num_heads, qk_head_dim, dtype=torch.bfloat16, device=device) * 0.1
+        )
+        batch_indice_d = torch.zeros(total_q_len, dtype=torch.int32, device=device)
+
+        # --- Block table for total_kv_len ---
+        block_table_host = _make_block_table(1, total_kv_len, page_size, torch.device("cpu"))
+        block_table_device = block_table_host.to(device)
+        num_blocks = block_table_host.shape[1]
+        fp8_bytes_per_token = 656
+
+        # --- Build attn_inputs for fill_params (needs actual lengths for slot_mapping) ---
+        chunk_lengths = [4, 4]
+        n_restore = sum(chunk_lengths)
+        prefill_cp_chunk_lengths = torch.tensor(chunk_lengths, dtype=torch.int32, device=device)
+        prefill_qkv_restore_indice = torch.arange(n_restore, dtype=torch.long, device=device)
+        prefill_qkv_padding_mask = torch.ones(n_restore, dtype=torch.int32, device=device)
+        prefill_actual_input_lengths_cpu = torch.tensor(
+            [n_restore], dtype=torch.int32, device=torch.device("cpu")
+        )
+
+        cp_ctx_params = PyContextParallelParams()
+        cp_ctx_params.prefill_cp_chunk_lengths = prefill_cp_chunk_lengths
+        cp_ctx_params.prefill_qkv_restore_indice = prefill_qkv_restore_indice
+        cp_ctx_params.prefill_qkv_padding_mask = prefill_qkv_padding_mask
+        cp_ctx_params.prefill_actual_input_lengths_cpu = prefill_actual_input_lengths_cpu
+
+        attn_inputs = PyAttentionInputs()
+        attn_inputs.is_prefill = True
+        attn_inputs.input_lengths = torch.tensor(
+            [n_restore], dtype=torch.int32, device=torch.device("cpu")
+        )
+        attn_inputs.sequence_lengths = torch.tensor(
+            [total_kv_len], dtype=torch.int32, device=torch.device("cpu")
+        )
+        attn_inputs.prefix_lengths = torch.tensor(
+            [prefix_length], dtype=torch.int32, device=torch.device("cpu")
+        )
+        attn_inputs.context_parallel_info = cp_ctx_params
+        attn_inputs.kv_cache_block_id_host = block_table_host
+        attn_inputs.kv_cache_block_id_device = block_table_device
+
+        mla_params = rtp_llm_ops.SparseMlaParams()
+        mla_params.fill_params(attn_inputs, page_size)
+
+        parallelism_config = ParallelismConfig()
+        parallelism_config.tp_rank = 0
+        parallelism_config.tp_size = 1
+        parallelism_config.prefill_cp_config = PrefillCPConfig()
+        parallelism_config.prefill_cp_config.method = CPRotateMethod.ALL_GATHER
+        parallelism_config.prefill_cp_config.comm_buffer_size = 0
+
+        kv_cache_write_op = MlaKVCacheWriteOp(kv_cache_dtype=KvCacheDataType.FP8)
+
+        # ============================================================
+        # Non-CP reference: write all 72 tokens, run non-CP forward
+        # ============================================================
+        # Build a separate attn_inputs for non-CP with full sequence as input (no prefix)
+        attn_inputs_full = PyAttentionInputs()
+        attn_inputs_full.is_prefill = True
+        attn_inputs_full.input_lengths = torch.tensor(
+            [total_kv_len], dtype=torch.int32, device=torch.device("cpu")
+        )
+        attn_inputs_full.sequence_lengths = torch.tensor(
+            [total_kv_len], dtype=torch.int32, device=torch.device("cpu")
+        )
+        attn_inputs_full.prefix_lengths = torch.tensor(
+            [0], dtype=torch.int32, device=torch.device("cpu")
+        )
+        attn_inputs_full.kv_cache_block_id_host = block_table_host
+        attn_inputs_full.kv_cache_block_id_device = block_table_device
+
+        mla_params_full = rtp_llm_ops.SparseMlaParams()
+        mla_params_full.fill_params(attn_inputs_full, page_size)
+
+        kv_cache_ref = KVCache()
+        kv_cache_ref.kv_cache_base = torch.empty(
+            num_blocks, page_size, fp8_bytes_per_token, dtype=torch.uint8, device=device
+        )
+        kv_cache_write_op.forward(all_compressed_kv, all_k_pe, kv_cache_ref, mla_params_full)
+        torch.cuda.synchronize()
+
+        # topk_indices over full KV range, only for the input query tokens
+        topk_indices = torch.randint(
+            0, total_kv_len, (total_q_len, 1, top_k), dtype=torch.int32, device=device
+        )
+
+        non_cp_op = SparseMlaFp8Op(
+            num_heads=num_heads,
+            kv_lora_rank=kv_lora_rank,
+            qk_rope_head_dim=qk_rope_head_dim,
+            qk_nope_head_dim=qk_nope_head_dim,
+            page_size=page_size,
+            softmax_extra_scale=softmax_extra_scale,
+            top_k=top_k,
+        )
+        non_cp_op.plan(mla_params_full, block_table_device)
+
+        kv_cache_ref_flat = kv_cache_ref.kv_cache_base.view(-1, 1, kv_cache_ref.kv_cache_base.size(-1))
+        if kv_cache_ref_flat.ndim == 3:
+            kv_cache_ref_flat = kv_cache_ref_flat.unsqueeze(-2)
+        out_non_cp = non_cp_op.forward(q, kv_cache_ref_flat, topk_indices, layer_id=0)
+        torch.cuda.synchronize()
+
+        # ============================================================
+        # CP path: pre-fill prefix into cache, then CP op writes input
+        # ============================================================
+        kv_cache_cp = KVCache()
+        kv_cache_cp.kv_cache_base = torch.empty(
+            num_blocks, page_size, fp8_bytes_per_token, dtype=torch.uint8, device=device
+        )
+        # Pre-fill prefix tokens into CP cache (simulating reuse cache hit)
+        # Use mla_params_full's slot_mapping for prefix slots (first prefix_length slots)
+        attn_inputs_prefix = PyAttentionInputs()
+        attn_inputs_prefix.is_prefill = True
+        attn_inputs_prefix.input_lengths = torch.tensor(
+            [prefix_length], dtype=torch.int32, device=torch.device("cpu")
+        )
+        attn_inputs_prefix.sequence_lengths = torch.tensor(
+            [prefix_length], dtype=torch.int32, device=torch.device("cpu")
+        )
+        attn_inputs_prefix.prefix_lengths = torch.tensor(
+            [0], dtype=torch.int32, device=torch.device("cpu")
+        )
+        attn_inputs_prefix.kv_cache_block_id_host = block_table_host
+        attn_inputs_prefix.kv_cache_block_id_device = block_table_device
+
+        mla_params_prefix = rtp_llm_ops.SparseMlaParams()
+        mla_params_prefix.fill_params(attn_inputs_prefix, page_size)
+        kv_cache_write_op.forward(prefix_ckv, prefix_k_pe, kv_cache_cp, mla_params_prefix)
+        torch.cuda.synchronize()
+
+        cp_op = SparseMlaFp8CPOp(
+            num_heads=num_heads,
+            kv_lora_rank=kv_lora_rank,
+            qk_rope_head_dim=qk_rope_head_dim,
+            qk_nope_head_dim=qk_nope_head_dim,
+            page_size=page_size,
+            softmax_extra_scale=softmax_extra_scale,
+            top_k=top_k,
+            attn_inputs=attn_inputs,
+            parallelism_config=parallelism_config,
+        )
+        cp_op.kv_cache_write_op = kv_cache_write_op
+        cp_op.write_cache_store_impl = None
+        cp_op.attn_inputs = attn_inputs
+        cp_op.plan(mla_params, block_table_device)
+
+        def _identity_all_gather(tensor, group=None):
+            return tensor
+
+        topk0 = torch.index_select(topk_indices, 0, cp_op.q0_idx).contiguous()
+        topk1 = torch.index_select(topk_indices, 0, cp_op.q1_idx).contiguous()
+        topk_cat = torch.cat([topk0, topk1], dim=0)
+        with patch(
+            "rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl.all_gather",
+            side_effect=_identity_all_gather,
+        ):
+            out_cp = cp_op.forward(
+                q,
+                input_ckv,
+                input_k_pe,
+                topk_cat,
+                batch_indice_d,
+                kv_cache_cp,
+                layer_id=0,
+            )
+        torch.cuda.synchronize()
+
+        self.assertEqual(out_cp.shape, (total_q_len, num_heads, kv_lora_rank))
+        self.assertTrue(
+            torch.allclose(out_cp, out_non_cp, atol=1e-2, rtol=1e-2),
+            "CP output with prefix cache should match non-CP reference",
+        )
+
     def test_cp_op_forward_output_shape(self):
         """CP op forward returns correct shape [total_q_len, num_heads, kv_lora_rank]."""
         from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl import (
