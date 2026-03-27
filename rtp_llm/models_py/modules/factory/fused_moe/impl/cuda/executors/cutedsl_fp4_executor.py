@@ -72,6 +72,8 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
 
         input_global_scale = self._weights.get(W.moe_w1_i_s, None)
         a2_global_scale = self._weights.get(W.moe_w2_i_s, None)
+        self.origin_w2_input_scale = a2_global_scale
+        self.first_nan = True
 
         assert self._w1 is not None and self._w2 is not None, "FP4 MoE weights w1 and w2 must be provided"
         assert self._w1_blockscale is not None and self._w2_blockscale is not None, "FP4 MoE blockscale weights must be provided"
@@ -82,7 +84,8 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
         self._w2_alpha = a2_global_scale * _w2_alpha
         self.input_global_scale = 1 / input_global_scale
         self.a2_global_scale = 1 / a2_global_scale
-
+        self.input_global_scale = self.clamp_inf(self.input_global_scale)
+        self.a2_global_scale = self.clamp_inf(self.a2_global_scale)
         # Check FP4 quantization
         assert self.quant_config.is_quantized
 
@@ -113,6 +116,15 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
             if num_tokens > 0:
                 masked_m[expert_id, :num_tokens] = True
         return masked_m
+
+    def clamp_inf(self, tensor: torch.Tensor) -> torch.Tensor:
+        finite_mask = torch.isfinite(tensor)
+        if finite_mask.all():
+            return tensor
+        
+        max_val = tensor[finite_mask].max() if finite_mask.any() else 0.0
+        min_val = tensor[finite_mask].min() if finite_mask.any() else 0.0
+        return tensor.clamp(min=min_val, max=max_val)
 
     def execute(
         self,
@@ -184,7 +196,19 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
             assert payload.expert_x.dtype is torch.uint8
             assert payload.expert_x_scale is not None
             hidden_states = (payload.expert_x, payload.expert_x_scale)
-        
+        save_dict={
+                    "hidden_states": hidden_states,
+                    "input_global_scale": self.input_global_scale,
+                    "w1":self._w1,
+                    "w1_blockscale":self._w1_blockscale,
+                    "w1_alpha":self._w1_alpha,
+                    "w2":self._w2,
+                    "a2_global_scale":self.a2_global_scale,
+                    "w2_blockscale":self._w2_blockscale,
+                    "w2_alpha":self._w2_alpha,
+                    "masked_m":expert_num_tokens,
+                }
+        torch.save(save_dict, "327_cutedsl_moe_ut_data_core_dump.pt")
         # Call the CuteDSL FP4 MoE kernel
         output = flashinfer_cutedsl_moe_masked(
             hidden_states=hidden_states,
@@ -198,6 +222,12 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
             w2_alpha=self._w2_alpha,
             masked_m=expert_num_tokens,
         )
-
+        if torch.isnan(output).any() and self.first_nan:
+            save_dict = {
+                "origin_w2_input_scale": self.origin_w2_input_scale,
+            }
+            self.first_nan = False
+            torch.save(save_dict, "inf_a2_scale.pt")
+            
         return CombineForwardPayload(fused_expert_output=output, expert_num_tokens=expert_num_tokens)
 

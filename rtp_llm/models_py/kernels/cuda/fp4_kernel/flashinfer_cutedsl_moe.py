@@ -255,6 +255,9 @@ def flashinfer_cutedsl_moe_masked(
         num_experts,
     ), f"w2_alpha must be (l,), got {w2_alpha.shape}"
 
+    if m == 0:
+        out = torch.zeros((num_experts, m, k), dtype=torch.bfloat16, device=a_q.device)
+        return out
     # TODO(kaixih@nvidia): dtype should be based on inputs.
     gateup_output = torch.empty(
         (num_experts, m, n * 2), dtype=torch.bfloat16, device=a_q.device
