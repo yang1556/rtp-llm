@@ -82,9 +82,20 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
         self._w2_alpha = a2_global_scale * _w2_alpha
         self.input_global_scale = 1 / input_global_scale
         self.a2_global_scale = 1 / a2_global_scale
+        self.input_global_scale = self.clamp_inf(self.input_global_scale)
+        self.a2_global_scale = self.clamp_inf(self.a2_global_scale)
 
         # Check FP4 quantization
         assert self.quant_config.is_quantized
+
+    def clamp_inf(self, tensor: torch.Tensor) -> torch.Tensor:
+        finite_mask = torch.isfinite(tensor)
+        if finite_mask.all():
+            return tensor
+
+        max_val = tensor[finite_mask].max() if finite_mask.any() else 0.0
+        min_val = tensor[finite_mask].min() if finite_mask.any() else 0.0
+        return tensor.clamp(min=min_val, max=max_val)
 
     @property
     def local_num_experts(self) -> int:
