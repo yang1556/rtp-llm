@@ -19,10 +19,23 @@ cc_library(
     name = "devices_base",
     hdrs = glob([
         "*.h",
-    ], exclude = []),
+    ], exclude = [
+        "CudaGraphRunner.h",
+        "CudaGraphUtils.h",
+        "GraphRunnerDeviceShims.h",
+    ]),
     srcs = glob([
         "*.cc",
-    ], exclude = []),
+    ], exclude = [
+        "GraphBase.cc",
+        "GraphBaseDecode.cc",
+        "GraphBasePrefill.cc",
+        "CudaGraphRunner.cc",
+        "CudaGraphRunnerDecode.cc",
+        "CudaGraphRunnerPrefill.cc",
+        "CudaGraphUtils.cc",
+        "GraphRunnerDeviceShims.cc",
+    ]),
     deps = [
         "//rtp_llm/cpp/core:allocator",
         "//rtp_llm/cpp/core:memory_tracker",
@@ -81,6 +94,37 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     copts = copts(),
+)
+
+cc_library(
+    name = "cuda_graph",
+    hdrs = [
+        "CudaGraphRunner.h",
+        "CudaGraphUtils.h",
+        "GraphRunnerDeviceShims.h",
+    ],
+    srcs = [
+        "CudaGraphRunner.cc",
+        "CudaGraphRunnerDecode.cc",
+        "CudaGraphRunnerPrefill.cc",
+        "CudaGraphUtils.cc",
+        "GraphRunnerDeviceShims.cc",
+    ],
+    deps = [
+        ":devices_base",
+        "//rtp_llm/cpp/utils:core_utils",
+        "//rtp_llm/cpp/utils:profiling_scope",
+    ] + select({
+        "@//:using_rocm": [
+            "//rtp_llm/cpp/rocm:rocm_host_utils",
+        ],
+        "//conditions:default": [
+            "//rtp_llm/cpp/cuda:cuda",
+        ],
+    }),
+    visibility = ["//visibility:public"],
+    copts = copts(),
+    alwayslink = True,
 )
 
 cc_library(

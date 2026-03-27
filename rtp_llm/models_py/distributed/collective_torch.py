@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import ctypes
 import gc
 import logging
 import os
 from datetime import timedelta
 from enum import Enum
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Tuple, Union
 
 import torch
 import torch.distributed
@@ -14,7 +15,7 @@ from rtp_llm.models_py.distributed.symm_mem import (
     get_symm_mem_communicator,
     init_symm_mem_communicator,
 )
-from rtp_llm.ops import NcclCommConfig, ParallelismConfig
+from rtp_llm.ops import NcclCommConfig, ParallelismConfig, rtp_llm_ops
 
 
 class Group(Enum):
@@ -30,6 +31,237 @@ class Group(Enum):
 _group_map: Dict[Union[Group, str], torch.distributed.ProcessGroup] = {}
 _parallelism_config: Optional[ParallelismConfig] = None
 _initialized: bool = False  # Track if we've initialized (to prevent double init)
+
+_NCCL_SUCCESS = 0
+_NCCL_SUM = 0
+# ncclDataType_t enum values from NCCL/RCCL 2.x headers (nccl.h).
+# See: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/types.html
+#   0 = ncclInt8,   1 = ncclUint8,  2 = ncclInt32,  3 = ncclUint32,
+#   4 = ncclInt64,  5 = ncclUint64, 6 = ncclFloat16, 7 = ncclFloat32,
+#   8 = ncclFloat64, 9 = ncclBfloat16, 10 = ncclFp8E4M3, 11 = ncclFp8E5M2
+_NCCL_DTYPE_MAP = {
+    torch.int8: 0,  # ncclInt8
+    torch.uint8: 1,  # ncclUint8
+    torch.int32: 2,  # ncclInt32
+    torch.int64: 4,  # ncclInt64
+    torch.float16: 6,  # ncclFloat16
+    torch.float32: 7,  # ncclFloat32
+    torch.float64: 8,  # ncclFloat64
+    torch.bfloat16: 9,  # ncclBfloat16
+}
+if hasattr(torch, "uint32"):
+    _NCCL_DTYPE_MAP[torch.uint32] = 3
+if hasattr(torch, "uint64"):
+    _NCCL_DTYPE_MAP[torch.uint64] = 5
+# ncclDataType_t additions available on newer NCCL/RCCL.
+# RCCL only exposes two FP8 enums today: E4M3(10) and E5M2(11). PyTorch's
+# fn/fnuz variants map to the same RCCL enum values.
+if hasattr(torch, "float8_e4m3fn"):
+    _NCCL_DTYPE_MAP[torch.float8_e4m3fn] = 10
+if hasattr(torch, "float8_e4m3fnuz"):
+    _NCCL_DTYPE_MAP[torch.float8_e4m3fnuz] = 10
+if hasattr(torch, "float8_e5m2"):
+    _NCCL_DTYPE_MAP[torch.float8_e5m2] = 11
+if hasattr(torch, "float8_e5m2fnuz"):
+    _NCCL_DTYPE_MAP[torch.float8_e5m2fnuz] = 11
+
+_rccl_lib: Optional[ctypes.CDLL] = None
+_rccl_comm: Optional[ctypes.c_void_p] = None
+_rccl_world_size: int = 1
+_is_rocm_runtime: bool = getattr(torch.version, "hip", None) is not None
+# Thread safety: protected by GIL in CPython. If nogil builds are adopted,
+# this global must be guarded by an explicit lock or replaced with thread-local storage.
+_HipgraphAllGatherCacheKey = Tuple[Tuple[int, ...], torch.dtype, str, int]
+_hipgraph_allgather_outputs: Dict[_HipgraphAllGatherCacheKey, torch.Tensor] = {}
+
+
+def _get_nccl_dtype(tensor: torch.Tensor) -> int:
+    nccl_dtype = _NCCL_DTYPE_MAP.get(tensor.dtype)
+    if nccl_dtype is not None:
+        return nccl_dtype
+    supported = ", ".join(sorted(str(dtype) for dtype in _NCCL_DTYPE_MAP))
+    raise TypeError(
+        f"Unsupported dtype {tensor.dtype} for HIPGraph RCCL collectives. Supported dtypes: {supported}"
+    )
+
+
+def _get_or_create_allgather_output(tensor: torch.Tensor) -> torch.Tensor:
+    expected_shape = (_rccl_world_size * tensor.shape[0], *tensor.shape[1:])
+    device_index = tensor.device.index if tensor.device.index is not None else -1
+    cache_key: _HipgraphAllGatherCacheKey = (
+        tuple(expected_shape),
+        tensor.dtype,
+        tensor.device.type,
+        device_index,
+    )
+    output = _hipgraph_allgather_outputs.get(cache_key)
+    if output is not None:
+        return output
+
+    if not _is_hipgraph_capture_active():
+        raise RuntimeError(
+            "HIPGraph all_gather output cache miss while capture is inactive. "
+            f"Refusing to allocate replay-time buffer (shape={expected_shape}, "
+            f"dtype={tensor.dtype}, device={tensor.device})."
+        )
+
+    output = torch.zeros(expected_shape, device=tensor.device, dtype=tensor.dtype)
+    _hipgraph_allgather_outputs[cache_key] = output
+    return output
+
+
+def _load_rccl() -> Optional[ctypes.CDLL]:
+    global _rccl_lib
+    if _rccl_lib is not None:
+        return _rccl_lib
+    for name in ("librccl.so.1", "librccl.so"):
+        try:
+            _rccl_lib = ctypes.CDLL(name)
+            logging.info(f"Loaded RCCL library: {name}")
+            break
+        except OSError:
+            continue
+    if _rccl_lib is None:
+        logging.warning(
+            "Failed to load RCCL library (tried librccl.so.1, librccl.so). "
+            "HIPGraph capture collectives will not be available."
+        )
+    return _rccl_lib
+
+
+def _setup_rccl_api(lib: ctypes.CDLL) -> None:
+    lib.ncclAllReduce.restype = ctypes.c_int
+    lib.ncclAllReduce.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    lib.ncclAllGather.restype = ctypes.c_int
+    lib.ncclAllGather.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+
+
+def _is_hipgraph_capture_active() -> bool:
+    checker = getattr(rtp_llm_ops, "is_hipgraph_capture_enabled", None)
+    if checker is None:
+        return False
+    try:
+        return bool(checker())
+    except Exception as e:
+        logging.warning(f"Failed to query HIPGraph capture state: {e}")
+        return False
+
+
+def _get_rccl_runtime() -> Tuple[ctypes.CDLL, ctypes.c_void_p]:
+    lib = _rccl_lib if _rccl_lib is not None else _load_rccl()
+    if lib is None:
+        raise RuntimeError(
+            "RCCL library is not available for HIPGraph capture collectives"
+        )
+    if _rccl_comm is None or _rccl_comm.value is None:
+        raise RuntimeError(
+            "RCCL communicator is not initialized for HIPGraph capture collectives"
+        )
+    return lib, _rccl_comm
+
+
+def _clear_hipgraph_capture_nccl_comm() -> None:
+    global _rccl_comm, _rccl_world_size
+    global _hipgraph_allgather_outputs
+    _rccl_comm = None
+    _rccl_world_size = 1
+    _hipgraph_allgather_outputs.clear()
+
+
+def set_hipgraph_capture_nccl_comm(
+    nccl_comm_handle: int, world_size: int, rank: int
+) -> None:
+    del rank
+    global _rccl_comm, _rccl_world_size
+    global _hipgraph_allgather_outputs
+    if not _is_rocm_runtime:
+        return
+    if nccl_comm_handle == 0 or world_size <= 1:
+        _clear_hipgraph_capture_nccl_comm()
+        return
+    lib = _load_rccl()
+    if lib is None:
+        logging.warning("set_hipgraph_capture_nccl_comm: RCCL library not available")
+        _clear_hipgraph_capture_nccl_comm()
+        return
+    _setup_rccl_api(lib)
+    _rccl_comm = ctypes.c_void_p(nccl_comm_handle)
+    _rccl_world_size = world_size
+    # Communicator/world-size changes invalidate cached all-gather buffers.
+    # enter/exit capture should not clear this cache because replay relies on
+    # stable addresses recorded during capture.
+    _hipgraph_allgather_outputs.clear()
+
+
+def enter_hipgraph_capture_mode(
+    nccl_comm_handle: int = 0, world_size: int = 0, rank: int = 0
+) -> None:
+    if nccl_comm_handle != 0 and world_size > 1:
+        set_hipgraph_capture_nccl_comm(nccl_comm_handle, world_size, rank)
+    # Keep previously registered comm when no valid handle is provided.
+    # C++ registration path is responsible for explicit clear via
+    # set_hipgraph_capture_nccl_comm(0, 0, rank) when needed.
+
+
+def exit_hipgraph_capture_mode() -> None:
+    # Capture state is owned by C++ side and queried via is_hipgraph_capture_enabled().
+    return
+
+
+def _should_use_hipgraph_capture_rccl(group: Group) -> bool:
+    return (
+        _is_rocm_runtime
+        and group == Group.TP
+        and _is_hipgraph_capture_active()
+        and _rccl_comm is not None
+        and _rccl_comm.value is not None
+    )
+
+
+def _hipgraph_capture_all_reduce(tensor: torch.Tensor) -> None:
+    lib, rccl_comm = _get_rccl_runtime()
+    result = lib.ncclAllReduce(
+        tensor.data_ptr(),
+        tensor.data_ptr(),
+        tensor.numel(),
+        _get_nccl_dtype(tensor),
+        _NCCL_SUM,
+        rccl_comm,
+        torch.cuda.current_stream().cuda_stream,
+    )
+    if result != _NCCL_SUCCESS:
+        raise RuntimeError(f"ncclAllReduce failed with error code {result}")
+
+
+def _hipgraph_capture_all_gather(tensor: torch.Tensor) -> torch.Tensor:
+    lib, rccl_comm = _get_rccl_runtime()
+    output_tensor = _get_or_create_allgather_output(tensor)
+    result = lib.ncclAllGather(
+        tensor.data_ptr(),
+        output_tensor.data_ptr(),
+        tensor.numel(),
+        _get_nccl_dtype(tensor),
+        rccl_comm,
+        torch.cuda.current_stream().cuda_stream,
+    )
+    if result != _NCCL_SUCCESS:
+        raise RuntimeError(f"ncclAllGather failed with error code {result}")
+    return output_tensor
 
 
 def init_distributed_environment(
@@ -386,6 +618,10 @@ def all_reduce(tensor: torch.Tensor, group: Group) -> torch.Tensor:
     Returns:
         All-reduced tensor (same as input tensor)
     """
+    if _should_use_hipgraph_capture_rccl(group):
+        _hipgraph_capture_all_reduce(tensor)
+        return tensor
+
     if group == Group.TP:
         symm_mem_comm = get_symm_mem_communicator()
         if symm_mem_comm is not None and symm_mem_comm.should_torch_symm_mem_allreduce(
@@ -411,6 +647,9 @@ def all_gather(tensor: torch.Tensor, group: Group) -> torch.Tensor:
         Concatenated tensor containing all gathered tensors
         (shape: [world_size * tensor.shape[0]] + list(tensor.shape)[1:])
     """
+    if _should_use_hipgraph_capture_rccl(group):
+        return _hipgraph_capture_all_gather(tensor)
+
     if group == Group.TP:
         symm_mem_comm = get_symm_mem_communicator()
         if symm_mem_comm is not None and symm_mem_comm.should_torch_symm_mem_allgather(
@@ -456,6 +695,9 @@ __all__ = [
     "init_user_buffers_environment",
     "distributed_environment_initialized",
     "destroy_distributed_environment",
+    "set_hipgraph_capture_nccl_comm",
+    "enter_hipgraph_capture_mode",
+    "exit_hipgraph_capture_mode",
     "send",
     "recv",
     "broadcast",

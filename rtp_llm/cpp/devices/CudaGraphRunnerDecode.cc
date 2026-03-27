@@ -1,6 +1,8 @@
-#include "rtp_llm/cpp/devices/cuda_impl/CudaGraphRunner.h"
+#include "rtp_llm/cpp/devices/CudaGraphRunner.h"
+#include <algorithm>
 
 namespace rtp_llm {
+
 void CudaGraphRunner::replayDecode(int bs) {
     replayGraph(bs);
 }
@@ -38,7 +40,7 @@ void CudaGraphRunner::captureDecodeOneBatchSize(int bs) {
 
 void CudaGraphRunner::captureDecode() {
     RTP_LLM_LOG_INFO("Capture Decode Start");
-    // Pre-initialize all graph instances with keep_graph based on debug mode
+    // Pre-initialize all graph instances with keep_graph based on debug mode.
     for (int bs : capture_range_) {
         graph_instances_.try_emplace(bs, enable_cuda_graph_debug_mode_);
     }
@@ -66,4 +68,5 @@ void CudaGraphRunner::captureDecode() {
     }
     RTP_LLM_LOG_INFO("Capture Decode End");
 }
+
 }  // namespace rtp_llm
