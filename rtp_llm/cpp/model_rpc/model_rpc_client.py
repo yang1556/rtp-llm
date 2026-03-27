@@ -89,6 +89,10 @@ def trans_input(input_py: GenerateInput):
     trans_option(generate_config_pb, input_py.generate_config, "top_p_decay")
     trans_option(generate_config_pb, input_py.generate_config, "top_p_min")
     trans_option(generate_config_pb, input_py.generate_config, "top_p_reset_ids")
+    trans_option(generate_config_pb, input_py.generate_config, "json_schema")
+    trans_option(generate_config_pb, input_py.generate_config, "regex")
+    trans_option(generate_config_pb, input_py.generate_config, "ebnf")
+    trans_option(generate_config_pb, input_py.generate_config, "structural_tag")
     trans_option(generate_config_pb, input_py.generate_config, "adapter_name")
     trans_option_cast(
         generate_config_pb, input_py.generate_config, "task_id", functools.partial(str)

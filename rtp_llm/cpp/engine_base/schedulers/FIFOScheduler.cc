@@ -1,11 +1,13 @@
 #include "rtp_llm/cpp/engine_base/schedulers/FIFOScheduler.h"
 #include "rtp_llm/cpp/metrics/RtpLLMMetrics.h"
 #include "rtp_llm/cpp/utils/Logger.h"
+#include "rtp_llm/cpp/utils/AssertUtils.h"
 #include "rtp_llm/cpp/cache/KVCacheManager.h"
 #include "rtp_llm/cpp/cache/Types.h"
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 using namespace std;
 namespace rtp_llm {
@@ -16,6 +18,7 @@ FIFOScheduler::FIFOScheduler(const RuntimeConfig&                   runtime_conf
                              const ParallelismConfig&               parallelism_config,
                              const ModelSpecificConfig&             model_specific_config,
                              const std::shared_ptr<KVCacheManager>& cache_manager,
+                             py::object                             grammar_backend,
                              const kmonitor::MetricsReporterPtr     metrics_reporter,
                              const int                              max_score_len):
     pd_sep_config_(pd_sep_config),
@@ -25,7 +28,8 @@ FIFOScheduler::FIFOScheduler(const RuntimeConfig&                   runtime_conf
     max_batch_tokens_size_(runtime_config.fifo_scheduler_config.max_batch_tokens_size),
     max_generate_batch_size_(runtime_config.max_generate_batch_size),
     need_fill_fake_stream_(parallelism_config.dp_size > 1 && parallelism_config.tp_rank == 0),
-    metrics_reporter_(metrics_reporter) {
+    metrics_reporter_(metrics_reporter),
+    grammar_backend_(std::move(grammar_backend)) {
     RTP_LLM_LOG_INFO("max_generate_batch_size is [%d], max_batch_tokens_size is [%d]",
                      max_generate_batch_size_,
                      max_batch_tokens_size_);

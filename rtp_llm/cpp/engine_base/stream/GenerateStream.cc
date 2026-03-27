@@ -491,6 +491,10 @@ void GenerateStream::setStopWithoutLock(ErrorCode error_code, const std::string&
                         cost_time_ms);
     generate_status_->status     = StreamState::STOPPED;
     generate_status_->error_info = ErrorInfo(error_code, error_msg);
+    {
+        py::gil_scoped_acquire acquire;
+        grammar_obj_ = py::none();
+    }
     cv_->notify_one();
 }
 
@@ -537,6 +541,10 @@ bool GenerateStream::setRunning() {
 void GenerateStream::setFinishedWithoutLock() {
     generate_status_->status = StreamState::FINISHED;
     fillSubGenerateStatus(StreamState::FINISHED);
+    {
+        py::gil_scoped_acquire acquire;
+        grammar_obj_ = py::none();
+    }
     cv_->notify_one();
 }
 
@@ -1035,6 +1043,30 @@ int GenerateStream::reuseBlockSize() const {
     int reuse_length       = reuseLength();
     int seq_size_per_block = seqSizePerBlock();
     return reuse_length / seq_size_per_block;
+}
+
+void GenerateStream::setGrammarObject(const py::object& grammar) {
+    std::lock_guard<std::mutex> lock(*output_mutex_);
+    py::gil_scoped_acquire      acquire;
+    grammar_obj_ = grammar;
+}
+
+py::object GenerateStream::grammarObject() const {
+    std::lock_guard<std::mutex> lock(*output_mutex_);
+    py::gil_scoped_acquire      acquire;
+    return grammar_obj_;
+}
+
+bool GenerateStream::hasGrammarObject() const {
+    std::lock_guard<std::mutex> lock(*output_mutex_);
+    py::gil_scoped_acquire      acquire;
+    return !grammar_obj_.is_none();
+}
+
+void GenerateStream::clearGrammarObject() {
+    std::lock_guard<std::mutex> lock(*output_mutex_);
+    py::gil_scoped_acquire      acquire;
+    grammar_obj_ = py::none();
 }
 
 void GenerateStream::setSeqLength(int seq_length) {

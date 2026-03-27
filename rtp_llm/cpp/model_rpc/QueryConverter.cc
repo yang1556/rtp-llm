@@ -70,6 +70,10 @@ std::shared_ptr<GenerateConfig> QueryConverter::transGenerateConfig(const Genera
     TRANS_OPTIONAL(top_p_decay);
     TRANS_OPTIONAL(top_p_min);
     TRANS_OPTIONAL(top_p_reset_ids);
+    TRANS_OPTIONAL(json_schema);
+    TRANS_OPTIONAL(regex);
+    TRANS_OPTIONAL(ebnf);
+    TRANS_OPTIONAL(structural_tag);
     TRANS_OPTIONAL(task_id);
     TRANS_OPTIONAL(adapter_name);
     generate_config->in_think_mode       = config_proto->in_think_mode();

@@ -20,6 +20,7 @@ public:
                            const ParallelismConfig&               parallelism_config,
                            const ModelSpecificConfig&             model_specific_config,
                            const std::shared_ptr<KVCacheManager>& cache_manager,
+                           py::object                             grammar_backend,
                            const kmonitor::MetricsReporterPtr     metrics_reporter = nullptr,
                            const int                              max_score_len    = 1);
 
@@ -77,6 +78,7 @@ protected:
 
     std::vector<EngineScheduleInfo::TaskInfo> waiting_task_list_;
     std::vector<EngineScheduleInfo::TaskInfo> running_task_list_;
+    py::object                                grammar_backend_;
 
     // TODO @wangyin support different beams run togather
 };
