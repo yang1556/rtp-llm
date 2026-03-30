@@ -162,15 +162,17 @@ public:
                          params.num_groups,
                          uint32_t(params.gemm_type));
 
+        static std::string cached_jit_hdrs_path = getJITPath();
+        static std::string cached_file_hash     = getFilesHash(cached_jit_hdrs_path, params.hdrs_relative_path);
         if (jit_hdrs_path_.empty()) {
-            jit_hdrs_path_ = getJITPath();
+            jit_hdrs_path_ = cached_jit_hdrs_path;
         }
 
         static const std::string remote_jit_dir   = getRemoteJITDir();
         const std::string        short_params_str = params.getShortParamsStr();
         const std::string        params_str       = params.getParamsStr();
         const std::string        func_name        = "runDeepGemm_" + params_str;
-        const std::string        file_hash        = getFilesHash(jit_hdrs_path_, params.hdrs_relative_path);
+        const std::string&       file_hash        = cached_file_hash;
         const std::string        local_dir_path =
             std::string("." + params.cache_relative_path + file_hash + "/" + short_params_str + "/" + params_str);
         const std::string remote_dir_path = std::string(remote_jit_dir + params.cache_relative_path + file_hash + "/"
