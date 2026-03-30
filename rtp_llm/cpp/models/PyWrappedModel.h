@@ -45,7 +45,7 @@ private:
     void                           setupKVCacheForAttentionInputs(torch_ext::PyAttentionInputs& py_attn_inputs,
                                                                   const GptModelInputs&         inputs,
                                                                   BufferPtr&                    kv_cache_kernel_block_id_device,
-                                                                  std::vector<BufferPtr>*       kv_cache_kernel_block_id_device_by_group = nullptr);
+                                                                  std::vector<BufferPtr>* kv_cache_kernel_block_id_device_by_group = nullptr);
     GptModelOutputs                callForwardPostLayers(BufferPtr             hidden_states,
                                                          const GptModelInputs& inputs,
                                                          bool                  skip_final_layernorm,
@@ -149,10 +149,13 @@ inline PyWrappedModel::PyWrappedModel(const GptModelInitParams& params,
         if (is_prefill_cuda_graph_mode) {
             // For embedding model (prefill-only), use max_seq_len
             graph_params.num_tokens_per_bs = device_params.max_seq_len;
-        } else if (device_params.sp_config.gen_num_per_cycle > 1 && !params.model_id) {
-            // For speculative sampling
+        } else if (device_params.sp_config.type != SP_TYPE_NONE && device_params.sp_config.gen_num_per_cycle > 1
+                   && !params.model_id) {
+            // For speculative sampling (target model only)
             // -- model_id == 0: target model
             // -- model_id == 1: draft model
+            // Only use multi-token capture when SP is actually enabled;
+            // gen_num_per_cycle may be >1 from config even when SP is disabled.
             graph_params.num_tokens_per_bs = device_params.sp_config.gen_num_per_cycle + 1;
         } else {
             graph_params.num_tokens_per_bs = 1;
