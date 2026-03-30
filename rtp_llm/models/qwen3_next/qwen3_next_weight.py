@@ -190,6 +190,15 @@ def transpose_gate_up(ts: List[torch.Tensor]):
     return torch.cat([up, gate], dim=1)
 
 
+# List[gate_up, hidden] -> [Expert, up_gate, hidden]
+def transpose_stack_moe_w1(ts: List[torch.Tensor]) -> torch.Tensor:
+    stacked_tensor = torch.stack(ts, dim=0)
+    gate_up_dim = stacked_tensor.shape[1] // 2
+    return torch.cat(
+        [stacked_tensor[:, gate_up_dim:, :], stacked_tensor[:, :gate_up_dim, :]], dim=1
+    )
+
+
 class Qwen3NextBaseWeight(ModelDeployWeightInfo):
     def __init__(self, *args: List[Any], **kwargs: Dict[str, Any]):
         super().__init__(*args, **kwargs)
@@ -397,7 +406,9 @@ class Qwen3NextBaseWeight(ModelDeployWeightInfo):
             ),
         ]
 
-    def _create_moe_expert_weights(self, moe_config: MoeConfig) -> List[WeightModule]:
+    def _create_moe_expert_weights(
+        self, moe_config: MoeConfig
+    ) -> List[MoeAtomicWeight]:
         """Create MoE expert weights in split format (default implementation)."""
         return [
             MoeAtomicWeight(
@@ -569,7 +580,6 @@ class Qwen35MoeWeight(Qwen3NextBaseWeight):
         return MoeConfig(
             expert_num=self.expert_num_,
             align_size=self._align_size,
-            weight_stack=self._use_stack_weight,
         )
 
     def _get_shared_moe_config(self) -> SharedMoeConfig:
@@ -577,38 +587,48 @@ class Qwen35MoeWeight(Qwen3NextBaseWeight):
         return SharedMoeConfig(
             expert_num=self.expert_num_,
             align_size=self._align_size,
-            weight_stack=self._use_stack_weight,
         )
 
-    def _create_moe_expert_weights(self, moe_config: MoeConfig) -> List[WeightModule]:
+    def _create_moe_expert_weights(
+        self, moe_config: MoeConfig
+    ) -> List[MoeAtomicWeight]:
         """Create MoE expert weights in stackwd or split format."""
-        if self._use_stack_weight:
-            return [
-                MoeAtomicWeight(
-                    W.moe_w2,
-                    [
-                        CkptWeightInfo(
-                            self.prefix + "layers.{i}.mlp.experts.down_proj",
-                            identity,
-                        )
-                    ],
-                    process_fun=identity,
-                    config=moe_config,
-                ),
-                MoeAtomicWeight(
-                    W.moe_w1,
-                    [
-                        CkptWeightInfo(
-                            self.prefix + "layers.{i}.mlp.experts.gate_up_proj",
-                            identity,
-                        )
-                    ],
-                    process_fun=transpose_gate_up,
-                    config=moe_config,
-                ),
-            ]
-        else:
+        if not self._use_stack_weight:
             return super()._create_moe_expert_weights(moe_config)
+        else:
+            return self._create_moe_expert_weights_stacked(moe_config)
+
+    def _create_moe_expert_weights_stacked(
+        self, moe_config: MoeConfig
+    ) -> List[MoeAtomicWeight]:
+        return [
+            MoeAtomicWeight(
+                W.moe_w2,
+                [
+                    CkptWeightInfo(
+                        self.prefix + "layers.{i}.mlp.experts.{expert_id}.down_proj"
+                    )
+                ],
+                process_fun=stack_,
+                config=moe_config,
+                stacked_ckpt_keys=[
+                    CkptWeightInfo(self.prefix + "layers.{i}.mlp.experts.down_proj"),
+                ],
+            ),
+            MoeAtomicWeight(
+                W.moe_w1,
+                [
+                    CkptWeightInfo(
+                        self.prefix + "layers.{i}.mlp.experts.{expert_id}.gate_up_proj"
+                    )
+                ],
+                process_fun=transpose_stack_moe_w1,
+                config=moe_config,
+                stacked_ckpt_keys=[
+                    CkptWeightInfo(self.prefix + "layers.{i}.mlp.experts.gate_up_proj"),
+                ],
+            ),
+        ]
 
     def _create_linear_attn_qkvz_weight(self) -> LinearAttnAtomicWeight:
         """Separate format: two files in_proj_qkv.weight + in_proj_z.weight."""

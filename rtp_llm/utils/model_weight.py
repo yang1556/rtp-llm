@@ -321,6 +321,10 @@ def stack_(ts: List[torch.Tensor]):
     return stack_0(ts)
 
 
+def transpose_stack(ts: List[torch.Tensor]):
+    return stack_0(ts).transpose(-1, -2).contiguous()
+
+
 def stack_pad(ts: List[torch.Tensor], moe_align_size: int, dim: int):
     """Stack tensors and pad to moe_align_size along the specified dimension.
 

@@ -1,12 +1,17 @@
 from typing import Any, Dict, Generator, List, Optional
-from rtp_llm.utils.database import BaseDatabase
 
 import torch
+
+from rtp_llm.utils.database import BaseDatabase
+
 
 class TensorSource:
     def load_tensor(
         self, name: str, data_type: Optional[torch.dtype] = torch.float16
     ) -> List[torch.Tensor]:
+        raise NotImplementedError
+
+    def has_tensor(self, name: str) -> bool:
         raise NotImplementedError
 
     def get_database(self) -> BaseDatabase:
@@ -18,9 +23,12 @@ class DatabaseTensorSource(TensorSource):
 
     def __init__(self, database: BaseDatabase):
         self._database = database
-    
-    def load_tensor(self, name, data_type = torch.float16):
+
+    def load_tensor(self, name, data_type=torch.float16):
         return self._database.load_tensor(name, data_type)
+
+    def has_tensor(self, name: str) -> bool:
+        return self._database.has_tensor(name)
 
     def get_database(self) -> BaseDatabase:
         return self._database
@@ -37,13 +45,16 @@ class TensorCollector(TensorSource):
         self._tensors = {}
         self._completed_once = False
         self._database = database
-    
-    def load_tensor(self, name, data_type = torch.float16):
+
+    def load_tensor(self, name, data_type=torch.float16):
         tensors = []
         t = self._tensors.get(name)
         if t is not None:
             tensors.append(self._tensors[name].to(data_type))
         return tensors
+
+    def has_tensor(self, name: str) -> bool:
+        return name in self._tensors
 
     def store_tensor(self, name: str, tensor: torch.Tensor) -> bool:
         if name not in self._target_keys:
@@ -51,7 +62,7 @@ class TensorCollector(TensorSource):
         self._tensors[name] = tensor
         self._check_completion()
         return self.is_collection_complete()
-    
+
     def _check_completion(self):
         if self._target_keys.issubset(self._tensors.keys()):
             self._completed_once = True
@@ -61,6 +72,6 @@ class TensorCollector(TensorSource):
 
     def is_collection_complete(self) -> bool:
         return self._completed_once
-    
+
     def get_database(self) -> BaseDatabase:
         return self._database

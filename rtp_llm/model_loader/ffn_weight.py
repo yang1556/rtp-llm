@@ -1,20 +1,19 @@
 import functools
 import logging
-import traceback
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import torch
 from pydantic import BaseModel
 
 from rtp_llm.config.quant_config import QuantizationConfig
 from rtp_llm.model_loader.load_config import LoadConfig
+from rtp_llm.model_loader.tensor_source import TensorSource
 from rtp_llm.model_loader.weight_module import (
     AtomicWeight,
     CompositeWeight,
     QuantWeight,
     WeightModule,
 )
-from rtp_llm.model_loader.tensor_source import TensorSource
 from rtp_llm.utils.model_weight import CkptWeightInfo, W, identity
 from rtp_llm.utils.util import check_with_info
 
@@ -255,11 +254,15 @@ class FfnWeight(CompositeWeight):
         return False
 
     @torch.inference_mode()
-    def update(self, tensor: torch.Tensor, device: str, load_config: LoadConfig, **kwargs):
+    def update(
+        self, tensor: torch.Tensor, device: str, load_config: LoadConfig, **kwargs
+    ):
         if "module_name" in kwargs:
             name: str = kwargs["module_name"]
             if name not in self.sub_weights:
-                raise KeyError(f"can not find key: {name} in ffn weights, allow key names are {[name for name in self.sub_weights]}")
+                raise KeyError(
+                    f"can not find key: {name} in ffn weights, allow key names are {[name for name in self.sub_weights]}"
+                )
             return self.sub_weights[name].update(tensor, device, load_config)
         else:
             return super().update(tensor, device, load_config)
@@ -295,11 +298,43 @@ class MoeAtomicWeight(AtomicWeight):
         process_fun: Callable[[List[torch.Tensor]], torch.Tensor] = identity,
         data_type: Optional[torch.dtype] = None,
         config: MoeConfig = None,
+        stacked_ckpt_keys: Optional[List[CkptWeightInfo]] = None,
         *args: Any,
         **kwargs: Any,
     ):
         self.config = config
+        self.stacked_ckpt_keys = stacked_ckpt_keys
         super().__init__(name, weights, process_fun, data_type, *args, **kwargs)
+
+    def _split(
+        self,
+        tensor: Union[torch.Tensor, Dict[str, torch.Tensor]],
+        load_config: LoadConfig,
+    ):
+        if (
+            self.config
+            and not self.config.weight_stack
+            and load_config.use_stack_weight
+        ):
+            load_config = load_config.model_copy(update={"use_stack_weight": False})
+        return super()._split(tensor, load_config)
+
+    def _postprocess(
+        self,
+        tensor: Union[torch.Tensor, Dict[str, torch.Tensor]],
+        device: str,
+        load_config: LoadConfig,
+    ):
+        raw_tensor = tensor.get(self.name) if isinstance(tensor, dict) else tensor
+        if self.name in [W.moe_w1, W.moe_w2, W.moe_s1, W.moe_s2]:
+            raw_tensor = load_config.exported_device.shuffle_moe_weight(
+                raw_tensor, load_config.compute_dtype, self.name
+            )
+        return {
+            self.name: load_config.exported_device.maybe_rewrite_weight_by_key(
+                self.name, raw_tensor
+            )
+        }
 
     def _load_raw_tensor(
         self,
@@ -309,41 +344,108 @@ class MoeAtomicWeight(AtomicWeight):
         load_config: LoadConfig,
     ):
         if self.config.weight_stack:
-            return super()._load_raw_tensor(tensor_source, layer_id, device, load_config)
+            return super()._load_raw_tensor(
+                tensor_source, layer_id, device, load_config
+            )
 
-        # weight should be expand by experts
-        before_merge_tensors = []
         convert_type = (
             self.data_type if self.data_type is not None else load_config.compute_dtype
         )
-        for ckpt_weight in self.weights:
+        before_merge_tensors = []
+        for ckpt_idx, ckpt_weight in enumerate(self.weights):
             selected_experts = load_config.get_selected_experts(
                 layer_id, self.config.expert_num
             )
-            for expert_id in selected_experts:
-                name = ckpt_weight.name.format(
-                    i=str(layer_id), i_1=str(layer_id + 1), expert_id=str(expert_id)
+            use_stacked = self._should_use_stacked(
+                ckpt_idx, ckpt_weight, selected_experts, layer_id, tensor_source
+            )
+            if use_stacked:
+                before_merge_tensors.extend(
+                    self._load_from_stacked(
+                        ckpt_idx,
+                        selected_experts,
+                        layer_id,
+                        tensor_source,
+                        convert_type,
+                        device,
+                    )
                 )
-                logging.debug("tensor name: %s", name)
-                try:
-                    before_merge_tensors.append(
-                        ckpt_weight.merge_fun(
-                            [
-                                x.to(device)
-                                for x in tensor_source.load_tensor(name, convert_type)
-                            ]
-                        )
+            else:
+                before_merge_tensors.extend(
+                    self._load_per_expert(
+                        ckpt_weight,
+                        selected_experts,
+                        layer_id,
+                        tensor_source,
+                        convert_type,
+                        device,
                     )
-                except Exception as e:
-                    logging.error(
-                        f"加载 {name} 失败，完整堆栈:\n{traceback.format_exc()}"
-                    )
-                    raise e
+                )
 
         after_merge_tensor = self.process_fun(before_merge_tensors).to(convert_type)
         logging.debug("load weight :%s, %s ", self.name, after_merge_tensor.shape)
         return {self.name: after_merge_tensor}
-    
+
+    def _should_use_stacked(
+        self,
+        ckpt_idx: int,
+        ckpt_weight: CkptWeightInfo,
+        selected_experts: Sequence[int],
+        layer_id: Optional[int],
+        tensor_source: TensorSource,
+    ) -> bool:
+        if not self.stacked_ckpt_keys:
+            return False
+        first_name = ckpt_weight.name.format(
+            i=str(layer_id),
+            i_1=str(layer_id + 1),
+            expert_id=str(selected_experts[0]),
+        )
+        return not tensor_source.has_tensor(first_name)
+
+    def _load_per_expert(
+        self,
+        ckpt_weight: CkptWeightInfo,
+        selected_experts: Sequence[int],
+        layer_id: Optional[int],
+        tensor_source: TensorSource,
+        convert_type: torch.dtype,
+        device: str,
+    ) -> List[torch.Tensor]:
+        result = []
+        for expert_id in selected_experts:
+            name = ckpt_weight.name.format(
+                i=str(layer_id), i_1=str(layer_id + 1), expert_id=str(expert_id)
+            )
+            loaded = tensor_source.load_tensor(name, convert_type)
+            if not loaded:
+                raise ValueError(
+                    f"Failed to load per-expert tensor '{name}' from source"
+                )
+            result.append(ckpt_weight.merge_fun([x.to(device) for x in loaded]))
+        return result
+
+    def _load_from_stacked(
+        self,
+        ckpt_idx: int,
+        selected_experts: Sequence[int],
+        layer_id: Optional[int],
+        tensor_source: TensorSource,
+        convert_type: torch.dtype,
+        device: str,
+    ) -> List[torch.Tensor]:
+        assert (
+            self.stacked_ckpt_keys is not None
+        ), "stacked_ckpt_keys is not set in MoeAtomicWeight"
+        stacked_name = self.stacked_ckpt_keys[ckpt_idx].tensor_name(layer_id)
+        loaded = tensor_source.load_tensor(stacked_name, convert_type)
+        if not loaded:
+            raise ValueError(
+                f"Failed to load stacked tensor '{stacked_name}' from source"
+            )
+        stacked_tensor = loaded[0].to(device)
+        return [stacked_tensor[eid].to(convert_type) for eid in selected_experts]
+
     def get_tensor_names(
         self, layer_id: Optional[int], load_config: LoadConfig
     ) -> set[str]:
