@@ -29,6 +29,18 @@ extern "C" half __truncdfhf2(double a) {
 namespace rtp_llm {
 using namespace rocm;
 
+namespace rocm {
+
+void* getHipGraphTpNcclComm(DeviceBase* device) {
+    auto* rocm_device = dynamic_cast<ROCmDevice*>(device);
+    if (rocm_device == nullptr) {
+        return nullptr;
+    }
+    return rocm_device->getTpNcclComm();
+}
+
+}  // namespace rocm
+
 ROCmDevice::ROCmDevice(const DeviceInitParams& params): DeviceBase(params) {
     ROCM_CHECK(hipSetDevice(params.device_id));
     torch_default_stream_ =

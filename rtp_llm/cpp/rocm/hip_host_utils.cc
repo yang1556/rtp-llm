@@ -1,8 +1,21 @@
 #include "hip_host_utils.h"
 #include "rtp_llm/cpp/devices/OpData.h"
 #include "rtp_llm/cpp/config/StaticConfig.h"
+#include <atomic>
 namespace rtp_llm {
 namespace rocm {
+
+namespace {
+std::atomic<bool> in_hip_graph_capture{false};
+}
+
+void setHipGraphCaptureEnabled(bool enabled) {
+    in_hip_graph_capture.store(enabled, std::memory_order_relaxed);
+}
+
+bool isHipGraphCaptureEnabled() {
+    return in_hip_graph_capture.load(std::memory_order_relaxed);
+}
 
 static const char* _hipGetErrorEnum(hipError_t error) {
     return hipGetErrorString(error);
