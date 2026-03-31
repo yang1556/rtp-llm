@@ -151,7 +151,7 @@ class FusedMoeTest(TestCase):
             self.TOP_K,
         ):
             with self.subTest(
-                dype=params[0],
+                dype=str(params[0]),
                 token_num=params[1],
                 hidden_dim=params[2],
                 expert_num=params[3],

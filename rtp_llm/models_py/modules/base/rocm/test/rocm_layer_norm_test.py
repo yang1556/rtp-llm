@@ -99,7 +99,7 @@ class LayerNormTest(TestCase):
             self.DTYPES,
         ):
             with self.subTest(
-                num_tokens=params[0], hidden_size=params[1], dtype=params[2]
+                num_tokens=params[0], hidden_size=params[1], dtype=str(params[2])
             ):
                 self._run_res_layernorm_test(*params)
 

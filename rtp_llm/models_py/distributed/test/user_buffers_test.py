@@ -17,15 +17,20 @@ logging.basicConfig(level=logging.INFO)
 import torch
 import torch.distributed as dist
 
-from rtp_llm.models_py.distributed.collective_torch import (
-    destroy_distributed_environment,
-    init_distributed_environment,
-    init_user_buffers_environment,
-)
-from rtp_llm.models_py.distributed.user_buffers import (
-    UserBufferCommunicator,
-    get_user_buffers_communicator,
-)
+try:
+    from rtp_llm.models_py.distributed.collective_torch import (
+        destroy_distributed_environment,
+        init_distributed_environment,
+        init_user_buffers_environment,
+    )
+    from rtp_llm.models_py.distributed.user_buffers import (
+        UserBufferCommunicator,
+        get_user_buffers_communicator,
+    )
+except ImportError as e:
+    pytest.skip(
+        f"CUDA-only (allocate_shared_buffer unavailable): {e}", allow_module_level=True
+    )
 from rtp_llm.ops import (
     CPRotateMethod,
     NcclCommConfig,

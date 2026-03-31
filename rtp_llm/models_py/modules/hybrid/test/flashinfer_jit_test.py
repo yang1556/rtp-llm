@@ -9,9 +9,12 @@ pytestmark = [pytest.mark.gpu(type="H20")]
 
 import torch
 
-from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashinfer_mla import (
-    warmup_flashinfer_python,
-)
+try:
+    from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashinfer_mla import (
+        warmup_flashinfer_python,
+    )
+except ImportError as e:
+    pytest.skip(f"CUDA-only (flashinfer unavailable): {e}", allow_module_level=True)
 
 # 应用torch_patch来修复flashinfer JIT编译路径问题
 from rtp_llm.utils import torch_patch  # noqa: F401

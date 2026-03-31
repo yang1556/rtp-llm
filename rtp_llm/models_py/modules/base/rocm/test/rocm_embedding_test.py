@@ -32,11 +32,11 @@ class EmbedingTest(TestCase):
         model_config.num_layers = 1
         model_config.max_seq_len = 1
         model_config.vocab_size = 1
-        
+
         parallelism_config = ParallelismConfig()
         parallelism_config.tp_size = 1
         parallelism_config.tp_rank = 0
-        
+
         embeding = Embedding(model_config, parallelism_config, w)
         embeding_torch = EmbeddingTorch(w)
         x = torch.randint(0, hidden_size, (num_tokens,), dtype=torch.int32)
@@ -56,7 +56,7 @@ class EmbedingTest(TestCase):
             self.DTYPES,
         ):
             with self.subTest(
-                num_tokens=params[0], hidden_size=params[1], dtype=params[2]
+                num_tokens=params[0], hidden_size=params[1], dtype=str(params[2])
             ):
                 self._run_embeding_test(*params)
 

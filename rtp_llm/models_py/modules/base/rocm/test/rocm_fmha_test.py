@@ -3,12 +3,13 @@ import math
 from typing import List, Optional, Tuple
 from unittest import SkipTest, TestCase, main
 
-import pytest
 import aiter
+import pytest
 import torch
 import torch.nn.functional as F
 from aiter import dtypes
 from einops import rearrange, repeat
+
 from rtp_llm.ops.compute_ops import paged_attention_atrex
 
 pytestmark = [pytest.mark.gpu(type="MI308X")]
@@ -474,10 +475,8 @@ def run_atrex(
 ) -> torch.Tensor:
     # Whether to use rocm custom paged attention or not
     num_seqs, num_heads, head_size = query.shape
-    block_size = value_cache.shape[3]    
-    max_num_partitions = (
-        max_seq_len + _PARTITION_SIZE - 1
-    ) // _PARTITION_SIZE
+    block_size = value_cache.shape[3]
+    max_num_partitions = (max_seq_len + _PARTITION_SIZE - 1) // _PARTITION_SIZE
     assert _PARTITION_SIZE % block_size == 0
     x = 16 // key_cache.element_size()
     grp_size = num_heads // num_kv_heads
@@ -926,7 +925,7 @@ class FmhaTest(TestCase):
                 bias_type=bias_type,
                 deterministic=deterministic,
                 mha_type=mha_type,
-                dtype=dtype,
+                dtype=str(dtype),
             ):
                 out, out_ref, out_pt = test_flash_attn_output(
                     batch_size,

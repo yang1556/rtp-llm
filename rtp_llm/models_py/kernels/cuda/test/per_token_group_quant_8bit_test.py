@@ -13,10 +13,14 @@ from torch import dtype as _dtype
 from torch.profiler import ProfilerActivity, profile, record_function
 
 from rtp_llm.models_py.utils.arch import is_hip
-from rtp_llm.ops.compute_ops import (
-    per_token_group_quant_fp8,
-    per_token_group_quant_int8,
-)
+
+try:
+    from rtp_llm.ops.compute_ops import (
+        per_token_group_quant_fp8,
+        per_token_group_quant_int8,
+    )
+except ImportError as e:
+    pytest.skip(f"CUDA-only: {e}", allow_module_level=True)
 
 _is_hip = is_hip()
 

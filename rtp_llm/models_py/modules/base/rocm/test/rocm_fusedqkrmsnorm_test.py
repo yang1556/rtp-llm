@@ -76,7 +76,7 @@ class FusedQKRMSNormTest(TestCase):
                 head_num=params[1],
                 kv_head_num=params[2],
                 size_per_head=params[3],
-                dtype=params[4],
+                dtype=str(params[4]),
             ):
                 self._run_fused_qk_rmsnorm_test(*params)
 

@@ -11,8 +11,8 @@ device = torch.device("cuda")
 
 try:
     import deep_gemm
-except (AssertionError, RuntimeError):
-    pytest.skip("deep_gemm unavailable (CUDA_HOME not set)", allow_module_level=True)
+except (ImportError, AssertionError, RuntimeError) as e:
+    pytest.skip(f"deep_gemm unavailable: {e}", allow_module_level=True)
 
 
 def check_cuda_version() -> bool:
@@ -32,7 +32,11 @@ SKIP_REASON = "CUDA version must be >= 12.9 for this test"
 CUDA_VERSION_OK = False
 
 from rtp_llm.config.model_config import ModelConfig
-from rtp_llm.ops.compute_ops import PyAttentionInputs, rtp_llm_ops
+
+try:
+    from rtp_llm.ops.compute_ops import PyAttentionInputs, rtp_llm_ops
+except ImportError as e:
+    pytest.skip(f"CUDA-only: {e}", allow_module_level=True)
 from rtp_llm.utils.model_weight import W
 
 # Only import these modules if CUDA version is >= 12.9

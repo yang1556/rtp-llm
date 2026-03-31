@@ -1,4 +1,5 @@
 """Remote Execution client wrapping the REAPI Execute RPC."""
+
 import logging
 import threading
 import time
@@ -36,7 +37,9 @@ def _byte_stream_tail_loop(
     offset = 0
     with open(out_path, "ab", buffering=0) as f:
         while not stop.is_set():
-            req = bs_pb2.ReadRequest(resource_name=resource_name, read_offset=offset, read_limit=0)
+            req = bs_pb2.ReadRequest(
+                resource_name=resource_name, read_offset=offset, read_limit=0
+            )
             try:
                 for resp in stub.Read(req, metadata=metadata, timeout=300):
                     if stop.is_set():
@@ -69,36 +72,48 @@ class ExecutionResult:
     worker_host_ip: Optional[str] = None
     # REAPI ExecutedActionMetadata.worker when the server populates partial_execution_metadata
     metadata_worker: Optional[str] = None
+    cached_result: Optional[bool] = None
+    response_status_code: Optional[int] = None
+    response_status_message: Optional[str] = None
     # Local paths for live-tailed stream logs (ByteStream); same as logged at execute() start
     stream_stdout_path: Optional[str] = None
     stream_stderr_path: Optional[str] = None
 
 
 class RemoteExecutor:
-    def __init__(self, executor_endpoint: str, cas: CASClient,
-                 metadata: Optional[List[tuple]] = None):
+    def __init__(
+        self,
+        executor_endpoint: str,
+        cas: CASClient,
+        metadata: Optional[List[tuple]] = None,
+    ):
         self.grpc_uri = executor_endpoint
         self.reapi_peer_line = describe_reapi_endpoint("executor", executor_endpoint)
         self.reapi_targets_combined = combine_reapi_endpoints(
-            cas.grpc_uri, executor_endpoint)
+            cas.grpc_uri, executor_endpoint
+        )
         log.info("REAPI %s", self.reapi_targets_combined)
 
         addr = executor_endpoint.replace("grpc://", "")
         self.channel = grpc.insecure_channel(
-            addr, options=[
+            addr,
+            options=[
                 ("grpc.max_receive_message_length", 64 * 1024 * 1024),
                 ("grpc.keepalive_time_ms", 30000),
                 ("grpc.keepalive_timeout_ms", 10000),
                 ("grpc.keepalive_permit_without_calls", 1),
                 ("grpc.http2.max_pings_without_data", 0),
-            ])
+            ],
+        )
         self.stub = re_grpc.ExecutionStub(self.channel)
         self.cas = cas
         self.metadata = metadata or []
         self.instance_name = ""
 
     @staticmethod
-    def _try_unpack_execute_metadata(op: re_pb2.Operation) -> Optional[re_pb2.ExecuteOperationMetadata]:
+    def _try_unpack_execute_metadata(
+        op: re_pb2.Operation,
+    ) -> Optional[re_pb2.ExecuteOperationMetadata]:
         if not op.metadata or not op.metadata.type_url:
             return None
         meta = re_pb2.ExecuteOperationMetadata()
@@ -130,6 +145,7 @@ class RemoteExecutor:
         on_stage: StageCallback = None,
         stream_stdout_file: Optional[Path] = None,
         stream_stderr_file: Optional[Path] = None,
+        no_cache: bool = False,
     ) -> ExecutionResult:
         # Build Command proto — platform.properties are the REAPI equivalent of Bazel
         # exec_properties / remote_default_exec_properties (gpu, gpu_count, …).
@@ -140,10 +156,12 @@ class RemoteExecutor:
                 for k, v in (env_vars or {}).items()
             ],
             output_files=output_files or [],
-            platform=re_pb2.Platform(properties=[
-                re_pb2.Platform.Property(name=k, value=v)
-                for k, v in (platform_properties or {}).items()
-            ]),
+            platform=re_pb2.Platform(
+                properties=[
+                    re_pb2.Platform.Property(name=k, value=v)
+                    for k, v in (platform_properties or {}).items()
+                ]
+            ),
         )
         cmd_digest = self.cas.upload_blob(cmd.SerializeToString())
 
@@ -152,11 +170,13 @@ class RemoteExecutor:
             command_digest=cmd_digest,
             input_root_digest=input_root_digest,
             timeout=duration_pb2.Duration(seconds=timeout),
-            do_not_cache=False,
+            do_not_cache=no_cache,
         )
         action_digest = self.cas.upload_blob(action.SerializeToString())
 
-        log.info("Submitting action %s (cmd=%s)", action_digest.hash[:12], " ".join(command[:5]))
+        log.info(
+            "[REMOTE_SUBMIT] action=%s timeout=%ds", action_digest.hash[:12], timeout
+        )
 
         abs_stdout: Optional[str] = None
         abs_stderr: Optional[str] = None
@@ -179,7 +199,7 @@ class RemoteExecutor:
         request = re_pb2.ExecuteRequest(
             instance_name=self.instance_name,
             action_digest=action_digest,
-            skip_cache_lookup=False,
+            skip_cache_lookup=no_cache,
         )
 
         stop_event = threading.Event()
@@ -189,7 +209,9 @@ class RemoteExecutor:
         logged_metadata_worker: Optional[str] = None
 
         try:
-            for op in self.stub.Execute(request, metadata=self.metadata, timeout=timeout + 120):
+            for op in self.stub.Execute(
+                request, metadata=self.metadata, timeout=timeout + 120
+            ):
                 meta = self._try_unpack_execute_metadata(op)
                 if meta is not None:
                     w = (meta.partial_execution_metadata.worker or "").strip()
@@ -279,9 +301,13 @@ class RemoteExecutor:
                 stage = self._extract_stage(op)
                 if on_stage:
                     on_stage(stage, op.name)
+                log.info("[REMOTE_STAGE] stage=%s op=%s", stage, (op.name or "")[:48])
                 log.debug("Operation %s stage=%s", op.name, stage)
         except grpc.RpcError as e:
             log.error("Execute RPC failed: %s", e)
+            log.error(
+                "[RESULT] status=blocked category=executor_rpc detail=%s", e.code().name
+            )
             stop_event.set()
             for t in stream_threads:
                 t.join(timeout=5)
@@ -329,7 +355,7 @@ class RemoteExecutor:
         if stdout_file is None and stderr_file is None:
             return
         if not started_byte_stream_stdout and not started_byte_stream_stderr:
-            if (result.stdout_raw or result.stderr_raw):
+            if result.stdout_raw or result.stderr_raw:
                 log.info(
                     "REAPI did not expose ByteStream log names; wrote final stdout/stderr "
                     "(%d / %d bytes) to stream log paths",
@@ -370,9 +396,15 @@ class RemoteExecutor:
                 )
 
         r = resp.result
-        log.info("Remote result: exit_code=%d stdout_digest=%s stderr_digest=%s",
-                 r.exit_code, r.stdout_digest.hash[:12] if r.stdout_digest.hash else "none",
-                 r.stderr_digest.hash[:12] if r.stderr_digest.hash else "none")
+        log.info(
+            "Remote result: exit_code=%d cached=%s status_code=%s status_message=%r stdout_digest=%s stderr_digest=%s",
+            r.exit_code,
+            resp.cached_result,
+            resp.status.code if resp.HasField("status") else None,
+            resp.status.message if resp.HasField("status") else "",
+            r.stdout_digest.hash[:12] if r.stdout_digest.hash else "none",
+            r.stderr_digest.hash[:12] if r.stderr_digest.hash else "none",
+        )
 
         output_files = {f.path: f.digest for f in r.output_files}
 
@@ -412,6 +444,11 @@ class RemoteExecutor:
             output_files=output_files,
             worker_host_ip=worker_ip,
             metadata_worker=meta_worker or None,
+            cached_result=resp.cached_result,
+            response_status_code=resp.status.code if resp.HasField("status") else None,
+            response_status_message=(
+                resp.status.message if resp.HasField("status") else None
+            ),
         )
 
     def download_output(self, digest: re_pb2.Digest) -> str:

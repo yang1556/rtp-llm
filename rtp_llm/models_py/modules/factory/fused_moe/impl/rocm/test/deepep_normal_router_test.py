@@ -12,10 +12,14 @@ from rtp_llm.models_py.distributed.collective_torch import (
     destroy_distributed_environment,
     init_distributed_environment,
 )
-from rtp_llm.models_py.distributed.deepep_wrapper import (
-    DeepEPWrapper,
-    init_deepep_wrapper,
-)
+
+try:
+    from rtp_llm.models_py.distributed.deepep_wrapper import (
+        DeepEPWrapper,
+        init_deepep_wrapper,
+    )
+except ImportError as e:
+    pytest.skip(f"deep_ep unavailable: {e}", allow_module_level=True)
 from rtp_llm.models_py.modules.factory.fused_moe.defs.config_adapter import (
     MoEConfigAdapter,
 )
