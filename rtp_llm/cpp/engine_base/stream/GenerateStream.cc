@@ -163,6 +163,11 @@ bool GenerateStream::isStreaming() const {
 int64_t GenerateStream::streamId() const {
     return generate_input_->request_id;
 }
+
+std::string GenerateStream::streamLogTag() const {
+    return std::string("request_id=") + std::to_string(streamId()) + " trace_id=" + traceId();
+}
+
 std::string GenerateStream::adapterName() const {
     return generate_input_->generate_config->adapter_name;
 }
@@ -461,9 +466,9 @@ void GenerateStream::checkTimeout() {
 
 void GenerateStream::setStopWithoutLock(ErrorCode error_code, const std::string& error_msg) {
     auto cost_time_ms = (autil::TimeUtility::currentTimeInMicroSeconds() - begin_time_us_) / 1000;
-    RTP_LLM_LOG_WARNING("stop stream [%ld], error msg: [%s], current state [%s], "
+    RTP_LLM_LOG_WARNING("stop stream [%s], error msg: [%s], current state [%s], "
                         "input len [%d], seq len [%d], timeout [%ld] ms, running [%ld] ms",
-                        streamId(),
+                        streamLogTag().c_str(),
                         error_msg.c_str(),
                         StreamStateToString(generate_status_->status).c_str(),
                         inputLength(),
@@ -557,8 +562,8 @@ void GenerateStream::cancelIfNotRunning() {
     std::lock_guard<std::mutex> lock(*output_mutex_);
     if (generate_status_->status == StreamState::WAITING || generate_status_->status == StreamState::REMOTE_RUNNING) {
         auto cost_time_ms = (autil::TimeUtility::currentTimeInMicroSeconds() - begin_time_us_) / 1000;
-        RTP_LLM_LOG_WARNING("stop stream: %ld %s, input len [%d], seq len [%d], timeout: [%ld] ms, running [%ld] ms",
-                            streamId(),
+        RTP_LLM_LOG_WARNING("stop stream: %s %s, input len [%d], seq len [%d], timeout: [%ld] ms, running [%ld] ms",
+                            streamLogTag().c_str(),
                             "cancel stream in waiting or remote running",
                             inputLength(),
                             seqLength(),
@@ -684,8 +689,8 @@ bool GenerateStream::waitForRemoteGenerate() {
     });
     // If stream status is abnormal, log the error info
     if (!need_remote_generate_ && generate_status_->status == StreamState::STOPPED) {
-        RTP_LLM_LOG_WARNING("waitForRemoteGenerate exits due to stream [%ld] stopped, error: %s",
-                            streamId(),
+        RTP_LLM_LOG_WARNING("waitForRemoteGenerate exits due to stream [%s] stopped, error: %s",
+                            streamLogTag().c_str(),
                             generate_status_->error_info.ToString().c_str());
     }
 
@@ -725,7 +730,7 @@ void GenerateStream::matchStopWordsList(int batch_id) {
 
 void GenerateStream::specUpdate(const StreamSpecUpdateInfo& update_info) {
     std::lock_guard<std::mutex> lock(*output_mutex_);
-    RTP_LLM_LOG_DEBUG("stream [%ld] spec update", streamId());
+    RTP_LLM_LOG_DEBUG("stream [%s] spec update", streamLogTag().c_str());
     *is_context_stream_ = false;
     if (stoppedWithoutLock() && !update_info.force_update_info) {
         return;
@@ -782,8 +787,8 @@ void GenerateStream::specUpdate(const StreamSpecUpdateInfo& update_info) {
             getFinalTokenBlockSwapIdx(cur_cached_len, nxt_cached_len, seq_size_per_block);
         stream_cache_resource_->swapLinearBlocks(0, src_block_idx, des_block_idx);
 
-        RTP_LLM_LOG_DEBUG("[stream %d (%d -> %d)] swap cache blocks: %d -> %d, %d -> %d",
-                          streamId(),
+        RTP_LLM_LOG_DEBUG("[stream %s (%d -> %d)] swap cache blocks: %d -> %d, %d -> %d",
+                          streamLogTag().c_str(),
                           cur_cached_len + 1,
                           nxt_cached_len + 1,
                           cached_src_block_idx,
@@ -791,8 +796,10 @@ void GenerateStream::specUpdate(const StreamSpecUpdateInfo& update_info) {
                           src_block_idx,
                           des_block_idx);
     } else {
-        RTP_LLM_LOG_DEBUG(
-            "[stream %d (%d -> %d)] no swap cache blocks", streamId(), cur_cached_len + 1, nxt_cached_len + 1);
+        RTP_LLM_LOG_DEBUG("[stream %s (%d -> %d)] no swap cache blocks",
+                          streamLogTag().c_str(),
+                          cur_cached_len + 1,
+                          nxt_cached_len + 1);
     }
 
     // update normal output buffer
@@ -812,7 +819,7 @@ void GenerateStream::specUpdate(const StreamSpecUpdateInfo& update_info) {
 
 void GenerateStream::update(const StreamUpdateInfo& update_info) {
     std::lock_guard<std::mutex> lock(*output_mutex_);
-    RTP_LLM_LOG_DEBUG("stream [%ld] update", streamId());
+    RTP_LLM_LOG_DEBUG("stream [%s] update", streamLogTag().c_str());
     *is_context_stream_ = false;
     if (stoppedWithoutLock() && !update_info.force_update_info) {
         return;
@@ -963,7 +970,7 @@ void GenerateStream::reportStreamMetrics() {
             collector.total_latency_us       = autil::TimeUtility::currentTimeInMicroSeconds() - begin_time_us_;
             collector.first_token_latency_us = complete_token_ids_->firstTokenLatencyUs();
             RTP_LLM_LOG_DEBUG(
-                "stream [%ld] report first latency us = %ld", streamId(), collector.first_token_latency_us);
+                "stream [%s] report first latency us = %ld", streamLogTag().c_str(), collector.first_token_latency_us);
             collector.wait_latency_us          = wait_time_us_;
             collector.pause_latency_us         = pause_time_us_;
             collector.batch_with_prefill_times = batch_with_prefill_times_;
