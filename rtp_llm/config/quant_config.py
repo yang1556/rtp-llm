@@ -29,6 +29,7 @@ class QuantizationConfig(ABC):
         self._bits = bits
         self._group_size = group_size
         self._is_quanted = is_quanted
+        self._exclude_modules: set = set()
 
     @property
     def bits(self):
@@ -205,12 +206,13 @@ class QuantizationConfig(ABC):
             group_size = weights_config["group_size"]
             if (
                 weights_config["type"] == "float"
-                and bits == 4 and activation_bits == 4
+                and bits == 4
+                and activation_bits == 4
                 and group_size == 16
             ):
                 quant_method = ModelOptFp4Config.get_method()
 
-        return cls.from_config(
+        result = cls.from_config(
             {
                 "bits": bits,
                 "method": quant_method,
@@ -218,6 +220,9 @@ class QuantizationConfig(ABC):
                 "is_quanted": True,
             }
         )
+        if quant_config and "exclude" in quant_config:
+            result._exclude_modules = set(quant_config["exclude"])
+        return result
 
 
 class WeightOnlyInt8PerChannelQuantConfig(QuantizationConfig):
@@ -666,9 +671,7 @@ DEFAULT_MODELOPT_FP4_QUANT_CONFIG = ModelOptFp4Config(
 )
 
 DEFAULT_W4A8_INT4_PER_CHANNEL_QUANT_CONFIG = W4a8Int4PerChannelQuantConfig(
-    bits=4,
-    group_size=128,
-    is_quanted=False
+    bits=4, group_size=128, is_quanted=False
 )
 
 preset_quant_config = {
