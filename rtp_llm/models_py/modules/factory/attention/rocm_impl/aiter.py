@@ -147,7 +147,7 @@ class AiterPrefillAttnOp:
         self.head_num = attn_configs.head_num
         self.head_dim = attn_configs.size_per_head
         self.head_num_kv = attn_configs.kv_head_num
-        self.tokens_per_block = attn_configs.tokens_per_block
+        self.tokens_per_block = attn_configs.kernel_tokens_per_block
         self.is_causal = attn_configs.is_causal
         self.v1_kv_layout = v1_kv_layout
 
@@ -962,7 +962,7 @@ class AiterPrefillImplPaged(FMHAImplBase):
         self.need_rope_kv_cache = attn_configs.need_rope_kv_cache
         self.head_num_kv = attn_configs.kv_head_num
         self.head_dim = attn_configs.size_per_head
-        self.tokens_per_block = attn_configs.tokens_per_block
+        self.tokens_per_block = attn_configs.kernel_tokens_per_block
 
         self.batch_prefill_impl = AiterPrefillAttnOpPaged(attn_configs)
         self.triton_prefill_impl = AiterPrefillAttnOpTriton(attn_configs)
