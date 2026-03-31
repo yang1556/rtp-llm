@@ -134,13 +134,6 @@ grpc::Status LocalRpcServer::pollStreamOutput(grpc::ServerContext*             c
 grpc::Status LocalRpcServer::GenerateStreamCall(grpc::ServerContext*                   context,
                                                 const GenerateInputPB*                 request,
                                                 grpc::ServerWriter<GenerateOutputsPB>* writer) {
-    const bool force_timeline   = engine_->isTimelineProfilingEnabled();
-    const bool request_timeline = request->generate_config().gen_timeline();
-    RTP_LLM_LOG_DEBUG("request [%ld] timeline gate, force_timeline=%d, request_timeline=%d",
-                      request->request_id(),
-                      int(force_timeline),
-                      int(request_timeline));
-
     RTP_LLM_PROFILE_SCOPE("rpc.generate_stream_call");
     AtomicGuard request_guard(onflight_requests_);
     auto        request_id = request->request_id();
@@ -148,15 +141,9 @@ grpc::Status LocalRpcServer::GenerateStreamCall(grpc::ServerContext*            
     auto generate_context =
         GenerateContext(request_id, request->generate_config().timeout_ms(), context, metrics_reporter_, meta_);
     auto input = QueryConverter::transQuery(request);
-    if (force_timeline) {
+    if (applyTimelineGate(
+            generate_context.request_key, input->generate_config->gen_timeline, input->generate_config->profile_step)) {
         input->generate_config->gen_timeline = true;
-    }
-
-    // Per-request profiling: if gen_timeline=true in the request and no profiling session is active,
-    // configure the step-window profiler for this request. The profiler auto-stops after num_steps.
-    // configure() internally enforces first-come-first-served if a session is already running.
-    if (request_timeline && !force_timeline) {
-        engine_->startTimelineProfiling("", 0, request->generate_config().profile_step());
     }
 
     // need to check client has buffer at first
@@ -183,6 +170,18 @@ grpc::Status LocalRpcServer::GenerateStreamCall(grpc::ServerContext*            
         pollStreamOutput(context, generate_context.request_key, writer, generate_context.getStream());
     meta_->dequeue(generate_context.request_id, generate_context.getStream());
     return generate_context.error_status;
+}
+
+bool LocalRpcServer::applyTimelineGate(const std::string& request_key, bool request_timeline, int profile_step) {
+    const bool force_timeline = engine_->isTimelineProfilingEnabled();
+    RTP_LLM_LOG_DEBUG("request [%s] timeline gate, force_timeline=%d, request_timeline=%d",
+                      request_key.c_str(),
+                      int(force_timeline),
+                      int(request_timeline));
+    if (!force_timeline && request_timeline) {
+        engine_->startTimelineProfiling("", 0, profile_step);
+    }
+    return force_timeline;
 }
 
 grpc::Status

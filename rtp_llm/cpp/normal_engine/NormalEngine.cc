@@ -400,8 +400,6 @@ absl::Status NormalEngine::step() {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    step_profiler_.tick();
-
     list<GenerateStreamPtr> streams;
     if (device_->getDeviceProperties().tp_rank == 0 && !ffn_disaggregate_config.is_ffn_service()) {
         {
@@ -416,6 +414,9 @@ absl::Status NormalEngine::step() {
             return absl::OkStatus();
         }
     }
+
+    step_profiler_.tick();
+
     RTP_LLM_LOG_DEBUG(__PRETTY_FUNCTION__);
     int64_t      step_begin_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
     absl::Status status             = absl::OkStatus();
