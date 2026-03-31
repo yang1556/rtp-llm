@@ -194,6 +194,101 @@ py_test(
 )
 
 py_test(
+    name = "rocm_ffn_moe_fp8_ll_test",
+    srcs = [
+        "rocm_ffn_moe_fp8_ll_test.py",
+    ],
+    deps = [
+        "//rtp_llm:testlib",
+        "//rtp_llm:sdk",
+    ],
+    timeout = "eternal",
+    tags = ["rocm"],
+    exec_properties = {'gpu': 'MI308X', 'gpu_count': '4'},
+    env = {
+        # ROCm library path
+        "LD_LIBRARY_PATH": "/opt/rocm-7.2.0/lib:/opt/rocm-7.2.0/lib64:/opt/conda310/lib",
+        # AITER settings
+        "AITER_ASM_DIR": "/opt/conda310/lib/python3.10/site-packages/aiter_meta/hsa/",
+        "USE_AITER_PA": "0",
+        # Communication settings
+        "FT_DISABLE_CUSTOM_AR": "0",
+        "ENABLE_COMM_OVERLAP": "0",
+        "FORCE_CPU_LOAD_WEIGHTS": "1",
+        # HSA low-latency settings
+        "HSA_NO_SCRATCH_RECLAIM": "1",
+        "HSA_ENABLE_SDMA": "0",
+        "HSA_DISABLE_CACHE": "1",
+        # NVSHMEM IB settings
+        "NVSHMEM_IB_GID_INDEX": "1",
+        "NVSHMEM_IB_ENABLE_IBGDA": "true",
+        "NVSHMEM_DISABLE_GDRCOPY": "true",
+        "NVSHMEM_SYMMETRIC_SIZE": "2G",
+        "NVVL_NET_PLUGIN": "none",
+        # NCCL settings
+        "NCCL_IB_GID_INDEX": "1",
+        "NCCL_SOCKET_IFNAME": "eth0",
+        "NCCL_IB_HCA": "fic2",
+        # DeepEP FP8 and low-latency settings
+        "ACCL_FP8_CAST_LEVEL": "2",
+        "LOW_LATENCY_USE_COMPUTE_STREAM": "1",
+        "FAKE_BALANCE_EXPERT": "1",
+        "USE_SWIZZLEA": "1",
+        "USE_ASM_PA": "0",
+        "USE_ALL_GATHER": "0",
+        # DeepEP tuning knobs
+        "ACCL_DISPATCH_NUM_WARP_GROUPS": "4",
+        "ACCL_COMBINE_NUM_WARP_GROUPS": "4",
+        "ACCL_LOW_LATENCY_OPTIMIZE": "1",
+        "ACCL_TOPO_FIX": "1",
+        "ACCL_LOAD_BALANCE": "1",
+    },
+)
+
+py_test(
+    name = "rocm_ffn_moe_fp8_normal_test",
+    srcs = [
+        "rocm_ffn_moe_fp8_normal_test.py",
+    ],
+    deps = [
+        "//rtp_llm:testlib",
+        "//rtp_llm:sdk",
+    ],
+    timeout = "eternal",
+    tags = ["rocm"],
+    exec_properties = {'gpu': 'MI308X', 'gpu_count': '4'},
+    env = {
+        # ROCm library path
+        "LD_LIBRARY_PATH": "/opt/rocm-7.2.0/lib:/opt/rocm-7.2.0/lib64:/opt/conda310/lib",
+        # AITER settings
+        "AITER_ASM_DIR": "/opt/conda310/lib/python3.10/site-packages/aiter_meta/hsa/",
+        "USE_AITER_PA": "0",
+        # Communication settings
+        "FT_DISABLE_CUSTOM_AR": "0",
+        "ENABLE_COMM_OVERLAP": "0",
+        "FORCE_CPU_LOAD_WEIGHTS": "1",
+        # NVSHMEM settings (normal mode: IBGDA disabled)
+        "NVSHMEM_DEBUG": "WARN",
+        "NVSHMEM_IB_GID_INDEX": "1",
+        "NVSHMEM_IB_ENABLE_IBGDA": "false",
+        "NVSHMEM_DISABLE_GDRCOPY": "true",
+        # NCCL settings
+        "NCCL_NET_PLUGIN": "none",
+        "NCCL_IB_GID_INDEX": "1",
+        "NCCL_SOCKET_IFNAME": "eth0",
+        "NCCL_DEBUG": "WARN",
+        "NCCL_IB_HCA": "fic2",
+        # Normal mode specific settings
+        "NORMAL_USE_COMPUTE_STREAM": "1",
+        "FAKE_BALANCE_EXPERT": "1",
+        "USE_SWIZZLEA": "1",
+        "USE_ASM_PA": "0",
+        "USE_ALL_GATHER": "0",
+        "EIC_NONFETCH_ADD_ENABLE": "1",
+    },
+)
+
+py_test(
     name = "glm4_moe_detector_test",
     srcs = [
         "glm4_moe_detector_test.py",
