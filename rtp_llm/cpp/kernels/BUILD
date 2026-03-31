@@ -573,6 +573,21 @@ cc_library(
 )
 
 cc_library(
+    name = "sm_copy_split_warmup",
+    hdrs = ["sm_utils/sm_copy_split_warmup.h"],
+    srcs = select({
+        "@//:using_cuda": ["sm_utils/sm_copy_split_warmup.cc"],
+        "//conditions:default": ["sm_utils/sm_copy_split_warmup_stub.cc"],
+    }),
+    copts = copts(),
+    deps = select({
+        "@//:using_cuda": [":sm_copy_kernel"],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "kernels_custom_ar",
     srcs = [
         "custom_ar_kernels.cu",

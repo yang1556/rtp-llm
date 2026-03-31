@@ -99,9 +99,11 @@ public:
     virtual BufferPtr quantize(const QuantizeParams& params);
 
     // for multi thread no block copy
-    virtual void noBlockCopy(const CopyParams& params);
-    virtual void noBlockCopy(const MultiCopyParams& params);
-    virtual void noBlockCopyOpt(const MultiCopyParams& params);
+    virtual void  noBlockCopy(const CopyParams& params);
+    virtual void  noBlockCopy(const MultiCopyParams& params);
+    virtual void* noBlockCopyStream() {
+        return nullptr;
+    }
 
     // for perf
     virtual void perfRangePush(const std::string& name) const;

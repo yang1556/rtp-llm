@@ -1,4 +1,5 @@
 #include "rtp_llm/cpp/embedding_engine/EmbeddingEngine.h"
+#include "rtp_llm/cpp/kernels/sm_utils/sm_copy_split_warmup.h"
 #include "rtp_llm/cpp/utils/StatusUtil.h"
 #include "rtp_llm/cpp/utils/Logger.h"
 #include "rtp_llm/cpp/utils/ProfilingScope.h"
@@ -15,6 +16,7 @@ EmbeddingEngine::EmbeddingEngine(const EngineInitParams& params, py::object hand
     step_profiler_(params.profiling_debug_logging_config.torch_cuda_profiler_dir,
                    params.parallelism_config.dp_rank * params.parallelism_config.tp_size
                        + params.parallelism_config.tp_rank) {
+    warmup_sm_copy_split_kernels_visible_cuda_devices();
     rtp_llm::DeviceFactory::initDevices(params.parallelism_config,
                                         params.model_config_,
                                         params.eplb_config,

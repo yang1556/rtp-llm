@@ -1792,7 +1792,7 @@ TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_SingleLayer) {
 }
 
 // MLA FP8 online-style: separate kv + kv-scale blobs per layer (656 + 132 bytes/token at seq_size_per_block=512).
-// copyCache uses noBlockCopyOpt when kv_scale_stride_bytes > 0 and block_size_ matches
+// copyCache uses SplitKvCacheCopyCuda when kv_scale_stride_bytes > 0 and block_size_ matches
 // (batch_size/2)*(kv_cache_size+kv_scale_size). ~40k prompt tokens => 79 full blocks in one request.
 TEST_F(KVCacheMemoryConnectorTest, copyCache_ReturnTrue_H2D_SplitKvScale_NoBlockCopyOpt) {
     constexpr int      kLayerNum    = 78;

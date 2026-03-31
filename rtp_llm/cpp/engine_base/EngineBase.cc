@@ -1,5 +1,6 @@
 #include "rtp_llm/cpp/engine_base/EngineBase.h"
 #include "rtp_llm/cpp/devices/DeviceFactory.h"
+#include "rtp_llm/cpp/kernels/sm_utils/sm_copy_split_warmup.h"
 #include "autil/EnvUtil.h"
 #include <stdexcept>
 
@@ -8,6 +9,7 @@ using namespace autil;
 namespace rtp_llm {
 
 EngineBase::EngineBase(const EngineInitParams& params) {
+    warmup_sm_copy_split_kernels_visible_cuda_devices();
     initDevices(params);
     lora_manager_ = std::make_shared<lora::LoraManager>(params.model_specific_config.max_lora_model_size);
 }

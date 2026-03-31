@@ -12,8 +12,9 @@
 // RTP只需要gather和scatter操作
 //
 // Var-length *_var_nooffset* (gather_copy_var_nooffset_kernel / scatter_copy_var_nooffset_kernel, their
-// launch_* and warmup_sm_copy_var_nooffset_kernels): not referenced by production inference here — KV copy
-// uses launch_*_copy_split from CudaDevice::noBlockCopyOpt only. These entry points stay in the library for
+// launch_* and warmup_sm_copy_var_nooffset_kernels): not referenced by production inference here.
+// Split KV: warmup via warmup_sm_copy_split_kernels_visible_cuda_devices() before initDevices (EngineBase /
+// EmbeddingEngine ctors); launch_*_copy_split in SplitKvCacheCopyCuda. Remaining entry points stay in the library for
 // standalone microbenchmarks (e.g. rtp_llm/cpp/devices/cuda_impl/tests/sm_copy_kernel_benchmark.cc via nvcc
 // build scripts): A/B split staging vs var-length device scatter, and possible future non-split layouts. Do not
 // add call sites without a real consumer; otherwise prefer YAGNI and drop or split into a benchmark-only target.

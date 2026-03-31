@@ -5,6 +5,9 @@
 #include "rtp_llm/cpp/cache/connector/memory/MemoryAsyncContext.h"
 #include "rtp_llm/cpp/cache/connector/Meta.h"
 #include "rtp_llm/cpp/cache/KVCacheAllocator.h"
+#if USING_CUDA
+#include "rtp_llm/cpp/cache/connector/memory/SplitKvCacheCopyCuda.h"
+#endif
 #include "rtp_llm/cpp/devices/DeviceBase.h"
 #include "rtp_llm/cpp/utils/Logger.h"
 #include "rtp_llm/cpp/utils/ProfilingScope.h"
@@ -60,6 +63,11 @@ bool KVCacheMemoryConnector::init() {
     if (metrics_reporter_) {
         metrics_reporter_thread_ = std::make_shared<std::thread>([this]() { reportMetricsLoop(); });
     }
+#if USING_CUDA
+    if (device_->noBlockCopyStream()) {
+        split_kv_copy_cuda_ = std::make_unique<SplitKvCacheCopyCuda>();
+    }
+#endif
     return true;
 }
 
@@ -538,7 +546,7 @@ bool KVCacheMemoryConnector::copyCache(const MemoryOperationRequestPB& request, 
 
     if (!dst_buffers.empty()) {
         // batch_size = slices per copy_item when every item contributes the same count (typical). If counts differ
-        // (e.g. sparse layers per mem_block), total is not divisible by copy_items_size — skip noBlockCopyOpt and
+        // (e.g. sparse layers per mem_block), total is not divisible by copy_items_size — skip split scatter path and
         // use plain noBlockCopy (per-pair memcpy; ignores batch_size).
         const size_t num_blocks    = static_cast<size_t>(request.copy_items_size());
         const size_t total_slices  = dst_buffers.size();
@@ -550,15 +558,17 @@ bool KVCacheMemoryConnector::copyCache(const MemoryOperationRequestPB& request, 
             kv_cache_size = dst_buffers[0]->sizeBytes();
             kv_scale_size = dst_buffers[1]->sizeBytes();
         }
-        // noBlockCopyOpt (split scatter/gather) is enabled only for modest tokens-per-KV-block; larger pages use plain
-        // path.
-        const bool use_split_no_block_copy_opt = uniform_items && kv_cache_size > 0 && kv_scale_size > 0
-                                                 && block_size_ == (batch_size / 2) * (kv_cache_size + kv_scale_size)
-                                                 && cache_config_.seq_size_per_block <= 512;
         MultiCopyParams mcp{dst_buffers, src_buffers, block_size_, batch_size, kv_cache_size, kv_scale_size};
-        if (use_split_no_block_copy_opt) {
-            device_->noBlockCopyOpt(mcp);
-        } else {
+#if USING_CUDA
+        // Split scatter/gather (CUDA sm_copy kernels) only for modest tokens-per-KV-block; larger pages use plain path.
+        const bool use_split_kv_copy = uniform_items && kv_cache_size > 0 && kv_scale_size > 0
+                                       && block_size_ == (batch_size / 2) * (kv_cache_size + kv_scale_size)
+                                       && cache_config_.seq_size_per_block <= 512;
+        if (use_split_kv_copy && split_kv_copy_cuda_) {
+            split_kv_copy_cuda_->run(device_->noBlockCopyStream(), mcp);
+        } else
+#endif
+        {
             device_->noBlockCopy(mcp);
         }
     }

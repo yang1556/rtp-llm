@@ -111,8 +111,6 @@ private:
     void         checkUseGroupGemm();
     NcclParam    getNcclParam(ParallelMode mode);
     cudaStream_t getCommStream(ParallelMode mode, bool overlap);
-    /** Grow-once device scratch for noBlockCopyOpt (staging + two pointer tables). */
-    void ensureNoBlockCopyOptBuffers(size_t staging_bytes, size_t ptr_table_bytes);
     template<typename QuantType>
     LayernormOutput _layernorm(const LayernormParams& params);
     GreedyOutput    flashinferSampleGreedy(const GreedyParams& params, const BufferPtr& transposed_tokens);
@@ -124,6 +122,9 @@ public:
     }
     cudaStream_t getStream() {
         return stream_;
+    }
+    void* noBlockCopyStream() override {
+        return static_cast<void*>(no_block_copy_stream_);
     }
     cudaStream_t  getStream(DeviceStream stream);
     torch::Device getTorchDevice() override {
@@ -144,7 +145,6 @@ public:
     void                          batchCopy(const BatchCopyParams& params) override;
     void                          noBlockCopy(const CopyParams& params) override;
     void                          noBlockCopy(const MultiCopyParams& params) override;
-    void                          noBlockCopyOpt(const MultiCopyParams& params) override;
     void                          bufMemset(Buffer& buf, int val, DeviceStream stream = DeviceStream::DEFAULT) override;
     TransposeOutput               transpose(const TransposeParams& params) override;
     AddBiasOutput                 addbias(const AddBiasParams& params) override;
@@ -260,11 +260,6 @@ protected:
     cudaStream_t                          stream_;
     cudaStream_t                          eplb_stream_;
     cudaStream_t                          no_block_copy_stream_;
-    void*                                 no_block_copy_opt_staging_{nullptr};
-    void*                                 no_block_copy_opt_ptr0_{nullptr};
-    void*                                 no_block_copy_opt_ptr1_{nullptr};
-    size_t                                no_block_copy_opt_staging_cap_{0};
-    size_t                                no_block_copy_opt_ptr_table_cap_{0};
     cudaStream_t                          communication_stream_;
 
     std::unique_ptr<cublasMMWrapper> cublas_mm_wrapper_;

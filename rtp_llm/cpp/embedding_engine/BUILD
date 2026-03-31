@@ -10,6 +10,7 @@ cc_library(
         "*.cc",
     ]),
     deps = [
+        "//rtp_llm/cpp/kernels:sm_copy_split_warmup",
         "//rtp_llm/cpp/engine_base:engine_base",
         "//rtp_llm/cpp/engine_base:executor",
         "//rtp_llm/cpp/engine_base/stream:generate_config",

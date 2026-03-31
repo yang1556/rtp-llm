@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <vector>
@@ -23,6 +24,9 @@ class BroadcastManager;
 class DeviceBase;
 class KVCacheAllocator;
 class MemoryAsyncContext;
+#if USING_CUDA
+class SplitKvCacheCopyCuda;
+#endif
 
 class KVCacheMemoryConnector: public KVCacheConnector {
 public:
@@ -127,8 +131,11 @@ private:
     rtp_llm::DeviceBase*              device_{nullptr};
     const std::vector<std::string>    tp_addrs_;
 
-    std::shared_ptr<BlockPool>                 block_pool_;
-    size_t                                     block_size_{0};  // from initBlockPool, for gather/scatter
+    std::shared_ptr<BlockPool> block_pool_;
+    size_t                     block_size_{0};  // from initBlockPool, for gather/scatter
+#if USING_CUDA
+    std::unique_ptr<SplitKvCacheCopyCuda> split_kv_copy_cuda_;
+#endif
     mutable std::mutex                         malloc_mutex_;
     std::shared_ptr<MemoryBlockCache>          block_cache_;
     std::shared_ptr<BroadcastManager>          broadcast_manager_;
