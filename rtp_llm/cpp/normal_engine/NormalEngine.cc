@@ -406,6 +406,9 @@ absl::Status NormalEngine::step() {
             return absl::OkStatus();
         }
     }
+
+    step_profiler_.tick();
+
     RTP_LLM_LOG_DEBUG(__PRETTY_FUNCTION__);
     bool gen_timeline = !streams.empty() && std::any_of(streams.begin(), streams.end(), [](const auto& stream) {
         return stream->genTimeline();

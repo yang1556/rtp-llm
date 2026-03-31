@@ -21,6 +21,12 @@ grpc::Status DecodeRpcServerNew::init(const EngineInitParams&                   
 grpc::Status DecodeRpcServerNew::GenerateStreamCall(grpc::ServerContext*                   server_context,
                                                     const GenerateInputPB*                 request,
                                                     grpc::ServerWriter<GenerateOutputsPB>* response_writer) {
+    RTP_LLM_PROFILE_FUNCTION();
+    if (applyTimelineGate(std::to_string(request->request_id()),
+                          request->generate_config().gen_timeline(),
+                          request->generate_config().profile_step())) {
+        const_cast<GenerateInputPB*>(request)->mutable_generate_config()->set_gen_timeline(true);
+    }
     DecodeGenerateContextNew decode_context(server_context, request, response_writer, metrics_reporter_, meta_);
 
     RTP_LLM_LOG_DEBUG("request [%s] start generate", decode_context.request_key.c_str());
