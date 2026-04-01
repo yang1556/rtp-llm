@@ -1,5 +1,6 @@
 #include "rtp_llm/models_py/bindings/common/WriteCacheStoreOp.h"
 #include "rtp_llm/cpp/core/ExecOps.h"
+#include "rtp_llm/cpp/devices/CacheStoreAsyncWriter.h"
 
 namespace rtp_llm {
 

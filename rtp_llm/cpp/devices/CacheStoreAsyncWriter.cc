@@ -5,7 +5,7 @@
 namespace rtp_llm {
 
 CacheStoreAsyncWriter::CacheStoreAsyncWriter() {
-    constexpr size_t kThreadCount = 30;
+    constexpr size_t kThreadCount = 3;
     constexpr size_t kQueueSize   = 10000;
     auto pool = std::make_shared<autil::LockFreeThreadPool>(kThreadCount, kQueueSize, nullptr, "CacheStoreAsync");
     RTP_LLM_CHECK_WITH_INFO(pool->start(), "CacheStoreAsyncWriter: failed to start thread pool");
