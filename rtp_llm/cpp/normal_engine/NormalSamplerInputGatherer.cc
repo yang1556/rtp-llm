@@ -8,8 +8,10 @@
 
 namespace rtp_llm {
 
-absl::StatusOr<SamplerInputs> NormalSamplerInputGatherer::gather(
-    const StreamGroups& stream_groups, const GptModelInputs& model_inputs, const GptModelOutputs& model_output) const {
+absl::StatusOr<SamplerInputs> NormalSamplerInputGatherer::gather(const StreamGroups&    stream_groups,
+                                                                 const GptModelInputs&  model_inputs,
+                                                                 const GptModelOutputs& model_output) const {
+    (void)model_inputs;
     RTP_LLM_LOG_DEBUG(__PRETTY_FUNCTION__);
     RTP_LLM_CHECK(!stream_groups.empty());
     auto all_streams          = stream_groups.allStreams();
@@ -17,8 +19,7 @@ absl::StatusOr<SamplerInputs> NormalSamplerInputGatherer::gather(
     auto total_batch_size_out = stream_groups.totalSamplerBatchSizeOut();
     bool return_all_probs     = stream_groups.needReturnAllProbs();
 
-    SamplerInputs sampler_inputs =
-        allocateSamplerInputs(stream_groups, total_batch_size_in, total_batch_size_out, model_inputs.sequence_lengths);
+    SamplerInputs sampler_inputs = allocateSamplerInputs(stream_groups, total_batch_size_in, total_batch_size_out);
     fillSamplerCommonInputs(sampler_inputs, all_streams);
 
     setLogitsProcessorInputs(sampler_inputs, all_streams);
@@ -97,11 +98,10 @@ absl::StatusOr<SamplerInputs> NormalSamplerInputGatherer::gather(
     return std::move(sampler_inputs);
 }
 
-SamplerInputs NormalSamplerInputGatherer::allocateSamplerInputs(const StreamGroups&  stream_groups,
-                                                                size_t               total_batch_size_in,
-                                                                size_t               total_batch_size_out,
-                                                                const torch::Tensor& sequence_lengths,
-                                                                size_t               propose_step) const {
+SamplerInputs NormalSamplerInputGatherer::allocateSamplerInputs(const StreamGroups& stream_groups,
+                                                                size_t              total_batch_size_in,
+                                                                size_t              total_batch_size_out,
+                                                                size_t              propose_step) const {
     // TODO(xinfei.sxf) don't sample for chunk stream
     SamplerInputs sampler_inputs;
     sampler_inputs.step             = stream_groups.maxSeqLen() + propose_step;
@@ -137,9 +137,9 @@ SamplerInputs NormalSamplerInputGatherer::allocateSamplerInputs(const StreamGrou
 }
 
 void NormalSamplerInputGatherer::fillSamplerCommonInputs(SamplerInputs&                sampler_inputs,
-                                                        std::list<GenerateStreamPtr>& all_streams,
-                                                        bool                          score_batch,
-                                                        size_t                        propose_step) const {
+                                                         std::list<GenerateStreamPtr>& all_streams,
+                                                         bool                          score_batch,
+                                                         size_t                        propose_step) const {
     int*      input_lengths        = sampler_inputs.input_lengths.data_ptr<int32_t>();
     int*      sequence_lengths     = sampler_inputs.sequence_lengths.data_ptr<int32_t>();
     uint64_t* num_beams_in         = reinterpret_cast<uint64_t*>(sampler_inputs.num_beams_in.data_ptr<int64_t>());

@@ -17,11 +17,10 @@ public:
                                          const GptModelInputs&  model_inputs,
                                          const GptModelOutputs& model_output) const;
 
-    SamplerInputs allocateSamplerInputs(const StreamGroups&  stream_groups,
-                                        size_t               total_batch_size_in,
-                                        size_t               total_batch_size_out,
-                                        const torch::Tensor& sequence_lengths,
-                                        size_t               propose_step = 0) const;
+    SamplerInputs allocateSamplerInputs(const StreamGroups& stream_groups,
+                                        size_t              total_batch_size_in,
+                                        size_t              total_batch_size_out,
+                                        size_t              propose_step = 0) const;
 
     void fillSamplerCommonInputs(SamplerInputs&                sampler_inputs,
                                  std::list<GenerateStreamPtr>& all_streams,
