@@ -383,109 +383,59 @@ class ReasoningToolBaseRenderer(CustomChatRenderer, ABC):
         new_token_ids = status.output_ids[len(status.last_output_ids) :]
         normalizer = TokenNormalizer(self.tokenizer)
 
-        collected_deltas = await self._process_normalized_tokens(
-            normalizer,
-            status,
-            new_token_ids,
-            output,
-            stop_words_str,
-            stop_word_slice_list,
-            is_streaming,
-        )
+        # Use a wrapper to track what the normalizer yields
+        normalizer_output_length = [0]  # Use list for mutation in nested function
 
-        # We track per-token buffering via status.delta_output_string and detector internal
-        # buffers. The token IDs are always safe to mark as consumed for next iteration.
-        if new_token_ids:
-            status.last_token_length = len(new_token_ids)
-            status.last_output_ids = status.output_ids
+        def length_tracking_generator():
+            for delta_text in normalizer.normalize_tokens(
+                status.prev_token_id, new_token_ids
+            ):
+                normalizer_output_length[0] += len(delta_text)
+                yield delta_text
+
+        collected_deltas = []
+        if is_streaming:
+            for delta_text in length_tracking_generator():
+                token_delta = await self._process_single_token_delta(
+                    status,
+                    delta_text,
+                    output,
+                    stop_words_str,
+                    stop_word_slice_list,
+                    is_streaming=True,
+                )
+                if token_delta is not None:
+                    collected_deltas.append(token_delta)
+        else:
+            # Non-streaming: accumulate all text first, then process once
+            all_text = "".join(length_tracking_generator())
+            if all_text:
+                complete_delta = await self._process_single_token_delta(
+                    status,
+                    all_text,
+                    output,
+                    stop_words_str,
+                    stop_word_slice_list,
+                    is_streaming=False,
+                )
+                if complete_delta is not None:
+                    collected_deltas.append(complete_delta)
+
+        # Update last_output_ids based on what the NORMALIZER yielded, not what we emitted.
+        # If normalizer yielded content but detector buffered it (collected_deltas empty),
+        # we still consumed the tokens and should update.
+        # If normalizer didn't yield anything (buffered for \uFFFD resolution),
+        # don't update so next iteration has full context for sliding window.
+        if normalizer_output_length[0] > 0:
+            if new_token_ids:
+                status.last_token_length = len(new_token_ids)
+                status.last_output_ids = status.output_ids
 
         if collected_deltas:
             merged_delta = self._merge_deltas(collected_deltas)
             return merged_delta or await self._create_empty_delta(output.aux_info)
 
         return await self._create_empty_delta(output.aux_info)
-
-    async def _process_normalized_tokens(
-        self,
-        normalizer: TokenNormalizer,
-        status: StreamStatus,
-        new_token_ids: List[int],
-        output: GenerateOutput,
-        stop_words_str: List[str],
-        stop_word_slice_list: List[str],
-        is_streaming: bool,
-    ) -> List[OutputDelta]:
-        """Process tokens through normalization and detector."""
-        if is_streaming:
-            return await self._process_streaming_tokens(
-                normalizer,
-                status,
-                new_token_ids,
-                output,
-                stop_words_str,
-                stop_word_slice_list,
-            )
-        else:
-            return await self._process_non_streaming_tokens(
-                normalizer,
-                status,
-                new_token_ids,
-                output,
-                stop_words_str,
-                stop_word_slice_list,
-            )
-
-    async def _process_streaming_tokens(
-        self,
-        normalizer: TokenNormalizer,
-        status: StreamStatus,
-        new_token_ids: List[int],
-        output: GenerateOutput,
-        stop_words_str: List[str],
-        stop_word_slice_list: List[str],
-    ) -> List[OutputDelta]:
-        """Process tokens one by one through detector."""
-        collected_deltas = []
-        for delta_text in normalizer.normalize_tokens(
-            status.prev_token_id, new_token_ids
-        ):
-            token_delta = await self._process_single_token_delta(
-                status,
-                delta_text,
-                output,
-                stop_words_str,
-                stop_word_slice_list,
-                is_streaming=True,
-            )
-            if token_delta is not None:
-                collected_deltas.append(token_delta)
-        return collected_deltas
-
-    async def _process_non_streaming_tokens(
-        self,
-        normalizer: TokenNormalizer,
-        status: StreamStatus,
-        new_token_ids: List[int],
-        output: GenerateOutput,
-        stop_words_str: List[str],
-        stop_word_slice_list: List[str],
-    ) -> List[OutputDelta]:
-        """Accumulate all text first, then process once."""
-        all_text = "".join(
-            normalizer.normalize_tokens(status.prev_token_id, new_token_ids)
-        )
-        if not all_text:
-            return []
-
-        complete_delta = await self._process_single_token_delta(
-            status,
-            all_text,
-            output,
-            stop_words_str,
-            stop_word_slice_list,
-            is_streaming=False,
-        )
-        return [complete_delta] if complete_delta is not None else []
 
     async def _process_reasoning_and_tool_calls(
         self,
