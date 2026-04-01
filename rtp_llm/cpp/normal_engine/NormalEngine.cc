@@ -415,8 +415,6 @@ absl::Status NormalEngine::step() {
         }
     }
 
-    step_profiler_.tick();
-
     RTP_LLM_LOG_DEBUG(__PRETTY_FUNCTION__);
     int64_t      step_begin_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
     absl::Status status             = absl::OkStatus();
@@ -424,6 +422,11 @@ absl::Status NormalEngine::step() {
         RTP_LLM_PROFILE_SCOPE_DYNAMIC("engine.normal.execute(stream_size=%zu)", streams.size());
         status = executor_->process(streams);
     }
+
+    // tick profiler after process() so that all TP ranks (which synchronize
+    // inside process() via NCCL) start/stop the profiler at the same point,
+    // giving aligned time windows across ranks.
+    step_profiler_.tick();
 
     // report step metrics
     if (device_->getDeviceProperties().tp_rank == 0) {

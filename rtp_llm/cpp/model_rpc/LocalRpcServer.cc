@@ -25,6 +25,14 @@ grpc::Status LocalRpcServer::init(const EngineInitParams&                       
     RTP_LLM_LOG_INFO("LocalRpcServer aux_string %s", maga_init_params_.misc_config.aux_string.c_str());
     const bool use_new_sp_engine = maga_init_params_.sp_config.use_new_sp_engine;
     propose_maga_init_params_    = propose_params.get();
+    if (maga_init_params_.parallelism_config.tp_rank == 0
+        && !maga_init_params_.runtime_config.worker_grpc_addrs.empty()) {
+        profile_broadcaster_ = std::make_shared<BroadcastManager>(maga_init_params_.runtime_config.worker_grpc_addrs);
+        if (!profile_broadcaster_->init()) {
+            RTP_LLM_LOG_WARNING("failed to init profile broadcaster");
+            profile_broadcaster_.reset();
+        }
+    }
 
     if (propose_params && !use_new_sp_engine) {
         if (!mm_process_engine.is_none()) {
@@ -390,9 +398,62 @@ LocalRpcServer::SetLogLevel(grpc::ServerContext* context, const SetLogLevelReque
 grpc::Status
 LocalRpcServer::StartProfile(grpc::ServerContext* context, const StartProfileRequestPB* request, EmptyPB* response) {
     RTP_LLM_PROFILE_FUNCTION();
-    (void)context;
+    (void)response;
+    RTP_LLM_LOG_INFO("start_profile from %s start_step=%d num_steps=%d all_tp=%d",
+                     context->peer().c_str(),
+                     request->start_step(),
+                     request->num_steps(),
+                     int(request->all_tp()));
+    if (!request->all_tp()) {
+        engine_->startTimelineProfiling(request->trace_name(), request->start_step(), request->num_steps());
+        return grpc::Status::OK;
+    }
+    if (maga_init_params_.parallelism_config.tp_rank != 0) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "all_tp start_profile must be sent to tp_rank 0");
+    }
+    if (!profile_broadcaster_) {
+        if (maga_init_params_.parallelism_config.tp_size <= 1) {
+            RTP_LLM_LOG_INFO("start_profile all_tp enabled with tp_size=1, fallback to local start");
+            engine_->startTimelineProfiling(request->trace_name(), request->start_step(), request->num_steps());
+            return grpc::Status::OK;
+        }
+        return grpc::Status(grpc::StatusCode::INTERNAL, "tp broadcaster unavailable for all_tp start_profile");
+    }
+
+    std::vector<StartProfileInternalRequestPB> requests(profile_broadcaster_->workerNum());
+    for (auto& internal_request : requests) {
+        internal_request.set_trace_name(request->trace_name());
+        internal_request.set_start_step(request->start_step());
+        internal_request.set_num_steps(request->num_steps());
+    }
+    auto rpc_call = [](const std::shared_ptr<RpcService::Stub>&    stub,
+                       const std::shared_ptr<grpc::ClientContext>& context,
+                       const StartProfileInternalRequestPB&        internal_request,
+                       grpc::CompletionQueue*                      completion_queue) {
+        return stub->AsyncStartProfileInternal(context.get(), internal_request, completion_queue);
+    };
+    auto broadcast_result = profile_broadcaster_->broadcast<StartProfileInternalRequestPB, EmptyPB>(
+        requests, /*timeout_ms=*/3000, rpc_call);
+    if (!broadcast_result) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "failed to broadcast start_profile_internal to tp group");
+    }
+    broadcast_result->waitDone();
+    if (!broadcast_result->success()) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "broadcast start_profile_internal to tp group failed");
+    }
+    return grpc::Status::OK;
+}
+
+grpc::Status LocalRpcServer::StartProfileInternal(grpc::ServerContext*                 context,
+                                                  const StartProfileInternalRequestPB* request,
+                                                  EmptyPB*                             response) {
+    RTP_LLM_PROFILE_FUNCTION();
+    (void)response;
+    RTP_LLM_LOG_INFO("start_profile_internal from %s start_step=%d num_steps=%d",
+                     context->peer().c_str(),
+                     request->start_step(),
+                     request->num_steps());
     engine_->startTimelineProfiling(request->trace_name(), request->start_step(), request->num_steps());
-    RTP_LLM_LOG_INFO("start_profile start_step=%d num_steps=%d", request->start_step(), request->num_steps());
     return grpc::Status::OK;
 }
 
