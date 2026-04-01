@@ -397,7 +397,6 @@ LocalRpcServer::SetLogLevel(grpc::ServerContext* context, const SetLogLevelReque
 
 grpc::Status
 LocalRpcServer::StartProfile(grpc::ServerContext* context, const StartProfileRequestPB* request, EmptyPB* response) {
-    RTP_LLM_PROFILE_FUNCTION();
     (void)response;
     RTP_LLM_LOG_INFO("start_profile from %s start_step=%d num_steps=%d all_tp=%d",
                      context->peer().c_str(),
@@ -447,7 +446,6 @@ LocalRpcServer::StartProfile(grpc::ServerContext* context, const StartProfileReq
 grpc::Status LocalRpcServer::StartProfileInternal(grpc::ServerContext*                 context,
                                                   const StartProfileInternalRequestPB* request,
                                                   EmptyPB*                             response) {
-    RTP_LLM_PROFILE_FUNCTION();
     (void)response;
     RTP_LLM_LOG_INFO("start_profile_internal from %s start_step=%d num_steps=%d",
                      context->peer().c_str(),
