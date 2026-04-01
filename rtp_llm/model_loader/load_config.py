@@ -14,6 +14,7 @@ from rtp_llm.utils.util import check_with_info
 class LoadMethod(str, enum.Enum):
     AUTO = "auto"
     SCRATCH = "scratch"
+    CONVERTED = "converted"
     FASTSAFETENSORS = "fastsafetensors"
     FASTSAFETENSORS_GDR = "fastsafetensors_gdr"
 
