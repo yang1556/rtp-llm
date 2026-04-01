@@ -132,6 +132,7 @@ def get_fmha_impl(
     attn_inputs.is_cuda_graph = is_cuda_graph
 
     mha_impls = PREFILL_MHA_IMPS if attn_inputs.is_prefill else DECODE_MHA_IMPS
+    skipped_reasons = []
 
     for impl in mha_impls:
         # Check if this FMHA implementation is disabled before creating instance
@@ -139,14 +140,19 @@ def get_fmha_impl(
 
         # Skip if this FMHA implementation is disabled in config
         if _is_fmha_impl_disabled(impl_class_name, fmha_config):
+            skipped_reasons.append(f"{impl_class_name}: disabled by fmha_config")
             continue
 
         # Check support before creating instance
         if not impl.support(attn_configs, attn_inputs):
+            skipped_reasons.append(f"{impl_class_name}: support() returned False")
             continue
 
         # Check if implementation supports parallelism config
         if not impl.support_parallelism_config(parallelism_config):
+            skipped_reasons.append(
+                f"{impl_class_name}: support_parallelism_config() returned False"
+            )
             continue
 
         try:
@@ -157,8 +163,34 @@ def get_fmha_impl(
         except Exception as e:
             # If instantiation fails, continue to next impl
             logging.warning(f"Failed to instantiate {impl_class_name}: {e}")
+            skipped_reasons.append(f"{impl_class_name}: instantiation failed: {e}")
             continue
-    raise Exception(f"can not find mha type")
+
+    # Last-resort fallback:
+    # Retry once without fmha_config disable filtering to avoid hard failure
+    # when config flags and runtime capability are inconsistent.
+    for impl in mha_impls:
+        impl_class_name = impl.__name__
+        if not impl.support(attn_configs, attn_inputs):
+            continue
+        if not impl.support_parallelism_config(parallelism_config):
+            continue
+        try:
+            instance = impl(attn_configs, attn_inputs, parallelism_config)
+            if not is_cuda_graph or instance.support_cuda_graph():
+                logging.warning(
+                    "FMHA fallback selected %s after primary selection failed. reasons=%s",
+                    impl_class_name,
+                    skipped_reasons,
+                )
+                return instance
+        except Exception as e:
+            skipped_reasons.append(
+                f"{impl_class_name}: fallback instantiation failed: {e}"
+            )
+            continue
+
+    raise Exception(f"can not find mha type, reasons={skipped_reasons}")
 
 
 class AttnImplFactory(object):

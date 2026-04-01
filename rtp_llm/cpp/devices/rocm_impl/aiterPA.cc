@@ -2,6 +2,7 @@
 #include "rtp_llm/cpp/devices/rocm_impl/atrexPA.h"
 #include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
 #include "rtp_llm/cpp/devices/rocm_impl/ROCmDevice.h"
+#include "rtp_llm/cpp/utils/Logger.h"
 
 using namespace pybind11::literals;
 
@@ -77,17 +78,27 @@ AiterWrapper::AiterWrapper(const DeviceInitParams& params) {
     if (!Py_IsInitialized()) {
         return;
     }
-    py::gil_scoped_acquire acquire;
-    pa_gluon_aot_api   = py::module_::import("aiter_meta.csrc.cpp_itfs.pa_gluon_aot.api");
-    pa_gluon_load_libs = pa_gluon_aot_api.attr("load_all_libs");
-    hip_pa_api         = py::module_::import("aiter_meta.csrc.cpp_itfs.pa.pa_api");
-    hip_pa_load_libs   = hip_pa_api.attr("load_all_libs");
+    try {
+        py::gil_scoped_acquire acquire;
+        pa_gluon_aot_api   = py::module_::import("aiter_meta.csrc.cpp_itfs.pa_gluon_aot.api");
+        pa_gluon_load_libs = pa_gluon_aot_api.attr("load_all_libs");
+        hip_pa_api         = py::module_::import("aiter_meta.csrc.cpp_itfs.pa.pa_api");
+        hip_pa_load_libs   = hip_pa_api.attr("load_all_libs");
+        pa_python_available_ = true;
+    } catch (const py::error_already_set& e) {
+        use_asm_pa_ = false;
+        RTP_LLM_LOG_WARNING("Disable aiter python PA modules due to import failure: %s", e.what());
+    } catch (const std::exception& e) {
+        use_asm_pa_ = false;
+        RTP_LLM_LOG_WARNING("Disable aiter python PA modules due to exception: %s", e.what());
+    }
 }
 
 void AiterWrapper::runTritonPA(const AttentionModuleParams& params,
                                rtp_llm::DeviceBase*         device,
                                Buffer&                      q_mtp,
                                hipStream_t                  stream) {
+    RTP_LLM_CHECK_WITH_INFO(pa_python_available_, "aiter python PA modules are unavailable");
     py::gil_scoped_acquire acquire;
     size_t                 token_num = params.input.shape()[0];
     size_t                 num_heads = params.configs.head_num;
@@ -386,6 +397,7 @@ void AiterWrapper::runHipPA(const AttentionModuleParams& params,
                             rtp_llm::DeviceBase*         device,
                             Buffer&                      q_tmp,
                             hipStream_t                  stream) {
+    RTP_LLM_CHECK_WITH_INFO(pa_python_available_, "aiter python PA modules are unavailable");
     py::gil_scoped_acquire acquire;
     size_t                 token_num = params.input.shape()[0];
     size_t                 num_heads = params.configs.head_num;

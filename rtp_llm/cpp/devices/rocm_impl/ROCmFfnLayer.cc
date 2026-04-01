@@ -504,25 +504,7 @@ FfnLayerOutput ROCmDevice::moeFfn(const FfnLayerParams& params, const MoeGateSel
         w2_scale_tensor                            = w2_scale_tensor.value().view({(int)num_expert_per_rank, -1});
         std::string fmoe_fp8_block_scale_g1u1_name = "";
 
-        // invoke aiter moe kernel
-        fmoe_fp8_blockscale_g1u1(
-            /*out=*/moe_out_tensor,
-            /*input=*/hidden_tensor,
-            /*gate=*/w1_tensor,
-            /*down=*/w2_tensor,
-            /*sorted_token_ids=*/sorted_ids_tensor,
-            /*sorted_weight_buf=*/sorted_weights_tensor,
-            /*sorted_expert_ids=*/sorted_expert_ids_tensor,
-            /*num_valid_ids=*/num_valid_ids_tensor,
-            /*topk=*/topk,
-            /*input_scale=*/hidden_scale_tensor.value(),
-            /*fc1_scale=*/w1_scale_tensor.value(),
-            /*fc2_scale=*/w2_scale_tensor.value(),
-            /*kernel_name*/ fmoe_fp8_block_scale_g1u1_name,
-            /*fc_scale_blkn=*/block_scale_n,
-            /*fc_scale_blkk*/ block_scale_k,
-            /*fc2_smooth_scale=*/nullopt,
-            /*activation*/ ::ActivationType::Silu);
+        RTP_LLM_FAIL("[ROCm moeFfn]: Qfp8PerTokenBlock path requires newer aiter kernel symbol");
     } else {
         BufferPtr     a2        = allocateBuffer({dtype, {num_token, topk, (size_t)inter_dim}}, {"rocm_a2"});
         torch::Tensor a2_tensor = Buffer2torchTensor(*a2, false);
@@ -547,45 +529,26 @@ FfnLayerOutput ROCmDevice::moeFfn(const FfnLayerParams& params, const MoeGateSel
         }();
 
         // invoke aiter two stage moe kernels
-        if (params.qscheme == QScheme::NoQuantize) {
-            ck_moe_stage1(
-                /*hidden_states*/ hidden_tensor,
-                /*w1*/ w1_tensor,
-                /*w2*/ w2_tensor,
-                /*sorted_token_ids*/ sorted_ids_tensor,
-                /*sorted_expert_ids*/ sorted_expert_ids_tensor,
-                /*num_valid_ids*/ num_valid_ids_tensor,
-                /*out*/ a2_tensor,
-                /*topk*/ topk,
-                /*kernelName*/ ck_moe_stage1_kernel_name,
-                /*w1_scale*/ w1_scale_tensor,
-                /*a1_scale*/ hidden_scale_tensor,
-                /*block_m*/ unit_size,
-                /*sorted_weights*/ std::nullopt,
-                /*quant_type*/ static_cast<int>(aiterQscheme),
-                /*activation*/ static_cast<int>(::ActivationType::Silu),
-                /*splitk*/ 1,
-                /*nt*/ false,
-                /*dst_type*/ std::nullopt);
-        } else {
-            moe_stage1_g1u1(
-                /*input*/ hidden_tensor,
-                /*w1*/ w1_tensor,
-                /*w2*/ w2_tensor,
-                /*sorted_token_ids*/ sorted_ids_tensor,
-                /*sorted_expert_ids*/ sorted_expert_ids_tensor,
-                /*num_valid_ids*/ num_valid_ids_tensor,
-                /*out*/ a2_tensor,
-                /*inter_dim*/ inter_dim,
-                /*kernelName*/ asm_moe_stage1_kernel_name,
-                /*block_m*/ unit_size,
-                /*ksplit*/ 0,
-                /*activation*/ ::ActivationType::Silu,
-                /*quant_type*/ aiterQscheme,
-                /*a1_scale*/ hidden_scale_tensor,
-                /*w1_scale*/ w1_scale_tensor,
-                /*sorted_weights*/ std::nullopt);
-        }
+        ck_moe_stage1(
+            /*hidden_states*/ hidden_tensor,
+            /*w1*/ w1_tensor,
+            /*w2*/ w2_tensor,
+            /*sorted_token_ids*/ sorted_ids_tensor,
+            /*sorted_expert_ids*/ sorted_expert_ids_tensor,
+            /*num_valid_ids*/ num_valid_ids_tensor,
+            /*out*/ a2_tensor,
+            /*topk*/ topk,
+            /*kernelName*/ ck_moe_stage1_kernel_name,
+            /*w1_scale*/ w1_scale_tensor,
+            /*a1_scale*/ hidden_scale_tensor,
+            /*block_m*/ unit_size,
+            /*sorted_weights*/ std::nullopt,
+            /*quant_type*/ static_cast<int>(aiterQscheme),
+            /*activation*/ static_cast<int>(::ActivationType::Silu),
+            /*splitk*/ 1,
+            /*nt*/ false,
+            /*dst_type*/ std::nullopt,
+            /*is_shuffled*/ false);
 
         if (params.qscheme != QScheme::NoQuantize) {
             a2_q = std::dynamic_pointer_cast<QBuffer>(
@@ -611,7 +574,8 @@ FfnLayerOutput ROCmDevice::moeFfn(const FfnLayerParams& params, const MoeGateSel
             /*activation*/ static_cast<int>(::ActivationType::Silu),
             /*splitk*/ 1,
             /*nt*/ false,
-            /*dst_type*/ std::nullopt
+            /*dst_type*/ std::nullopt,
+            /*is_shuffled*/ false
         );
     }
     return {moe_out_final};

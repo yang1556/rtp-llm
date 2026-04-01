@@ -267,7 +267,6 @@ cc_library(
     ],
     hdrs = [
         "aiter_meta/csrc/include/attention.h",
-        "aiter_meta/csrc/include/attention_asm.h"
     ],
     deps = [
         ":aiter_so",
@@ -296,7 +295,9 @@ cc_library(
 cc_library(
     name = "module_mha_fwd",
     srcs = ["aiter/jit/module_mha_fwd.so"],
-    hdrs = ["aiter_meta/csrc/include/mha_fwd.h", "aiter_meta/csrc/include/aiter_hip_common.h"],
+    hdrs = glob([
+        "aiter_meta/csrc/include/*.h",
+    ]),
     deps = [
         ":aiter_so",
         ":aiter_headers",
