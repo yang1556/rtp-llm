@@ -56,6 +56,16 @@ class RocmExpertsBf16(FusedMoeExpertExecutor):
         self.w1 = weights[W.moe_w1]
         self.w2 = weights[W.moe_w2]
 
+        # Create expert mask for EP
+        if self.ep_size > 1:
+            local_E = self.w1.size(0)
+            start = self.ep_rank * local_E
+            end = start + local_E
+            self.expert_mask = torch.zeros(self.num_experts, dtype=torch.int32, device=self.w1.device)
+            self.expert_mask[start:end] = 1
+        else:
+            self.expert_mask = None
+
     @property
     def local_num_experts(self) -> int:
         return self.w1.size(0)
@@ -82,8 +92,9 @@ class RocmExpertsBf16(FusedMoeExpertExecutor):
         topk_weights = payload.expert_topk_weights
         assert topk_ids is not None
 
-        assert self.w1.size(0) == self.num_experts
-        assert self.w2.size(0) == self.num_experts
+        # With EP, local expert count differs from total expert count
+        local_experts = self.w1.size(0)
+        assert self.w2.size(0) == local_experts
 
         hidden_states = payload.expert_x
 
@@ -105,6 +116,8 @@ class RocmExpertsBf16(FusedMoeExpertExecutor):
         )
 
         from aiter.fused_moe import fused_moe
+        # Use expert_map if provided, otherwise use self.expert_mask for EP
+        effective_expert_mask = expert_map if expert_map is not None else self.expert_mask
         output = fused_moe(
             hidden_states,
             self.w1,
@@ -112,7 +125,7 @@ class RocmExpertsBf16(FusedMoeExpertExecutor):
             topk_weights,
             topk_ids,
             activation=activation_type,
-            expert_mask=expert_map,
+            expert_mask=effective_expert_mask,
         )
 
         return CombineForwardPayload(fused_expert_output=output)
