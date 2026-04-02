@@ -8,22 +8,21 @@
 
 #include "rtp_llm/cpp/cache/BlockPoolConfigHelper.h"
 #include "rtp_llm/cpp/utils/Logger.h"
+#include "rtp_llm/cpp/utils/TimeUtil.h"
 #include "rtp_llm/cpp/engine_base/stream/CompleteTokenIds.h"
-#include "rtp_llm/cpp/core/torch_utils/BufferTorchUtils.h"
 
 namespace rtp_llm {
 HybridTypeKVCacheAllocator::HybridTypeKVCacheAllocator(const CacheConfig&                 config,
-                                                       rtp_llm::DeviceBase*               device,
                                                        AllocationType                     allocation_type,
                                                        const kmonitor::MetricsReporterPtr metrics_reporter,
                                                        int64_t                            reserve_block_ratio):
-    KVCacheAllocator(config, device, allocation_type, metrics_reporter, reserve_block_ratio) {}
+    KVCacheAllocator(config, allocation_type, metrics_reporter, reserve_block_ratio) {}
 
 bool HybridTypeKVCacheAllocator::doInit() {
     RTP_LLM_CHECK_WITH_INFO(!config_.cache_specs.empty(), "no cache_specs found in CacheConfig");
 
     auto pool_config = BlockPoolConfigHelper::createConfig(config_);
-    block_pool_      = std::make_shared<BlockPool>(pool_config, device_, allocation_type_);
+    block_pool_      = std::make_shared<BlockPool>(pool_config, allocation_type_);
     RTP_LLM_CHECK_WITH_INFO(block_pool_->init(), "Failed to initialize block pool for HybridTypeKVCacheAllocator");
 
     const auto& layer_groups = config_.global_layer_ids;
@@ -77,13 +76,15 @@ void HybridTypeKVCacheAllocator::referenceValidBlocks(const BlockIndicesType& bl
     }
 }
 
-int HybridTypeKVCacheAllocator::reuseCache(const CacheKeysType& cache_keys, BatchKVCacheResource& kv_resource) {
+int HybridTypeKVCacheAllocator::reuseCache(const CacheKeysType&                 cache_keys,
+                                           BatchKVCacheResource&                kv_resource,
+                                           const std::vector<std::vector<int>>& mm_intervals) {
     // 1) Prefix match on all full-attn groups, take the shortest prefix.
     int                           min_full_reuse_blocks = static_cast<int>(cache_keys.size());
     std::vector<BlockIndicesType> full_matched_blocks(kv_cache_groups_.size());
 
     for (int gid : full_group_ids_) {
-        auto match_result     = kv_cache_groups_[static_cast<size_t>(gid)]->match(cache_keys);
+        auto match_result     = kv_cache_groups_[static_cast<size_t>(gid)]->match(cache_keys, mm_intervals);
         min_full_reuse_blocks = std::min(min_full_reuse_blocks, static_cast<int>(match_result.reuse_blocks));
         full_matched_blocks[static_cast<size_t>(gid)] = std::move(match_result.block_indices);
     }
@@ -93,7 +94,22 @@ int HybridTypeKVCacheAllocator::reuseCache(const CacheKeysType& cache_keys, Batc
     std::vector<BlockIdxType> linear_tail_blocks;  // per linear group
     linear_tail_blocks.resize(linear_group_ids_.size(), NULL_BLOCK_IDX);
 
+    int mm_interval_pos = -1;
+    if (!mm_intervals.empty()) {
+        mm_interval_pos = mm_intervals.size() - 1;
+    }
+
     for (; pos >= 0; --pos) {
+        if (mm_interval_pos >= 0) {
+            while (mm_interval_pos >= 0 && pos < mm_intervals[mm_interval_pos][0]) {
+                mm_interval_pos--;
+            }
+            if (mm_interval_pos >= 0 && pos < mm_intervals[mm_interval_pos][1]) {
+                pos = mm_intervals[mm_interval_pos][0];
+                continue;
+            }
+        }
+
         bool all_linear_matched = true;
         for (size_t i = 0; i < linear_group_ids_.size(); ++i) {
             const int gid      = linear_group_ids_[i];
@@ -230,7 +246,7 @@ MallocResult HybridTypeKVCacheAllocator::initMallocForCommonLen(const MallocInfo
         // Drop last key of partial block (same rationale as SingleType).
         CacheKeysType match_keys(cache_keys.begin(), cache_keys.empty() ? cache_keys.end() : cache_keys.end() - 1);
         auto          begin_us = currentTimeUs();
-        reuse_blocks           = reuseCache(match_keys, *kv_resource);
+        reuse_blocks           = reuseCache(match_keys, *kv_resource, malloc_info.mm_intervals);
         match_cost_time_us     = currentTimeUs() - begin_us;
 
         // Reference reused blocks in batch 0 (filter NULL_BLOCK_IDX).
@@ -339,8 +355,8 @@ CacheLayerLayout HybridTypeKVCacheAllocator::allLayerCacheBase() const {
     const auto       scale_tensors = block_pool_->allLayerScaleCacheBase();
 
     layout.layer_to_groups = layer_to_group_id_;
-    layout.layers_to_kv_buffer_ptrs.assign(config_.layer_all_num, nullptr);
-    layout.layers_to_scale_buffer_ptrs.assign(config_.layer_all_num, nullptr);
+    layout.layers_to_kv_buffer_ptrs.resize(config_.layer_all_num);
+    layout.layers_to_scale_buffer_ptrs.resize(config_.layer_all_num);
 
     for (size_t layer_id = 0; layer_id < static_cast<size_t>(config_.layer_all_num); ++layer_id) {
         int32_t      local     = global_layer_to_local_id_[layer_id];
@@ -348,12 +364,12 @@ CacheLayerLayout HybridTypeKVCacheAllocator::allLayerCacheBase() const {
 
         if (local_idx < layer_tensors.size() && layer_tensors[local_idx].defined()
             && layer_tensors[local_idx].numel() > 0) {
-            layout.layers_to_kv_buffer_ptrs[layer_id] = torchTensor2Buffer(layer_tensors[local_idx]);
+            layout.layers_to_kv_buffer_ptrs[layer_id] = layer_tensors[local_idx];
         }
 
         if (!scale_tensors.empty() && local_idx < scale_tensors.size() && scale_tensors[local_idx].defined()
             && scale_tensors[local_idx].numel() > 0) {
-            layout.layers_to_scale_buffer_ptrs[layer_id] = torchTensor2Buffer(scale_tensors[local_idx]);
+            layout.layers_to_scale_buffer_ptrs[layer_id] = scale_tensors[local_idx];
         }
     }
     return layout;

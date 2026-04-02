@@ -15,13 +15,15 @@ from rtp_llm.openai.renderers.custom_renderer import (
     RenderedInputs,
     RendererParams,
 )
-from rtp_llm.utils.multimodal_util import MMPreprocessConfig, MMUrlType
+from rtp_llm.openai.renderers.llava_renderer import get_preprocess_config
+from rtp_llm.ops import MMPreprocessConfig
+from rtp_llm.utils.base_model_datatypes import MMUrlType
 
 
 class QwenVLRenderer(CustomChatRenderer):
     def __init__(
-        self, 
-        tokenizer: BaseTokenizer, 
+        self,
+        tokenizer: BaseTokenizer,
         renderer_params: RendererParams,
         generate_env_config,
         render_config=None,
@@ -29,7 +31,15 @@ class QwenVLRenderer(CustomChatRenderer):
         misc_config=None,
         vit_config=None,
     ):
-        super().__init__(tokenizer, renderer_params, generate_env_config, render_config, ckpt_path, misc_config, vit_config)
+        super().__init__(
+            tokenizer,
+            renderer_params,
+            generate_env_config,
+            render_config,
+            ckpt_path,
+            misc_config,
+            vit_config,
+        )
 
     def _render_messages(self, messages: List[ChatMessage]) -> PromptWithMMInput:
         prompt = ""
@@ -72,8 +82,8 @@ class QwenVLRenderer(CustomChatRenderer):
 
 class Qwen2VLRenderer(CustomChatRenderer):
     def __init__(
-        self, 
-        tokenizer: BaseTokenizer, 
+        self,
+        tokenizer: BaseTokenizer,
         renderer_params: RendererParams,
         generate_env_config,
         render_config=None,
@@ -81,7 +91,15 @@ class Qwen2VLRenderer(CustomChatRenderer):
         misc_config=None,
         vit_config=None,
     ):
-        super().__init__(tokenizer, renderer_params, generate_env_config, render_config, ckpt_path, misc_config, vit_config)
+        super().__init__(
+            tokenizer,
+            renderer_params,
+            generate_env_config,
+            render_config,
+            ckpt_path,
+            misc_config,
+            vit_config,
+        )
 
     def _render_messages(
         self, messages: List[ChatMessage], add_vision_id: bool
@@ -90,17 +108,6 @@ class Qwen2VLRenderer(CustomChatRenderer):
         types = []
         preprocess_configs = []
         final_messages = []
-
-        def get_preprocess_config(config):
-            return MMPreprocessConfig(
-                width=config.resized_width or -1,
-                height=config.resized_height or -1,
-                min_pixels=config.min_pixels or -1,
-                max_pixels=config.max_pixels or -1,
-                fps=config.fps or -1,
-                min_frames=config.min_frames or -1,
-                max_frames=config.max_frames or -1,
-            )
 
         for message in messages:
             if isinstance(message.content, str):
@@ -134,7 +141,7 @@ class Qwen2VLRenderer(CustomChatRenderer):
                                 get_preprocess_config(content_part.preprocess_config)
                             )
                         now_content.append(
-                            {"type": "video", "image": content_part.video_url.url}
+                            {"type": "video", "video": content_part.video_url.url}
                         )
                 now_message["content"] = now_content
                 final_messages.append(now_message)
@@ -173,4 +180,3 @@ register_renderer("qwen_vl", QwenVLRenderer)
 register_renderer("qwen_vl_1b8", QwenVLRenderer)
 register_renderer("qwen2_vl", Qwen2VLRenderer)
 register_renderer("qwen2_5_vl", Qwen2VLRenderer)
-register_renderer("qwen3_vl_moe", Qwen2VLRenderer)

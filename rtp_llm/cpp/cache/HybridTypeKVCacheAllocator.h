@@ -15,7 +15,6 @@ class HybridTypeKVCacheAllocator:
     public std::enable_shared_from_this<HybridTypeKVCacheAllocator> {
 public:
     HybridTypeKVCacheAllocator(const CacheConfig&                 config,
-                               rtp_llm::DeviceBase*               device,
                                AllocationType                     allocation_type     = AllocationType::DEVICE,
                                const kmonitor::MetricsReporterPtr metrics_reporter    = nullptr,
                                int64_t                            reserve_block_ratio = 0);
@@ -49,7 +48,9 @@ private:
     void         decrKVCacheRef(const KVCacheResource& kvcache_resource, bool is_connector = false) override;
 
     // Joint match across groups. Returns reuse_blocks decided by full groups + linear groups.
-    int  reuseCache(const CacheKeysType& cache_keys, BatchKVCacheResource& kv_resource);
+    int  reuseCache(const CacheKeysType&                 cache_keys,
+                    BatchKVCacheResource&                kv_resource,
+                    const std::vector<std::vector<int>>& mm_intervals = {});
     void referenceValidBlocks(const BlockIndicesType& blocks) const;
 
 private:

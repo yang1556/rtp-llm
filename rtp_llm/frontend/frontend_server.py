@@ -18,6 +18,7 @@ from rtp_llm.config.model_config import (
 )
 from rtp_llm.embedding.embedding_endpoint import EmbeddingEndpoint
 from rtp_llm.frontend.frontend_worker import FrontendWorker, TokenizerEncodeResponse
+from rtp_llm.frontend.request_id_generator import generate_request_id
 from rtp_llm.metrics import AccMetrics, GaugeMetrics, kmonitor
 from rtp_llm.model_factory import ModelFactory
 from rtp_llm.model_factory_register import _model_factory
@@ -82,6 +83,7 @@ class FrontendServer(object):
             embedding_config=self.py_env_configs.embedding_config,
             quantization_config=self.py_env_configs.quantization_config,
             render_config=self.py_env_configs.render_config,
+            vit_config=self.py_env_configs.vit_config,
         )
 
         # Create a temporary tokenizer to initialize special_tokens
@@ -119,6 +121,8 @@ class FrontendServer(object):
                 backend_rpc_server_visitor=self._frontend_worker.backend_rpc_server_visitor,
             )
         else:
+            from rtp_llm.embedding.embedding_endpoint import EmbeddingEndpoint
+
             self._embedding_endpoint = EmbeddingEndpoint(
                 model_config=model_config,
                 grpc_config=self.py_env_configs.grpc_config,
@@ -139,7 +143,10 @@ class FrontendServer(object):
             kmonitor.report(
                 AccMetrics.QPS_METRIC, 1, {"source": request.get("source", "unknown")}
             )
-            request[request_id_field_name] = self._global_controller.increment()
+            sequence = self._global_controller.increment() % 4096  # 12 bits
+            request[request_id_field_name] = generate_request_id(
+                self.py_env_configs.server_config.ip, self.py_env_configs.server_config.server_port, self.server_id, sequence
+            )
         except Exception as e:
             return self._handle_exception(request, e)
 
@@ -223,16 +230,10 @@ class FrontendServer(object):
             if isinstance(req, str):
                 req = json.loads(req)
             assert isinstance(req, dict)
-            if "master_info" in req:
-                request_id = req["master_info"].get("request_id")
-                check_with_info(
-                    request_id != None and isinstance(request_id, int),
-                    "request_id in master_info is None or not int",
-                )
-                req[request_id_field_name] = request_id
-                self._global_controller.increment()
-            else:
-                req[request_id_field_name] = self._global_controller.increment()
+            sequence = self._global_controller.increment() % 4096  # 12 bits
+            req[request_id_field_name] = generate_request_id(
+                self.py_env_configs.server_config.ip, self.py_env_configs.server_config.server_port, self.server_id, sequence
+            )
         except Exception as e:
             return self._handle_exception(req, e)
 
@@ -266,18 +267,10 @@ class FrontendServer(object):
     async def chat_completion(
         self, request: ChatCompletionRequest, raw_request: Request
     ):
-        try:
-            if request.master_info is not None:
-                request_id = request.master_info.get("request_id")
-                check_with_info(
-                    request_id != None and isinstance(request_id, int),
-                    "request_id in master_info is None or not int",
-                )
-                self._global_controller.increment()
-            else:
-                request_id = self._global_controller.increment()
-        except Exception as e:
-            return self._handle_exception(request, e)
+        sequence = self._global_controller.increment() % 4096  # 12 bits
+        request_id = generate_request_id(
+            self.py_env_configs.server_config.ip, self.py_env_configs.server_config.server_port, self.server_id, sequence
+        )
 
         def generate_call():
             assert self._openai_endpoint != None

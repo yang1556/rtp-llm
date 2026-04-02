@@ -133,7 +133,7 @@ class PerGroupFp4Weight(CompositeWeight, QuantWeight):
         ):
             return False
         name = src_weight_info.name
-        return name in cls.w4a4_weight_list
+        return name in cls.w4a4_weight_list and not quant_config.mixed_attention
 
     def __init__(
         self,

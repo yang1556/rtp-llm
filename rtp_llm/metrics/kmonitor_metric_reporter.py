@@ -21,11 +21,17 @@ class AccMetrics(Enum):
     MASTER_ROUTE_QPS_METRIC = "py_rtp_master_route_qps"
     DOMAIN_ROUTE_QPS_METRIC = "py_rtp_domain_route_qps"
     MASTER_ROUTE_ERROR_QPS_METRIC = "py_rtp_master_route_error_qps"
+    MASTER_QUEUE_REJECT_QPS_METRIC = "py_rtp_master_queue_reject_qps"
 
     # igraph
     IGRAPH_QPS_METRIC = "py_rtp_igraph_qps"
     IGRAPH_ERROR_QPS_METRIC = "py_rtp_igraph_error_qps"
     IGRAPH_EMPTY_QPS_METRIC = "py_rtp_igraph_empty_qps"
+
+    VIT_QPS_METRIC = "py_rtp_vit_qps"
+    VIT_ERROR_QPS_METRIC = "py_rtp_vit_error_qps"
+    VIT_SUCCESS_QPS_METRIC = "py_rtp_vit_success_qps"
+    VIT_PROCESS_POOL_RESTART_QPS_METRIC = "py_rtp_vit_process_pool_restart_qps"
 
 
 class GaugeMetrics(Enum):
@@ -51,6 +57,8 @@ class GaugeMetrics(Enum):
     ROUTE_RT_METRIC = "py_rtp_route_rt"
     MASTER_ROUTE_RT_METRIC = "py_rtp_master_route_rt"
     DOMAIN_ROUTE_RT_METRIC = "py_rtp_domain_route_rt"
+    MASTER_QUEUE_LENGTH_METRIC = "py_rtp_master_queue_length"
+    MASTER_HOST_METRIC = "py_rtp_master_host"
 
     # igraph
     IGRAPH_RT_METRIC = "py_rtp_igraph_rt"
@@ -58,6 +66,7 @@ class GaugeMetrics(Enum):
 
     # vit preprocess
     VIT_PREPROCESS_RT_METRIC = "py_rtp_vit_preprocess_rt"
+    VIT_EMBEDDING_RT_METRIC = "py_rtp_vit_embedding_rt"
 
 
 class MetricReporter(object):

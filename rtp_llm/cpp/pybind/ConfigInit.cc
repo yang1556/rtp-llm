@@ -1,4 +1,5 @@
 #define PYBIND11_DETAILED_ERROR_MESSAGES
+#include "rtp_llm/cpp/multimodal_processor/MultimodalInputClass.h"
 #include "rtp_llm/cpp/pybind/common/blockUtil.h"
 #include "rtp_llm/cpp/config/ConfigModules.h"
 #include "rtp_llm/cpp/config/RoleTypes.h"
@@ -10,7 +11,7 @@
 #include "rtp_llm/cpp/model_utils/layernorm_types.h"
 #include "rtp_llm/cpp/config/ModelConfig.h"
 #include "rtp_llm/cpp/config/EplbConfig.h"
-#include "rtp_llm/cpp/devices/utils/RopeCache.h"
+#include "rtp_llm/cpp/model_utils/RopeCache.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/cast.h"
 #include "pybind11/stl.h"
@@ -18,9 +19,79 @@
 namespace py = pybind11;
 using namespace rtp_llm;
 
+void registerMultimodal(const py::module& m) {
+    pybind11::class_<MultimodalInput>(m, "MultimodalInput")
+        .def(pybind11::init<std::string, int32_t, torch::Tensor, MMPreprocessConfig>(),
+             py::arg("url"),
+             py::arg("mm_type"),
+             py::arg("tensor"),
+             py::arg("mm_preprocess_config"))
+        .def_readwrite("url", &MultimodalInput::url)
+        .def_readwrite("mm_type", &MultimodalInput::mm_type)
+        .def_readwrite("tensor", &MultimodalInput::tensor)
+        .def_readwrite("mm_preprocess_config", &MultimodalInput::mm_preprocess_config)
+        .def("to_string", &MultimodalInput::to_string)
+        .def(pybind11::pickle(
+            [](const MultimodalInput& m) {  // __getstate__
+                return py::make_tuple(m.url, m.mm_type, m.tensor, m.mm_preprocess_config);
+            },
+            [](py::tuple t) {  // __setstate__
+                return MultimodalInput(t[0].cast<std::string>(),
+                                       t[1].cast<int32_t>(),
+                                       t[2].cast<torch::Tensor>(),
+                                       t[3].cast<MMPreprocessConfig>());
+            }));
+    pybind11::class_<MMPreprocessConfig>(m, "MMPreprocessConfig")
+        .def(pybind11::
+                 init<int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, std::vector<float>, int32_t>(),
+             py::arg("width"),
+             py::arg("height"),
+             py::arg("min_pixels"),
+             py::arg("max_pixels"),
+             py::arg("fps"),
+             py::arg("min_frames"),
+             py::arg("max_frames"),
+             py::arg("crop_positions"),
+             py::arg("mm_timeout_ms"))
+        .def_readwrite("width", &MMPreprocessConfig::width)
+        .def_readwrite("height", &MMPreprocessConfig::height)
+        .def_readwrite("min_pixels", &MMPreprocessConfig::min_pixels)
+        .def_readwrite("max_pixels", &MMPreprocessConfig::max_pixels)
+        .def_readwrite("fps", &MMPreprocessConfig::fps)
+        .def_readwrite("min_frames", &MMPreprocessConfig::min_frames)
+        .def_readwrite("max_frames", &MMPreprocessConfig::max_frames)
+        .def_readwrite("crop_positions", &MMPreprocessConfig::crop_positions)
+        .def_readwrite("mm_timeout_ms", &MMPreprocessConfig::mm_timeout_ms)
+        .def("to_string", &MMPreprocessConfig::to_string)
+        .def(pybind11::pickle(
+            [](const MMPreprocessConfig& m) {  // __getstate__
+                return py::make_tuple(m.width,
+                                      m.height,
+                                      m.min_pixels,
+                                      m.max_pixels,
+                                      m.fps,
+                                      m.min_frames,
+                                      m.max_frames,
+                                      m.crop_positions,
+                                      m.mm_timeout_ms);
+            },
+            [](py::tuple t) {  // __setstate__
+                return MMPreprocessConfig(t[0].cast<int32_t>(),
+                                          t[1].cast<int32_t>(),
+                                          t[2].cast<int32_t>(),
+                                          t[3].cast<int32_t>(),
+                                          t[4].cast<int32_t>(),
+                                          t[5].cast<int32_t>(),
+                                          t[6].cast<int32_t>(),
+                                          t[7].cast<std::vector<float>>(),
+                                          t[8].cast<int32_t>());
+            }));
+}
+
 PYBIND11_MODULE(libth_transformer_config, m) {
     // Register get_block_cache_keys function
     registerCommon(m);
+    registerMultimodal(m);
 
     // Register enums
     py::enum_<RoleType>(m, "RoleType")
@@ -291,6 +362,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def_readwrite("linear_step", &KVCacheConfig::linear_step)
         .def_readwrite("int8_kv_cache", &KVCacheConfig::int8_kv_cache)
         .def_readwrite("fp8_kv_cache", &KVCacheConfig::fp8_kv_cache)
+        .def_readwrite("ssm_state_dtype", &KVCacheConfig::ssm_state_dtype)
         .def_readwrite("kv_cache_mem_mb", &KVCacheConfig::kv_cache_mem_mb)
         .def_readwrite("seq_size_per_block", &KVCacheConfig::seq_size_per_block)
         .def_readwrite("kernel_seq_size_per_block", &KVCacheConfig::kernel_seq_size_per_block)
@@ -366,10 +438,11 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                                       self.reco_asyncwrapper_queue_size,
                                       self.reco_get_broadcast_timeout,
                                       self.reco_put_broadcast_timeout,
-                                      self.reco_client_config);
+                                      self.reco_client_config,
+                                      self.ssm_state_dtype);
             },
             [](py::tuple t) {
-                if (t.size() != 42)
+                if (t.size() != 43)
                     throw std::runtime_error("Invalid state!");
                 KVCacheConfig c;
                 try {
@@ -415,6 +488,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                     c.reco_get_broadcast_timeout           = t[39].cast<int>();
                     c.reco_put_broadcast_timeout           = t[40].cast<int>();
                     c.reco_client_config                   = t[41].cast<std::string>();
+                    c.ssm_state_dtype                      = t[42].cast<std::string>();
                 } catch (const std::exception& e) {
                     throw std::runtime_error(std::string("KVCacheConfig unpickle error: ") + e.what());
                 }
@@ -554,8 +628,6 @@ PYBIND11_MODULE(libth_transformer_config, m) {
     // Register DeviceResourceConfig
     py::class_<DeviceResourceConfig>(m, "DeviceResourceConfig")
         .def(py::init<>())
-        .def_readwrite("device_reserve_memory_bytes", &DeviceResourceConfig::device_reserve_memory_bytes)
-        .def_readwrite("host_reserve_memory_bytes", &DeviceResourceConfig::host_reserve_memory_bytes)
         .def_readwrite("overlap_math_sm_count", &DeviceResourceConfig::overlap_math_sm_count)
         .def_readwrite("overlap_comm_type", &DeviceResourceConfig::overlap_comm_type)
         .def_readwrite("m_split", &DeviceResourceConfig::m_split)
@@ -564,26 +636,22 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def("to_string", &DeviceResourceConfig::to_string)
         .def(py::pickle(
             [](const DeviceResourceConfig& self) {
-                return py::make_tuple(self.device_reserve_memory_bytes,
-                                      self.host_reserve_memory_bytes,
-                                      self.overlap_math_sm_count,
+                return py::make_tuple(self.overlap_math_sm_count,
                                       self.overlap_comm_type,
                                       self.m_split,
                                       self.enable_comm_overlap,
                                       self.enable_layer_micro_batch);
             },
             [](py::tuple t) {
-                if (t.size() != 7)
+                if (t.size() != 5)
                     throw std::runtime_error("Invalid state!");
                 DeviceResourceConfig c;
                 try {
-                    c.device_reserve_memory_bytes = t[0].cast<int64_t>();
-                    c.host_reserve_memory_bytes   = t[1].cast<int64_t>();
-                    c.overlap_math_sm_count       = t[2].cast<int>();
-                    c.overlap_comm_type           = t[3].cast<int>();
-                    c.m_split                     = t[4].cast<int>();
-                    c.enable_comm_overlap         = t[5].cast<bool>();
-                    c.enable_layer_micro_batch    = t[6].cast<int>();
+                    c.overlap_math_sm_count    = t[0].cast<int>();
+                    c.overlap_comm_type        = t[1].cast<int>();
+                    c.m_split                  = t[2].cast<int>();
+                    c.enable_comm_overlap      = t[3].cast<bool>();
+                    c.enable_layer_micro_batch = t[4].cast<int>();
                 } catch (const std::exception& e) {
                     throw std::runtime_error(std::string("DeviceResourceConfig unpickle error: ") + e.what());
                 }
@@ -645,40 +713,21 @@ PYBIND11_MODULE(libth_transformer_config, m) {
     // Register ModelSpecificConfig
     py::class_<ModelSpecificConfig>(m, "ModelSpecificConfig")
         .def(py::init<>())
-        .def_readwrite("max_lora_model_size", &ModelSpecificConfig::max_lora_model_size)
         .def_readwrite("load_python_model", &ModelSpecificConfig::load_python_model)
         .def("to_string", &ModelSpecificConfig::to_string)
-        .def(py::pickle(
-            [](const ModelSpecificConfig& self) {
-                return py::make_tuple(self.max_lora_model_size, self.load_python_model);
-            },
-            [](py::tuple t) {
-                if (t.size() != 2)
-                    throw std::runtime_error("Invalid state!");
-                ModelSpecificConfig c;
-                try {
-                    c.max_lora_model_size = t[0].cast<int64_t>();
-                    c.load_python_model   = t[1].cast<bool>();
-                } catch (const std::exception& e) {
-                    throw std::runtime_error(std::string("ModelSpecificConfig unpickle error: ") + e.what());
-                }
-                return c;
-            }));
-
-    // LinearAttentionConfig
-    pybind11::class_<LinearAttentionConfig>(m, "LinearAttentionConfig")
-        .def(pybind11::init<int, int, int, int, int>(),
-             pybind11::arg("linear_conv_kernel_dim") = 0,
-             pybind11::arg("linear_key_head_dim")    = 0,
-             pybind11::arg("linear_num_key_heads")   = 0,
-             pybind11::arg("linear_num_value_heads") = 0,
-             pybind11::arg("linear_value_head_dim")  = 0)
-        .def("to_string", &LinearAttentionConfig::to_string)
-        .def_readwrite("linear_conv_kernel_dim", &LinearAttentionConfig::linear_conv_kernel_dim)
-        .def_readwrite("linear_key_head_dim", &LinearAttentionConfig::linear_key_head_dim)
-        .def_readwrite("linear_num_key_heads", &LinearAttentionConfig::linear_num_key_heads)
-        .def_readwrite("linear_num_value_heads", &LinearAttentionConfig::linear_num_value_heads)
-        .def_readwrite("linear_value_head_dim", &LinearAttentionConfig::linear_value_head_dim);
+        .def(py::pickle([](const ModelSpecificConfig& self) { return py::make_tuple(self.load_python_model); },
+                        [](py::tuple t) {
+                            if (t.size() != 1)
+                                throw std::runtime_error("Invalid state!");
+                            ModelSpecificConfig c;
+                            try {
+                                c.load_python_model = t[0].cast<bool>();
+                            } catch (const std::exception& e) {
+                                throw std::runtime_error(std::string("ModelSpecificConfig unpickle error: ")
+                                                         + e.what());
+                            }
+                            return c;
+                        }));
 
     // HybridAttentionConfig
     py::enum_<HybridAttentionType>(m, "HybridAttentionType")
@@ -925,7 +974,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def("getActivationBits", &QuantAlgo::getActivationBits)
         .def("setQuantAlgo", &QuantAlgo::setQuantAlgo);
 
-    // Register NcclCommConfig (NCCL ip/ports for initDevices; Python attribute names)
+    // Register NcclCommConfig (NCCL ip/ports for initExecCtx; Python attribute names)
     py::class_<NcclCommConfig>(m, "NcclCommConfig")
         .def(py::init<>())
         .def(py::init([](const std::string& nccl_ip,
@@ -1164,6 +1213,25 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .value("TYPE_QINT4X2", DataType::TYPE_QINT4X2)
         .value("TYPE_QFP8_E4M3", DataType::TYPE_QFP8_E4M3);
 
+    // LinearAttentionConfig
+    pybind11::class_<LinearAttentionConfig>(m, "LinearAttentionConfig")
+        .def(pybind11::init<int, int, int, int, int, DataType, DataType>(),
+             pybind11::arg("linear_conv_kernel_dim") = 0,
+             pybind11::arg("linear_key_head_dim")    = 0,
+             pybind11::arg("linear_num_key_heads")   = 0,
+             pybind11::arg("linear_num_value_heads") = 0,
+             pybind11::arg("linear_value_head_dim")  = 0,
+             pybind11::arg("ssm_state_dtype")        = DataType::TYPE_BF16,
+             pybind11::arg("conv_state_dtype")       = DataType::TYPE_BF16)
+        .def("to_string", &LinearAttentionConfig::to_string)
+        .def_readwrite("linear_conv_kernel_dim", &LinearAttentionConfig::linear_conv_kernel_dim)
+        .def_readwrite("linear_key_head_dim", &LinearAttentionConfig::linear_key_head_dim)
+        .def_readwrite("linear_num_key_heads", &LinearAttentionConfig::linear_num_key_heads)
+        .def_readwrite("linear_num_value_heads", &LinearAttentionConfig::linear_num_value_heads)
+        .def_readwrite("linear_value_head_dim", &LinearAttentionConfig::linear_value_head_dim)
+        .def_readwrite("ssm_state_dtype", &LinearAttentionConfig::ssm_state_dtype)
+        .def_readwrite("conv_state_dtype", &LinearAttentionConfig::conv_state_dtype);
+
     // Register KvCacheDataType enum
     py::enum_<KvCacheDataType>(m, "KvCacheDataType")
         .value("BASE", KvCacheDataType::BASE)
@@ -1281,7 +1349,8 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def_readwrite("indexer_head_num", &AttentionConfigs::indexer_head_num)
         .def_readwrite("indexer_topk", &AttentionConfigs::indexer_topk)
         .def_readwrite("dtype", &AttentionConfigs::dtype)
-        .def_readwrite("max_seq_len", &AttentionConfigs::max_seq_len);
+        .def_readwrite("max_seq_len", &AttentionConfigs::max_seq_len)
+        .def_readwrite("gen_num_per_cycle", &AttentionConfigs::gen_num_per_cycle);
 
     py::class_<EPLBConfig>(m, "EPLBConfig")
         .def(py::init<>())
@@ -1356,6 +1425,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def(py::init<>())
         .def_readwrite("num_layers", &ModelConfig::num_layers)
         .def_readwrite("max_seq_len", &ModelConfig::max_seq_len)
+        .def_readwrite("gen_num_per_cycle", &ModelConfig::gen_num_per_cycle)
         .def_readwrite("vocab_size", &ModelConfig::vocab_size)
         .def_readwrite("hidden_size", &ModelConfig::hidden_size)
         .def_readwrite("attn_config", &ModelConfig::attn_config)
@@ -1367,7 +1437,6 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         // task_type is defined as property below
         .def_readwrite("ckpt_path", &ModelConfig::ckpt_path)
         .def_readwrite("tokenizer_path", &ModelConfig::tokenizer_path)
-        .def_readwrite("lora_infos", &ModelConfig::lora_infos)
         .def_readwrite("position_ids_style", &ModelConfig::position_ids_style)
         .def_readwrite("pre_seq_len", &ModelConfig::pre_seq_len)
         .def_readwrite("use_kvcache", &ModelConfig::use_kvcache)

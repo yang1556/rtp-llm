@@ -1,7 +1,6 @@
 #include "rtp_llm/cpp/engine_base/stream/StreamCacheResource.h"
 #include "rtp_llm/cpp/engine_base/stream/GenerateStream.h"
 #include "rtp_llm/cpp/utils/HashUtil.h"
-#include "rtp_llm/cpp/core/BufferHelper.h"
 #include "rtp_llm/cpp/cache/Types.h"
 #include "rtp_llm/cpp/cache/connector/KVCacheConnectorReadWriteContext.h"
 #include "rtp_llm/cpp/config/RoleTypes.h"
@@ -61,8 +60,8 @@ private:
     bool                 enable_memory_cache_{false};
     bool                 enable_remote_cache_{false};
     std::string          trace_id_;
-    std::string          unique_id_ = "";  // TODO : support lora (remote connector)
-    std::vector<int64_t> tokens_;          // TODO : get tokens (remote connector)
+    std::string          unique_id_ = "";
+    std::vector<int64_t> tokens_;  // TODO : get tokens (remote connector)
 };
 
 // ----------------------------- StreamCacheResource -----------------------------
@@ -187,6 +186,7 @@ absl::Status StreamCacheResource::initKVBlock(size_t reserve_step) {
     malloc_info.complete_token_ids      = stream_->completeTokenIdsPtr();
     malloc_info.request_id              = stream_->streamId();
     malloc_info.verbose                 = malloc_failed_times_ >= 10 ? malloc_failed_times_ % 100 == 0 : true;
+    malloc_info.mm_intervals            = stream_->multimodalIntervals();
 
     const bool is_hybrid       = resource_context_.cache_manager->cacheConfig().groupNums() > 1;
     const bool is_decode_role  = (resource_context_.role_type == RoleType::DECODE);

@@ -29,8 +29,8 @@ public:
     LocalRpcServer() {}
     virtual ~LocalRpcServer() {}
     virtual grpc::Status init(const EngineInitParams&                                maga_init_params,
-                              py::object                                             mm_process_engine,
-                              std::unique_ptr<rtp_llm::ProposeModelEngineInitParams> propose_params);
+                              std::unique_ptr<rtp_llm::ProposeModelEngineInitParams> propose_params,
+                              py::object                                             mm_process_engine);
 
     grpc::Status
     GetWorkerStatus(grpc::ServerContext* context, const ::StatusVersionPB* request, ::WorkerStatusPB* response);
@@ -63,12 +63,6 @@ public:
     KVCacheInfo getCacheStatusInfo(int64_t latest_cache_version, bool need_cache_keys);
 
     WorkerStatusInfo getWorkerStatusInfo(int64_t latest_finished_version);
-
-    void addLora(const std::string&                        adapter_name,
-                 const rtp_llm::lora::loraLayerWeightsMap& lora_a_weights,
-                 const rtp_llm::lora::loraLayerWeightsMap& lora_b_weights);
-
-    void removeLora(const std::string& adapter_name);
 
     std::shared_ptr<EngineBase> getEngine() const {
         return engine_;

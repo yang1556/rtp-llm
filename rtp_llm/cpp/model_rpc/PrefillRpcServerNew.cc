@@ -1,16 +1,16 @@
 #include "rtp_llm/cpp/model_rpc/PrefillRpcServerNew.h"
 #include "autil/StringUtil.h"
 #include "rtp_llm/cpp/utils/KVCacheUtils.h"
-#include "rtp_llm/cpp/devices/utils/DebugUtils.h"
+#include "rtp_llm/cpp/utils/DebugUtils.h"
 #include "rtp_llm/cpp/utils/ProfilingScope.h"
 
 namespace rtp_llm {
 
 grpc::Status PrefillRpcServerNew::init(const EngineInitParams&                                maga_init_params,
-                                       py::object                                             mm_process_engine,
-                                       std::unique_ptr<rtp_llm::ProposeModelEngineInitParams> propose_params) {
+                                       std::unique_ptr<rtp_llm::ProposeModelEngineInitParams> propose_params,
+                                       py::object                                             mm_process_engine) {
     RTP_LLM_LOG_INFO("prefill rpc server new init");
-    return RemoteRpcServer::init(maga_init_params, mm_process_engine, std::move(propose_params));
+    return RemoteRpcServer::init(maga_init_params, std::move(propose_params), mm_process_engine);
 }
 
 grpc::Status PrefillRpcServerNew::RemoteGenerateNew(grpc::ServerContext*              context,
@@ -23,10 +23,6 @@ grpc::Status PrefillRpcServerNew::RemoteGenerateNew(grpc::ServerContext*        
     // reset request_id in prefill
     auto request_id = loading_cache_requests_.fetch_add(1, std::memory_order_relaxed);
     mutable_input->set_request_id(request_id);
-
-    // ignore inter_request_id in prefill
-    auto modified_config = mutable_input->mutable_generate_config();
-    modified_config->set_inter_request_id(-1);
 
     PrefillGenerateContextNew prefill_context(&resource_, context, request, response, metrics_reporter_, meta_);
     RTP_LLM_LOG_INFO("request [%s] RemoteGenerateNew", prefill_context.request_key.c_str());
@@ -73,7 +69,7 @@ grpc::Status PrefillRpcServerNew::RemoteGenerateNew(grpc::ServerContext*        
 
     // TODO: notify remote store for hidden state
     // if (engine_->isMTPEagle() &&
-    //        engine_->getDevice()->getDeviceProperties().tp_rank == 0 &&
+    //        engine_->getExecCtx()->getExecProperties().tp_rank == 0 &&
     //        !request->mtp_hidden_states_key.empty()) {
     //}
 

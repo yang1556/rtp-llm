@@ -16,17 +16,17 @@ public:
     LocalRpcServiceImpl() {}
     virtual ~LocalRpcServiceImpl() {}
     virtual grpc::Status init(const EngineInitParams&                                maga_init_params,
-                              py::object                                             mm_process_engine,
-                              std::unique_ptr<rtp_llm::ProposeModelEngineInitParams> propose_params) {
+                              std::unique_ptr<rtp_llm::ProposeModelEngineInitParams> propose_params,
+                              py::object                                             mm_process_engine) {
         local_server_ = std::make_shared<LocalRpcServer>();
-        return local_server_->init(maga_init_params, mm_process_engine, std::move(propose_params));
+        return local_server_->init(maga_init_params, std::move(propose_params), mm_process_engine);
     }
     grpc::Status init(const EngineInitParams&                                maga_init_params,
-                      py::object                                             mm_process_engine,
                       std::unique_ptr<rtp_llm::ProposeModelEngineInitParams> propose_params,
-                      py::object                                             weight_manager) {
+                      py::object                                             weight_manager,
+                      py::object                                             mm_process_engine) {
         local_server_ = std::make_shared<LocalRpcServer>();
-        return local_server_->init(maga_init_params, mm_process_engine, std::move(propose_params));
+        return local_server_->init(maga_init_params, std::move(propose_params), mm_process_engine);
     }
 
     grpc::Status GenerateStreamCall(grpc::ServerContext*                   context,
@@ -95,16 +95,6 @@ public:
 
     EngineScheduleInfo getEngineScheduleInfo(int64_t latest_finised_version) {
         return local_server_->getEngineScheduleInfo(latest_finised_version);
-    }
-
-    void addLora(const std::string&                        adapter_name,
-                 const rtp_llm::lora::loraLayerWeightsMap& lora_a_weights,
-                 const rtp_llm::lora::loraLayerWeightsMap& lora_b_weights) {
-        local_server_->addLora(adapter_name, lora_a_weights, lora_b_weights);
-    }
-
-    void removeLora(const std::string& adapter_name) {
-        local_server_->removeLora(adapter_name);
     }
 
     std::shared_ptr<EngineBase> getEngine() const {

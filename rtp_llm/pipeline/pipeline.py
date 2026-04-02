@@ -14,7 +14,14 @@ from rtp_llm.frontend.tokenizer_factory.tokenizer_utils import (
 )
 from rtp_llm.frontend.tokenizer_factory.tokenizers import BaseTokenizer
 from rtp_llm.metrics import GaugeMetrics, kmonitor
-from rtp_llm.ops import SpecialTokens, SpeculativeExecutionConfig, VitSeparation
+from rtp_llm.multimodal.multimodal_util import MMUrlType
+from rtp_llm.ops import (
+    MMPreprocessConfig,
+    MultimodalInput,
+    SpecialTokens,
+    SpeculativeExecutionConfig,
+    VitSeparation,
+)
 from rtp_llm.server.backend_rpc_server_visitor import BackendRPCServerVisitor
 from rtp_llm.utils.base_model_datatypes import (
     GenerateInput,
@@ -22,7 +29,6 @@ from rtp_llm.utils.base_model_datatypes import (
     GenerateOutputs,
     GenerateResponse,
 )
-from rtp_llm.utils.multimodal_util import MultimodalInput
 from rtp_llm.utils.time_util import current_time_ms
 from rtp_llm.utils.util import AtomicCounter
 from rtp_llm.utils.word_util import (
@@ -52,6 +58,8 @@ class Pipeline(object):
         ] = None,  # mm_related_params from ModelConfig (optional)
         grpc_config: Optional[Any] = None,  # grpc_config from PyEnvConfigs (optional)
         vit_separation: Optional[VitSeparation] = None,  # Optional VitSeparation
+        server_config=None,
+        master_config=None,
     ):
         self.pd_sep_config = pd_sep_config
         self.tokenizer = tokenizer
@@ -70,6 +78,8 @@ class Pipeline(object):
             sp_config=sp_config,
             grpc_config=grpc_config,
             vit_separation=vit_separation,
+            server_config=server_config,
+            master_config=master_config,
         )
 
     def encode(self, prompt: str):
@@ -172,7 +182,19 @@ class Pipeline(object):
             self.tokenizer,
             **kwargs
         )
-        mm_inputs = [MultimodalInput(url) for url in urls] if urls is not None else []
+        mm_inputs = (
+            [
+                MultimodalInput(
+                    url,
+                    MMUrlType.DEFAULT,
+                    torch.empty(0),
+                    MMPreprocessConfig(-1, -1, -1, -1, -1, -1, -1, [], 30000),
+                )
+                for url in urls
+            ]
+            if urls is not None
+            else []
+        )
 
         if len(prompt) == 0:
             raise FtRuntimeException(

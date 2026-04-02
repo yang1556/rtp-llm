@@ -6,14 +6,17 @@ from typing import Any, Dict, Optional
 
 import torch
 
+from rtp_llm.config.py_config_modules import VitConfig
 from rtp_llm.config.quant_config import (
     Fp8BlockWiseQuantConfig,
     QuantizationConfig,
     init_quant_config,
 )
-from rtp_llm.ops import KVCacheConfig, KvCacheDataType
+from rtp_llm.multimodal.multimodal_mixin_register import get_multimodal_mixin_cls
+from rtp_llm.ops import DataType, KvCacheDataType
 from rtp_llm.ops import ModelConfig as CppModelConfig
 from rtp_llm.ops import TaskType
+from rtp_llm.utils.base_model_datatypes import VitParameters
 from rtp_llm.utils.gemm_utils.cutlass_config import load_cutlass_gemm_config
 from rtp_llm.utils.util import get_config_from_path, to_torch_dtype
 from rtp_llm.utils.weight_type import WEIGHT_TYPE
@@ -39,18 +42,15 @@ def kv_cache_dtype_to_torch_dtype(
         return data_type.to_torch_dtype()
 
 
-class VitParameters:
-    """Vit parameters for multimodal models."""
-
-    # config includes origin vit config in ckpt/config.json
-    config: Dict[str, Any] = {}
-    special_token_ids: Dict[str, Any] = {}
-    special_tokens: Dict[str, Any] = {}
-    vit_weights: Any = None
-    support_batch: bool = False
-    eval_param_count = None
-    eval_model_size = None
-
+def ssm_state_dtype_str_to_data_type(ssm_state_dtype: str) -> DataType:
+    ssm_state_dtype = ssm_state_dtype.lower()
+    if ssm_state_dtype == "bf16":
+        return DataType.TYPE_BF16
+    if ssm_state_dtype == "fp16":
+        return DataType.TYPE_FP16
+    if ssm_state_dtype == "fp32":
+        return DataType.TYPE_FP32
+    raise ValueError(f"Unsupported ssm_state_dtype: {ssm_state_dtype}")
 
 class ModelConfig(CppModelConfig):
     # Python-only fields that are allowed to be set
@@ -71,6 +71,7 @@ class ModelConfig(CppModelConfig):
         "generate_env_config",
         "render_config",
         "phy2log_path",
+        "lora_infos",
     }
 
     # Known C++ ModelConfig members (from ModelConfig.h)
@@ -86,7 +87,6 @@ class ModelConfig(CppModelConfig):
         "eplb_config",
         "ckpt_path",
         "tokenizer_path",
-        "lora_infos",
         "position_ids_style",
         "pre_seq_len",
         "use_kvcache",
@@ -120,6 +120,7 @@ class ModelConfig(CppModelConfig):
         "use_norm_attn_out_residual",
         "input_vocab_size",
         "type_vocab_size",
+        "gen_num_per_cycle",
         "embedding_size",
         "moe_normalize_expert_scale",
         "scoring_func",
@@ -187,6 +188,9 @@ class ModelConfig(CppModelConfig):
         """
         return to_torch_dtype(self.data_type)
 
+    def is_multimodal(self) -> bool:
+        return self.mm_model_config.is_multimodal
+
     def eval_model_weight_size(self) -> float:
         """
         Evaluate total model size including weights, KV cache, and runtime buffers.
@@ -210,8 +214,10 @@ class ModelConfig(CppModelConfig):
             + self.word_emb_param_count(vocab_size) * 2
         )  # maybe some model donot have lm_head
 
-        if self.mm_related_params.eval_model_size:
-            model_size += self.mm_related_params.eval_model_size(self.mm_related_params)
+        if self.mm_model_config.is_multimodal:
+            model_size += get_multimodal_mixin_cls(self.model_type).eval_mm_model_size(
+                self.mm_related_params, self.extra_data_path, self.local_extra_data_path
+            )
 
         return model_size
 
@@ -303,9 +309,11 @@ class ModelConfig(CppModelConfig):
             + self.hidden_size
         )
 
-        if self.mm_related_params.eval_param_count:
-            param_count += self.mm_related_params.eval_param_count(
-                self.mm_related_params
+        if self.mm_model_config.is_multimodal:
+            param_count += get_multimodal_mixin_cls(
+                self.model_type
+            ).eval_mm_model_param_count(
+                self.mm_related_params, self.extra_data_path, self.local_extra_data_path
             )
         return param_count
 
@@ -483,8 +491,6 @@ class ModelConfig(CppModelConfig):
         self.quantization: str = (
             ""  # Quantization method string (e.g., "INT8", "FP8", etc.)
         )
-        # mm_related_params will be set to VitParameters() if needed
-        self.mm_related_params: Any = None
         self.src_quantization_bit: int = 0
         self.config_dtype: Optional[str] = None
 
@@ -493,6 +499,7 @@ class ModelConfig(CppModelConfig):
         self.model_name: str = (
             ""  # Model name (also set to engine_config.runtime_config.model_name)
         )
+        self.lora_infos: Dict[str, str] = {}  # Python-only (C++ lora code removed)
 
         # Model architecture fields
         self.inter_size: int = 0  # FFN intermediate size (for regular FFN layers)
@@ -763,6 +770,7 @@ def build_model_config(
     quantization_config: Optional[
         Any
     ] = None,  # QuantizationConfig (optional, for quantization)
+    vit_config: Optional[VitConfig] = None,
 ) -> None:
     """Build and initialize ModelConfig from model_args.
 
@@ -779,9 +787,10 @@ def build_model_config(
     """
     model_config.ckpt_path = model_args.ckpt_path
     model_config.tokenizer_path = model_args.tokenizer_path
-    model_config.extra_data_path = model_args.extra_data_path
-    model_config.local_extra_data_path = model_args.local_extra_data_path
     model_config.model_type = model_args.model_type
+    if vit_config:
+        model_config.extra_data_path = vit_config.extra_data_path
+        model_config.local_extra_data_path = vit_config.local_extra_data_path
     model_config.phy2log_path = model_args.phy2log_path
 
     if model_args.mla_ops_type:
@@ -815,6 +824,10 @@ def build_model_config(
         if kv_cache_config.kernel_seq_size_per_block > 0
         else kv_cache_config.seq_size_per_block
     )
+    model_config.linear_attention_config.ssm_state_dtype = (
+        ssm_state_dtype_str_to_data_type(kv_cache_config.ssm_state_dtype)
+    )
+    model_config.linear_attention_config.conv_state_dtype = model_config.data_type
 
     model_config.use_kvcache = model_config.task_type == TaskType.LANGUAGE_MODEL
     logging.info(

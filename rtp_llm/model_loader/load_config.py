@@ -26,8 +26,6 @@ class LoadConfig(BaseModel):
     head_num: int
     head_num_kv: int
     size_per_head: int
-    use_stack_weight: bool
-    moe_pure_tp_mode: bool
     align_size: int  # Alignment size for FFN weights
     moe_align_size: int  # Alignment size for MoE weights
     moe_layer_index: List[int]
@@ -50,9 +48,6 @@ class LoadConfig(BaseModel):
     bit: int = 16
     merge_lora: bool = False
 
-    vit_separation: VitSeparation = (
-        VitSeparation.VIT_SEPARATION_LOCAL
-    )  # VitSeparation enum
     compute_dtype: Any = torch.float16
 
     quant_algo: Any = None
@@ -65,18 +60,10 @@ class LoadConfig(BaseModel):
     use_swizzleA: bool = False
     force_cpu_load_weights: bool = False
 
-    @field_validator("database", "compute_dtype", "quant_algo", "vit_separation")
+    @field_validator("database", "compute_dtype", "quant_algo")
     @classmethod
     def validate_custom_types(cls, value: Any, info) -> Any:
         field_name = info.field_name
-        if field_name == "vit_separation":
-            if value is None:
-                return VitSeparation.VIT_SEPARATION_LOCAL
-            if not isinstance(value, VitSeparation):
-                raise TypeError(
-                    f"Field 'vit_separation' expects type VitSeparation, got {type(value)}"
-                )
-            return value
 
         expected_types = {
             "database": BaseDatabase,

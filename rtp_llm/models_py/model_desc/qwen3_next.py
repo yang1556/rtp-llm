@@ -18,8 +18,8 @@ from rtp_llm.models_py.modules import (
     Embedding,
     FMHAImplBase,
     LinearFactory,
+    MultimodalEmbeddingInjector,
     RMSNorm,
-    RMSResNorm,
 )
 from rtp_llm.models_py.triton_kernels.causal_conv1d import (
     CausalConv1dMetadata,
@@ -36,11 +36,9 @@ from rtp_llm.models_py.triton_kernels.fla.chunk import chunk_gated_delta_rule
 from rtp_llm.models_py.triton_kernels.fla.fused_recurrent import (
     fused_recurrent_gated_delta_rule,
 )
-from rtp_llm.models_py.triton_kernels.fla.fused_sigmoid_gating_recurrent import (
-    fused_sigmoid_gating_delta_rule_update,
-)
 from rtp_llm.models_py.triton_kernels.fla.gdn_gating import fused_gdn_gating
 from rtp_llm.models_py.utils.debug import cudagraph_debug_kernel
+from rtp_llm.models_py.utils.typed_storage_view import LinearCacheConverter
 from rtp_llm.ops import (
     AttentionConfigs,
     HybridAttentionType,
@@ -54,6 +52,7 @@ from rtp_llm.ops.compute_ops import (
     PyModelOutputs,
 )
 from rtp_llm.utils.model_weight import W
+from rtp_llm.utils.util import to_torch_dtype
 
 
 class Qwen3NextMetadata(object):
@@ -104,6 +103,21 @@ class Qwen3NextGatedDeltaNetBase(torch.nn.Module):
             + self.head_v_dim * self.local_num_v_heads
         )
         self.conv_state_size: int = (self.linear_conv_kernel_dim - 1) * self.qkv_size
+        self.ssm_state_dtype: torch.dtype = to_torch_dtype(
+            linear_attn_config.ssm_state_dtype
+        )
+        self.conv_state_dtype: torch.dtype = to_torch_dtype(
+            linear_attn_config.conv_state_dtype
+        )
+        self.linear_cache_converter = LinearCacheConverter(
+            local_num_v_heads=self.local_num_v_heads,
+            head_v_dim=self.head_v_dim,
+            head_k_dim=self.head_k_dim,
+            ssm_state_dtype=self.ssm_state_dtype,
+            linear_conv_kernel_dim=self.linear_conv_kernel_dim,
+            qkv_size=self.qkv_size,
+            conv_state_dtype=self.conv_state_dtype,
+        )
         # weights
         self.conv_weights = weights[W.linear_attn_conv1d_w].squeeze(1)
         self.dt_bias = weights[W.linear_attn_dt_b]
@@ -121,40 +135,11 @@ class Qwen3NextGatedDeltaNetBase(torch.nn.Module):
         raise NotImplementedError
 
     def _get_conv_states(self, kv_cache_tensor: torch.Tensor) -> torch.Tensor:
-        _, block_size = kv_cache_tensor.view(kv_cache_tensor.shape[0], -1).shape
-        assert (
-            block_size >= self.ssm_state_size + self.conv_state_size
-        ), "block_size is too small, please check seq_size_per_block"
-        conv_states = torch.as_strided(
-            kv_cache_tensor,
-            (kv_cache_tensor.shape[0], self.linear_conv_kernel_dim - 1, self.qkv_size),
-            (kv_cache_tensor.stride()[0], self.qkv_size, 1),
-            storage_offset=self.ssm_state_size + kv_cache_tensor.storage_offset(),
-        )
+        conv_states = self.linear_cache_converter.get_conv_state_tensor(kv_cache_tensor)
         return conv_states
 
     def _get_ssm_states(self, kv_cache_tensor: torch.Tensor) -> torch.Tensor:
-        # maybe should support smsm cahe with difference dtype(fp32/bf16/fp16)
-        _, block_size = kv_cache_tensor.view(kv_cache_tensor.shape[0], -1).shape
-        assert (
-            block_size >= self.ssm_state_size + self.conv_state_size
-        ), "block_size is too small, please check seq_size_per_block"
-        ssm_states = torch.as_strided(
-            kv_cache_tensor,
-            (
-                kv_cache_tensor.shape[0],
-                self.local_num_v_heads,
-                self.head_v_dim,
-                self.head_k_dim,
-            ),
-            (
-                kv_cache_tensor.stride()[0],
-                self.head_k_dim * self.head_v_dim,
-                self.head_k_dim,
-                1,
-            ),
-            storage_offset=kv_cache_tensor.storage_offset(),
-        )
+        ssm_states = self.linear_cache_converter.get_ssm_state_tensor(kv_cache_tensor)
         return ssm_states
 
 
@@ -223,7 +208,7 @@ class Qwen3NextGatedDeltaNetPrefill(Qwen3NextGatedDeltaNetBase):
                 self.head_v_dim,
                 self.head_k_dim,
                 device=mixed_qkv.device,
-                dtype=mixed_qkv.dtype,
+                dtype=self.ssm_state_dtype,
             )
 
             load_initial_state_from_block_map(
@@ -259,7 +244,7 @@ class Qwen3NextGatedDeltaNetPrefill(Qwen3NextGatedDeltaNetBase):
         if ssm_states is not None:
             store_ssm_state_to_block_map(
                 h,
-                final_state.to(h.dtype),
+                final_state,
                 attn_inputs.prefix_lengths_d,
                 cu_seqlens_without_padding,
                 attn_inputs.kv_cache_kernel_block_id_device,
@@ -366,16 +351,18 @@ class Qwen3NextGatedDeltaNetDecode(Qwen3NextGatedDeltaNetBase):
             ],
             dim=2,
         )
+        g, beta = fused_gdn_gating(self.alog, a, b, self.dt_bias)
 
+        # contiguous will be applyed when call fused_recurrent_gated_delta_rule
+        g = g.view(batch, seq, self.local_num_v_heads)
+        beta = beta.view(batch, seq, self.local_num_v_heads)
         ssm_states = self._get_ssm_states(kv_cache_tensor)
-        core_attn_out, _ = fused_sigmoid_gating_delta_rule_update(
-            A_log=self.alog,
-            a=a,
-            dt_bias=self.dt_bias,
+        core_attn_out, _ = fused_recurrent_gated_delta_rule(
             q=query,
             k=key,
             v=value,
-            b=b,
+            g=g,
+            beta=beta,
             scale=None,
             initial_state=ssm_states,
             inplace_final_state=True,
@@ -383,8 +370,6 @@ class Qwen3NextGatedDeltaNetDecode(Qwen3NextGatedDeltaNetBase):
             seq_size_per_block=seq_size_per_block,
             sequence_lengths=attn_inputs.sequence_lengths_plus_1_d,
             use_qk_l2norm_in_kernel=True,
-            softplus_beta=1.0,
-            softplus_threshold=20.0,
         )
         res = core_attn_out.reshape(
             [-1, core_attn_out.shape[2], core_attn_out.shape[3]]
@@ -637,24 +622,24 @@ class Qwen3NextDecoderLayer(nn.Module):
                 config.activation_type, parallelism_config, weights, config.quant_config
             )
 
-        self.input_layernorm = RMSResNorm(
+        self.input_layernorm = RMSNorm(
             weights[W.pre_ln_gamma], eps=config.layernorm_eps
         )
-        self.post_attention_layernorm = RMSResNorm(
+        self.post_attention_layernorm = RMSNorm(
             weights[W.post_ln_gamma], eps=config.layernorm_eps
         )
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        residual: torch.Tensor,
         fmha_impl: FMHAImplBase,
         kv_cache: Optional[LayerKVCache] = None,
         attention_inputs: Optional[PyAttentionInputs] = None,
         attn_meta: Qwen3NextMetadata = Qwen3NextMetadata(),
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        hidden_states, residual = self.input_layernorm(hidden_states, residual)
-
+    ) -> torch.Tensor:
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+        # Self Attention
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
             fmha_impl=fmha_impl,
@@ -662,12 +647,13 @@ class Qwen3NextDecoderLayer(nn.Module):
             attention_inputs=attention_inputs,
             attn_meta=attn_meta,
         )
-
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-
+        hidden_states = residual + hidden_states
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
-
-        return hidden_states, residual
+        hidden_states = residual + hidden_states
+        return hidden_states
 
 
 class Qwen3NextModel(GptModelBase):
@@ -714,14 +700,16 @@ class Qwen3NextModel(GptModelBase):
                 for idx in range(self.layer_num)
             ]
         )
-        self.norm = RMSResNorm(
+        self.norm = RMSNorm(
             weights.get_global_weight(W.final_ln_gamma), eps=model_config.layernorm_eps
         )
 
-    def forward(self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
+    def word_embedding(self, inputs: PyModelInputs) -> torch.Tensor:
         input_ids: torch.Tensor = inputs.input_ids
-        inputs_embeds = self.embed_tokens(input_ids)
-        hidden_states = inputs_embeds
+        return self.embed_tokens(input_ids)
+
+    def forward(self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
+        hidden_states = self.word_embedding(inputs)
 
         attention_inputs: PyAttentionInputs = inputs.attention_inputs
         prefill_conv1d_meta = None
@@ -735,21 +723,68 @@ class Qwen3NextModel(GptModelBase):
 
         attn_meta = Qwen3NextMetadata(prefill_conv1d_meta, is_target_verify)
 
+        # qwen3_next model has only one full group (group 0): use fmha_impl from input param
+        # if there is a model with more than 1 full groups,
+        # we should prepare fmha_impl for each full group/ fix later
+
         if fmha_impl is None:
             fmha_impl = self.prepare_fmha_impl(inputs)
 
-        residual = torch.zeros_like(hidden_states)
-
         for i, decoder_layer in enumerate(self.layers):
-            select_block_map_for_layer(attention_inputs, i)
-            hidden_states, residual = decoder_layer(
+            # Switch to correct block_map for this layer in hybrid attention mode
+            gid = select_block_map_for_layer(attention_inputs, i)
+            hidden_states = decoder_layer(
                 hidden_states,
-                residual,
                 fmha_impl,
                 kv_cache=self.kv_cache.get_layer_cache(i) if self.kv_cache else None,
                 attention_inputs=attention_inputs,
                 attn_meta=attn_meta,
             )
 
-        hidden_states, residual = self.norm(hidden_states, residual)
+        hidden_states = self.norm(hidden_states)
         return PyModelOutputs(hidden_states, fmha_impl.fmha_params)
+
+
+class Qwen35Model(Qwen3NextModel):
+    def __init__(
+        self,
+        model_config: ModelConfig,
+        parallelism_config: ParallelismConfig,
+        weights: ModelWeights,
+        moe_config,
+        max_generate_batch_size: int,
+        fmha_config=None,
+        py_hw_kernel_config=None,
+        device_resource_config=None,
+    ):
+        super().__init__(
+            model_config,
+            parallelism_config,
+            weights,
+            moe_config,
+            max_generate_batch_size,
+            fmha_config,
+            py_hw_kernel_config,
+            device_resource_config,
+        )
+        self.multimodal_embedding_injector = MultimodalEmbeddingInjector()
+
+    def need_combo_position_ids(self) -> bool:
+        return True
+
+    def word_embedding(self, inputs: PyModelInputs) -> torch.Tensor:
+        input_ids: torch.Tensor = inputs.input_ids
+
+        position_ids = inputs.combo_position_ids
+        token_type_ids = inputs.embedding_inputs.combo_tokens_type_ids
+        text_tokens_mask = inputs.embedding_inputs.text_tokens_mask
+        mm_features = inputs.multimodal_inputs.multimodal_features
+        mm_feature_locs = inputs.multimodal_inputs.mm_features_locs
+
+        inputs_embeds = self.embed_tokens(
+            input_ids, position_ids, token_type_ids, text_tokens_mask
+        )
+        hidden_states = self.multimodal_embedding_injector(
+            inputs_embeds, mm_features, mm_feature_locs
+        )
+        return hidden_states

@@ -2,7 +2,6 @@
 syntax = "proto3";
 import "google/protobuf/wrappers.proto";
 
-
 message TensorPB {
     enum DataType {
         FP32 = 0;
@@ -68,7 +67,7 @@ message GenerateConfigPB {
     bool sp_edit = 24;
     repeated int32 sp_advice_prompt_token_ids = 25;
     bool force_disable_sp_run = 26;
-    bool return_all_probs = 27;
+    int32 return_all_probs = 27;
     bool sp_input_lookup = 28;
     bool can_use_pd_separation = 29;
     bool return_softmax_probs = 30;
@@ -83,7 +82,8 @@ message GenerateConfigPB {
     bool normalized_hidden_states = 39;
     int32 profile_step = 40;
     repeated RoleAddrPB role_addrs = 41;
-    int64 inter_request_id = 42;
+    reserved 42;
+    reserved "inter_request_id";
     bool ignore_eos = 43;
     float presence_penalty = 44;
     float frequency_penalty = 45;
@@ -106,6 +106,8 @@ message MMPreprocessConfigPB {
     int32 fps = 5;
     int32 min_frames = 6;
     int32 max_frames = 7;
+    repeated float crop_positions = 8;
+    int32 mm_timeout_ms = 9;
 }
 
 message MultimodalInputPB {
@@ -122,10 +124,8 @@ message MultimodalInputsPB {
 message MultimodalOutputPB {
     TensorPB multimodal_embedding = 1;
     TensorPB multimodal_pos_id = 2;
-}
-
-message MultimodalOutputsPB {
-    repeated MultimodalOutputPB multimodal_outputs = 1;
+    TensorPB multimodal_deepstack_embeds = 3;
+    repeated int32 split_size = 4;
 }
 
 message GenerateInputPB {
@@ -366,7 +366,8 @@ message UpdateEplbConfigRequestPB {
 
 message TaskInfoPB {
     int64 request_id = 1;
-    int64 inter_request_id = 2;
+    reserved 2;
+    reserved "inter_request_id";
     int64 prefix_length = 3;
     int64 input_length = 4;
     int64 waiting_time_ms = 5;
@@ -396,6 +397,7 @@ message WorkerStatusPB {
     int64 status_version = 12;
     bool alive = 13;
     string precision = 14;
+    int64 latest_finished_version = 15;
 }
 
 message EmbeddingInputPB {
@@ -404,6 +406,7 @@ message EmbeddingInputPB {
     repeated int32 input_lengths = 3;
     int64 request_id = 4;
     repeated MultimodalInputPB multimodal_features = 5;
+    string vit_role_addr = 6;
 }
 
 message EmbeddingHealthRequestPB {
@@ -576,5 +579,7 @@ service RpcService {
 }
 
 service MultimodalRpcService {
-    rpc RemoteMultimodalEmbedding(MultimodalInputsPB) returns (MultimodalOutputsPB);
+    rpc GetWorkerStatus(StatusVersionPB) returns (WorkerStatusPB);
+    rpc GetCacheStatus(CacheVersionPB) returns (CacheStatusPB);
+    rpc RemoteMultimodalEmbedding(MultimodalInputsPB) returns (MultimodalOutputPB);
 }

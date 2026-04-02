@@ -5,7 +5,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 import torch
 
-from rtp_llm.utils.scaffold import SCAFFOLD_QWEN35_MI355X
 from rtp_llm.utils.util import check_with_info
 
 
@@ -273,7 +272,7 @@ def sp_neg1_part_by_head(
     t_0 = torch.split(
         t[:, : head_num * size_per_head], head_num * size_per_head // tp, dim=-1
     )[tp_rank]
-    t_1 = t[:, head_num * size_per_head :]
+    t_1 = t[:, head_num * size_per_head:]
     return torch.concat([t_0, t_1], dim=-1)
 
 
@@ -289,17 +288,9 @@ def sp_moe_neg1(
     ep_rank: int,
     dp: int,
     dp_rank: int,
-    use_stack_weight: bool,
-    moe_pure_tp_mode: bool = False,
     **kwargs: Any,
 ) -> torch.Tensor:
-    if moe_pure_tp_mode:
-        return t.split(t.shape[-1] // tp, dim=-1)[tp_rank]
-    if use_stack_weight:
-        assert len(t.shape) == 3, "t.shape: " + str(t.shape)
-        return t.split(t.shape[0] // ep, dim=0)[ep_rank]
-    else:
-        return t
+    return t
 
 
 def sp_moe_w1(
@@ -310,25 +301,17 @@ def sp_moe_w1(
     ep_rank: int,
     dp: int,
     dp_rank: int,
-    use_stack_weight: bool,
-    moe_pure_tp_mode: bool = False,
     **kwargs: Any,
 ) -> torch.Tensor:
-    # [expert_num, 2*n, k] where dim=1 is gate+up concatenated
-    if moe_pure_tp_mode:
-        t1 = t.reshape([t.shape[0], 2, -1, t.shape[-1]])
-        t2 = torch.split(t1, t1.shape[2] // tp, dim=2)[tp_rank]
-        t2 = t2.reshape([t2.shape[0], -1, t2.shape[-1]])
-        return t2
-    if use_stack_weight:
-        assert len(t.shape) == 3, "t.shape: " + str(t.shape)
-        return t.split(t.shape[0] // ep, dim=0)[ep_rank]
-    else:
-        return t
+    return t
 
 
 def stack_(ts: List[torch.Tensor]):
     return stack_0(ts)
+
+
+def transpose_stack(ts: List[torch.Tensor]):
+    return stack_0(ts).transpose(-1, -2).contiguous()
 
 
 def stack_pad(ts: List[torch.Tensor], moe_align_size: int, dim: int):
@@ -372,7 +355,7 @@ def stack_moe_w1_pad(ts: List[torch.Tensor], moe_align_size: int, dim: int):
         dim: Dimension to pad (1 after stacking)
     """
     gate_ = ts[: len(ts) // 2]
-    up_ = ts[len(ts) // 2 :]
+    up_ = ts[len(ts) // 2:]
     w1 = torch.stack(gate_, dim=0)
     w3 = torch.stack(up_, dim=0)
 
@@ -388,7 +371,6 @@ def stack_moe_w1_pad(ts: List[torch.Tensor], moe_align_size: int, dim: int):
         z = torch.zeros(pad_shape, device=w1.device).half()
         w1 = torch.cat((w1, z), dim=1)
         w3 = torch.cat((w3, z), dim=1)
-
     x = torch.concat([w1, w3], dim=1)
     return x
 
@@ -414,7 +396,7 @@ def stack_0(ts: List[torch.Tensor]) -> torch.Tensor:
 
 def stack_moe_w1(ts: List[torch.Tensor]):
     gate = ts[: len(ts) // 2]
-    up = ts[len(ts) // 2 :]
+    up = ts[len(ts) // 2:]
     ws = []
     for w1, w3 in zip(gate, up):
         ws.append(concat_0([w1, w3]))
@@ -424,7 +406,7 @@ def stack_moe_w1(ts: List[torch.Tensor]):
 
 def stack_moe_w1_s2(ts: List[torch.Tensor]):
     gate = ts[: len(ts) // 2]
-    up = ts[len(ts) // 2 :]
+    up = ts[len(ts) // 2:]
     ws = []
     for w1, w3 in zip(gate, up):
         ws.append(max_scalar([w1, w3]))
@@ -448,34 +430,11 @@ def get_sp_tensor(
         t = t.unsqueeze(0)
     qs = sp_neg1(t[:, :q_hidden], tp, tp_rank)
     if head_num_kv == 1:
-        ks = t[:, q_hidden : q_hidden + kv_hidden]
-        vs = t[:, q_hidden + kv_hidden :]
-    elif SCAFFOLD_QWEN35_MI355X.duplicated_kv_head:
-        # kv_head_num < tp_size: duplicate kv heads across tp ranks
-        kv_head_dim = kv_hidden // head_num_kv
-        heads_per_kv = tp // head_num_kv
-        kv_head_idx = tp_rank // heads_per_kv
-        ks = t[
-            :,
-            q_hidden
-            + kv_head_idx * kv_head_dim : q_hidden
-            + (kv_head_idx + 1) * kv_head_dim,
-        ]
-        vs = t[
-            :,
-            q_hidden
-            + kv_hidden
-            + kv_head_idx * kv_head_dim : q_hidden
-            + kv_hidden
-            + (kv_head_idx + 1) * kv_head_dim,
-        ]
-        # duplicate to fill expected kv_hidden size
-        dup_factor = head_num_kv
-        ks = torch.cat([ks] * dup_factor, dim=-1)
-        vs = torch.cat([vs] * dup_factor, dim=-1)
+        ks = t[:, q_hidden: q_hidden + kv_hidden]
+        vs = t[:, q_hidden + kv_hidden:]
     else:
-        ks = sp_neg1(t[:, q_hidden : q_hidden + kv_hidden], tp, tp_rank)
-        vs = sp_neg1(t[:, q_hidden + kv_hidden :], tp, tp_rank)
+        ks = sp_neg1(t[:, q_hidden: q_hidden + kv_hidden], tp, tp_rank)
+        vs = sp_neg1(t[:, q_hidden + kv_hidden:], tp, tp_rank)
     return torch.concat([qs, ks, vs], dim=1).contiguous()
 
 
@@ -567,32 +526,11 @@ def get_sp_tensor_blocked(
         t = t.unsqueeze(0)
     qs = sp_neg1(t[:, :q_hidden], tp, tp_rank)
     if head_num_kv == 1:
-        ks = t[:, q_hidden : q_hidden + kv_hidden]
-        vs = t[:, q_hidden + kv_hidden :]
-    elif SCAFFOLD_QWEN35_MI355X.duplicated_kv_head:
-        kv_head_dim = kv_hidden // head_num_kv
-        heads_per_kv = tp // head_num_kv
-        kv_head_idx = tp_rank // heads_per_kv
-        ks = t[
-            :,
-            q_hidden
-            + kv_head_idx * kv_head_dim : q_hidden
-            + (kv_head_idx + 1) * kv_head_dim,
-        ]
-        vs = t[
-            :,
-            q_hidden
-            + kv_hidden
-            + kv_head_idx * kv_head_dim : q_hidden
-            + kv_hidden
-            + (kv_head_idx + 1) * kv_head_dim,
-        ]
-        dup_factor = head_num_kv
-        ks = torch.cat([ks] * dup_factor, dim=-1)
-        vs = torch.cat([vs] * dup_factor, dim=-1)
+        ks = t[:, q_hidden: q_hidden + kv_hidden]
+        vs = t[:, q_hidden + kv_hidden:]
     else:
-        ks = sp_neg1(t[:, q_hidden : q_hidden + kv_hidden], tp, tp_rank)
-        vs = sp_neg1(t[:, q_hidden + kv_hidden :], tp, tp_rank)
+        ks = sp_neg1(t[:, q_hidden: q_hidden + kv_hidden], tp, tp_rank)
+        vs = sp_neg1(t[:, q_hidden + kv_hidden:], tp, tp_rank)
     return torch.concat([qs, ks, vs], dim=1).contiguous()
 
 
@@ -628,7 +566,7 @@ def sp_attn_gate(
     local_head_num = head_num // tp
     start_idx = local_head_num * tp_rank
     end_idx = local_head_num * (tp_rank + 1)
-    t = t[:, start_idx * size_per_head : end_idx * size_per_head]
+    t = t[:, start_idx * size_per_head: end_idx * size_per_head]
     return t
 
 
@@ -699,7 +637,7 @@ def sp_0_pad8(t: torch.Tensor, tp: int, tp_rank: int, **kwargs: Any) -> torch.Te
         if len(t.shape) == 2:
             return torch.concat(
                 [
-                    t[tp_rank * per_slice_size :, :],
+                    t[tp_rank * per_slice_size:, :],
                     torch.zeros([pad_size, t.shape[1]], device=t.device).to(t.dtype),
                 ],
                 dim=0,
@@ -707,16 +645,16 @@ def sp_0_pad8(t: torch.Tensor, tp: int, tp_rank: int, **kwargs: Any) -> torch.Te
         else:
             return torch.concat(
                 [
-                    t[tp_rank * per_slice_size :, :],
+                    t[tp_rank * per_slice_size:, :],
                     torch.zeros([pad_size], device=t.device).to(t.dtype),
                 ],
                 dim=0,
             )
     else:
         if len(t.shape) == 2:
-            return t[tp_rank * per_slice_size : (tp_rank + 1) * per_slice_size, :]
+            return t[tp_rank * per_slice_size: (tp_rank + 1) * per_slice_size, :]
         else:
-            return t[tp_rank * per_slice_size : (tp_rank + 1) * per_slice_size]
+            return t[tp_rank * per_slice_size: (tp_rank + 1) * per_slice_size]
 
 
 def merge_qkv_hf(ts: List[torch.Tensor]):
@@ -1089,10 +1027,23 @@ def sp_0_w13(
     return torch.concat([w1, w3], dim=0)
 
 
+def convert_gate_up_proj_(ts: List[torch.Tensor]) -> torch.Tensor:
+    tensor = identity(ts)
+    tensor = tensor.permute(0, 2, 1).contiguous()  # (experts, 1536, hidden)
+    split_size = tensor.shape[1] // 2
+    gate, up = torch.split(tensor, split_size, dim=1)
+    return torch.cat([up, gate], dim=1)
+
+
+def convert_down_proj_(ts: List[torch.Tensor]) -> torch.Tensor:
+    tensor = identity(ts)
+    return tensor.permute(0, 2, 1).contiguous()
+
+
 def split_slopes_tp(slopes: torch.Tensor, head_num: int, tp: int, tp_rank: int):
     local_head_num = 1 if head_num == 1 else head_num // tp
     start_pos = local_head_num * tp_rank
-    return slopes[start_pos : start_pos + local_head_num]
+    return slopes[start_pos: start_pos + local_head_num]
 
 
 def get_slopes(n: int) -> List[float]:
@@ -1116,6 +1067,46 @@ def slopes(ts: List[torch.Tensor], n: int):
     slopes = torch.Tensor(get_slopes(n))
     return slopes
 
+def merge_qkvz_transpose_reorder(
+    ts: List[torch.Tensor],
+):
+    """Merge and reorder qkv and z tensors for Qwen3.5Moe.
+
+    Merges qkv (shape: [token, head_num_k * dim_q + head_num_k * dim_k + head_num_v * dim_v])
+    and z (shape: [token, head_num_v, dim_v * group_v]) into a single transposed tensor.
+    """
+    qkv = ts[0]
+    z = ts[1]
+    return torch.cat([qkv, z], dim=0).T
+
+def merge_ba_transpose_reorder(
+    ts: List[torch.Tensor],
+):
+    """Merge and reorder b and a tensors, then transpose."""
+    b = ts[0]
+    a = ts[1]
+    return torch.cat([b, a], dim=0).T
+
+def split_q_gate(ts: List[torch.Tensor], head_num: int, head_dim: int, part: int):
+    """Split q_gate tensor into q or gate part.
+
+    This function is used for both weight and scale (if fp8_per_block).
+    For weight, new_head_dim is head_dim; for scale, it's head_dim / block_size.
+    """
+    dim0, dim1 = ts[0].shape
+    assert (
+        dim0 % (head_num * 2) == 0
+    ), f"dim0 % (head_num * 2) != 0, dim0: {dim0}, head_num: {head_num}, head_dim: {head_dim}, dim1: {dim1}"
+    new_head_dim = dim0 // (head_num * 2)
+    t = ts[0].reshape(head_num, 2, new_head_dim, dim1)
+    if part == 0:
+        return t[:, 0, :, :].reshape(-1, dim1)
+    else:
+        return t[:, 1, :, :].reshape(-1, dim1)
+
+def plus_one(ts: List[torch.Tensor]):
+    """Add one to the tensor. Qwen3Next uses gemma_rms_norm."""
+    return ts[0] + 1
 
 class W:
     # global

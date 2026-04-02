@@ -86,8 +86,8 @@ def platform_deps():
     return select({
         "@//:using_arm": [],
         "@//:using_cuda12_arm": [],
-        "@//:using_rocm": ["pyyaml==6.0.2","decord==0.6.0"],
-        "//conditions:default": ["decord==0.6.0"],
+        "@//:using_rocm": ["pyyaml==6.0.2","decord==0.6.0", "av==16.1.0"],
+        "//conditions:default": ["decord==0.6.0", "av==16.1.0"],
     })
 
 def torch_deps():
@@ -177,7 +177,7 @@ def cuda_register():
     native.alias(
         name = "cuda_register",
         actual = select({
-            "//conditions:default": "//rtp_llm/cpp/devices/cuda_impl:gpu_register",
+            "//conditions:default": "//rtp_llm/cpp/cuda/ops:gpu_register",
         }),
         visibility = ["//visibility:public"],
     )
@@ -204,12 +204,7 @@ def select_py_bindings():
         "//:using_rocm": [
             "//rtp_llm/models_py/bindings/rocm:rocm_bindings_register"
         ],
-        "@//:using_arm": [
-            "//rtp_llm/cpp/devices/arm_impl:arm_cpu_impl",
-            "//rtp_llm/models_py/bindings:dummy_register",
-        ],
         "//conditions:default": [
-            "//rtp_llm/cpp/devices/cpu_impl:cpu_impl",
             "//rtp_llm/models_py/bindings:dummy_register",
         ],
     })

@@ -18,9 +18,9 @@ from rtp_llm.ops.compute_ops import (
     PyAttentionInputs,
     PyModelInputs,
     PyModelOutputs,
-    get_device,
+    get_exec_ctx,
     get_typemeta,
-    init_device,
+    init_exec_ctx,
 )
 from rtp_llm.tools.api.hf_model_helper import get_model_info_from_hf
 from rtp_llm.utils.model_weight import W
@@ -60,6 +60,7 @@ class AutoModel:
             embedding_config=self.py_env_configs.embedding_config,
             quantization_config=self.py_env_configs.quantization_config,
             render_config=self.py_env_configs.render_config,
+            vit_config=self.py_env_configs.vit_config,
         )
 
         # Update engine_config based on model_config
@@ -72,7 +73,7 @@ class AutoModel:
         self.gpt_model = ModelFactory._create_model(
             model_config=model_config,
             engine_config=engine_config,
-            vit_config=None,
+            vit_config=self.py_env_configs.vit_config,
             merge_lora=False,
         )
 
@@ -83,7 +84,7 @@ class AutoModel:
         self.model_config = self.gpt_model.model_config
 
         # init device - use engine_config's configs and model_config's eplb_config
-        init_device(
+        init_exec_ctx(
             parallelism_config=engine_config.parallelism_config,
             model_config=model_config,
             eplb_config=model_config.eplb_config,
@@ -136,13 +137,6 @@ class AutoModel:
 
         # Set ModelSpecificConfig.load_python_model = True (equivalent to LOAD_PYTHON_MODEL=1)
         self.py_env_configs.model_specific_config.load_python_model = True
-
-        # Set DeviceResourceConfig.device_reserve_memory_bytes (equivalent to DEVICE_RESERVE_MEMORY_BYTES)
-        # Default: 2GB = 2 * 1024 * 1024 * 1024 bytes
-        if self.py_env_configs.device_resource_config.device_reserve_memory_bytes == 0:
-            self.py_env_configs.device_resource_config.device_reserve_memory_bytes = (
-                2 * 1024 * 1024 * 1024
-            )
 
     def _init_kv_cache(self):
         self.kv_cache = KVCache()

@@ -14,7 +14,6 @@ from rtp_llm.models_py.modules import (
     FMHAImplBase,
     RMSNorm,
 )
-
 from rtp_llm.ops import HWKernelConfig, ParallelismConfig
 from rtp_llm.ops.compute_ops import LayerKVCache, PyModelInputs, PyModelOutputs
 from rtp_llm.utils.model_weight import W
@@ -63,7 +62,9 @@ class Qwen3DecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
         # Self Attention
         hidden_states = self.self_attn(
-            hidden_states=hidden_states, fmha_impl=fmha_impl, kv_cache=kv_cache
+            hidden_states=hidden_states,
+            fmha_impl=fmha_impl,
+            kv_cache=kv_cache,
         )
         hidden_states = residual + hidden_states
 

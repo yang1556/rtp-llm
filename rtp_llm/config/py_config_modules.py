@@ -33,7 +33,6 @@ from rtp_llm.ops import (
 consume_s = time.time() - st
 print(f"import rtp_llm.ops took {consume_s:.2f}s")
 
-
 DEFAULT_START_PORT = 8088
 COORDINATOR_INFO_PORT_NUM = 11
 MIN_WORKER_INFO_PORT_NUM = 8
@@ -45,9 +44,11 @@ class ServerConfig:
 
     def __init__(self):
         self.frontend_server_count = 4
+        self.vit_server_count = 1
         self.start_port = DEFAULT_START_PORT
         self.timeout_keep_alive = 5
         self.frontend_server_id = 0
+        self.vit_server_id = 0
         self.rank_id = 0
         self.ip: str = ""
         self.worker_info_port_num: int = MIN_WORKER_INFO_PORT_NUM
@@ -94,9 +95,11 @@ class ServerConfig:
     def to_string(self):
         return (
             f"frontend_server_count: {self.frontend_server_count}\n"
+            f"vit_server_count: {self.vit_server_count}\n"
             f"start_port: {self.start_port}\n"
             f"timeout_keep_alive: {self.timeout_keep_alive}\n"
             f"frontend_server_id: {self.frontend_server_id}\n"
+            f"vit_server_id: {self.vit_server_id}\n"
             f"rank_id: {self.rank_id}\n"
             f"worker_info_port_num: {self.worker_info_port_num}\n"
             f"shutdown_timeout: {self.shutdown_timeout}\n"
@@ -239,6 +242,16 @@ class VitConfig:
         self.igraph_vipserver: int = 0
         self.igraph_table_name: str = ""
         self.default_key: Optional[str] = None
+        self.mm_preprocess_max_workers: int = 4
+        self.mm_batch_size: int = 1
+        self.biencoder_preprocess: bool = False
+        self.extra_input_in_mm_embedding = ""
+        self.mm_timeout_ms: Optional[int] = None
+        self.extra_data_path: str = ""
+        self.local_extra_data_path: str = ""
+        self.disable_access_log: bool = False
+        self.use_local_preprocess: bool = False
+        self.vit_proxy_load_balance_strategy: str = "round_robin"
 
     def to_string(self):
         return (
@@ -253,7 +266,17 @@ class VitConfig:
             f"igraph_search_dom: {self.igraph_search_dom}\n"
             f"igraph_vipserver: {self.igraph_vipserver}\n"
             f"igraph_table_name: {self.igraph_table_name}\n"
-            f"igraph_default_key: {self.default_key}"
+            f"igraph_default_key: {self.default_key}\n"
+            f"mm_preprocess_max_workers: {self.mm_preprocess_max_workers}\n"
+            f"mm_batch_size: {self.mm_batch_size}\n"
+            f"biencoder_preprocess: {self.biencoder_preprocess}\n"
+            f"extra_input_in_mm_embedding: {self.extra_input_in_mm_embedding}\n"
+            f"mm_timeout_ms: {self.mm_timeout_ms}\n"
+            f"extra_data_path: {self.extra_data_path}\n"
+            f"local_extra_data_path: {self.local_extra_data_path}\n"
+            f"disable_access_log: {self.disable_access_log}\n"
+            f"use_local_preprocess: {self.use_local_preprocess}\n"
+            f"vit_proxy_load_balance_strategy: {self.vit_proxy_load_balance_strategy}"
         )
 
 
@@ -311,13 +334,9 @@ class QuantizationConfig:
 class EmbeddingConfig:
     def __init__(self):
         self.embedding_model: int = 0
-        self.extra_input_in_mm_embedding = ""
 
     def to_string(self):
-        return (
-            f"embedding_model: {self.embedding_model}\n"
-            f"extra_input_in_mm_embedding: {self.extra_input_in_mm_embedding}"
-        )
+        return f"embedding_model: {self.embedding_model}"
 
 
 class RoleConfig:
@@ -359,6 +378,23 @@ class RoleConfig:
             return RoleType.FRONTEND
         else:
             return RoleType.PDFUSION
+
+
+class MasterConfig:
+    def __init__(self):
+        self.master_queue_reject_threshold: int = 100000
+        self.master_default_timeout_ms: int = 3600000
+        self.master_max_connect_pool_size: int = 100000
+        # Session total timeout in seconds. If < 0: auto (3600 when queue mode, 0.5 otherwise).
+        self.master_session_timeout_s: float = -1
+
+    def to_string(self):
+        return (
+            f"master_queue_reject_threshold: {self.master_queue_reject_threshold}\n"
+            f"master_default_timeout_ms: {self.master_default_timeout_ms}\n"
+            f"master_max_connect_pool_size: {self.master_max_connect_pool_size}\n"
+            f"master_session_timeout_s: {self.master_session_timeout_s}"
+        )
 
 
 class JITConfig:
@@ -421,6 +457,7 @@ class PyEnvConfigs:
         self.misc_config = PyMiscellaneousConfig()
         self.concurrency_config = ConcurrencyConfig()
         self.moe_config = MoeConfig()
+        self.master_config: MasterConfig = MasterConfig()
         self.jit_config = JITConfig()
         self.py_hw_kernel_config: HWKernelConfig = HWKernelConfig()
         self.sp_config = SpeculativeExecutionConfig()
@@ -464,6 +501,7 @@ class PyEnvConfigs:
             "[misc_config]\n" + self.misc_config.to_string() + "\n\n"
             "[concurrency_config]\n" + self.concurrency_config.to_string() + "\n\n"
             "[moe_config]\n" + self.moe_config.to_string() + "\n\n"
+            "[master_config]\n" + self.master_config.to_string() + "\n\n"
             "[jit_config]\n" + self.jit_config.to_string() + "\n\n"
             "[py_hw_kernel_config]\n" + self.py_hw_kernel_config.to_string() + "\n\n"
             "[sp_config]\n" + self.sp_config.to_string() + "\n\n"

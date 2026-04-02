@@ -1,15 +1,18 @@
 import json
 import os
+from typing import Any, Dict
 
 from rtp_llm.config.model_config import ModelConfig
 from rtp_llm.model_factory_register import register_model
 from rtp_llm.model_loader.ffn_weight import (
     FfnAtomicWeight,
     FfnConfig,
+    FfnWeight,
     MoeAtomicWeight,
     MoeConfig,
-    MoeWithSharedWeight,
+    MoeWeight,
 )
+from rtp_llm.model_loader.weight_module import AtomicWeight
 from rtp_llm.models.qwen_v2 import QWenV2, QWenV2Weight
 from rtp_llm.utils.model_weight import (
     CkptWeightInfo,
@@ -39,14 +42,8 @@ class QWenV2MoeWeight(QWenV2Weight):
             align_size=self._align_size,
         )
         return [
-            MoeWithSharedWeight(
+            FfnWeight(
                 sub_weights=[
-                    MoeAtomicWeight(
-                        W.moe_gate,
-                        [CkptWeightInfo("model.layers.{i}.mlp.gate.weight", identity)],
-                        transpose,
-                        config=moe_config,
-                    ),
                     FfnAtomicWeight(
                         W.ffn_w1,
                         [
@@ -80,6 +77,17 @@ class QWenV2MoeWeight(QWenV2Weight):
                         transpose,
                         config=ffn_config,
                     ),
+                ],
+                config=ffn_config,
+            ),
+            MoeWeight(
+                sub_weights=[
+                    MoeAtomicWeight(
+                        W.moe_gate,
+                        [CkptWeightInfo("model.layers.{i}.mlp.gate.weight", identity)],
+                        transpose,
+                        config=moe_config,
+                    ),
                     MoeAtomicWeight(
                         W.moe_w1,
                         [
@@ -108,20 +116,19 @@ class QWenV2MoeWeight(QWenV2Weight):
                         stack_,
                         config=moe_config,
                     ),
-                    MoeAtomicWeight(
-                        W.shared_expert_gate,
-                        [
-                            CkptWeightInfo(
-                                "model.layers.{i}.mlp.shared_expert_gate.weight",
-                                identity,
-                            )
-                        ],
-                        transpose,
-                        config=moe_config,
-                    ),
                 ],
                 config=moe_config,
-            )
+            ),
+            AtomicWeight(
+                W.shared_expert_gate,
+                [
+                    CkptWeightInfo(
+                        "model.layers.{i}.mlp.shared_expert_gate.weight",
+                        identity,
+                    )
+                ],
+                transpose,
+            ),
         ]
 
 
@@ -129,17 +136,21 @@ class Qwen2Moe(QWenV2):
     @classmethod
     def _create_config(cls, ckpt_path: str):
         config = super()._create_config(ckpt_path)
-        Qwen2Moe.load_moe_config(ckpt_path, config)
+        Qwen2Moe._from_hf(config, ckpt_path)
         return config
 
     @classmethod
-    def load_moe_config(cls, ckpt_path: str, config: ModelConfig):
+    def _from_hf(cls, config: ModelConfig, ckpt_path: str):
         config_path = os.path.join(ckpt_path, "config.json")
         if not os.path.exists(config_path):
             raise Exception("qwen2 moe should have config.json")
         with open(config_path) as reader:
             content = reader.read()
             config_json = json.loads(content)
+        Qwen2Moe.load_moe_config(config, config_json)
+
+    @classmethod
+    def load_moe_config(cls, config: ModelConfig, config_json: Dict[str, Any]):
         config.moe_k = config_json["num_experts_per_tok"]
         config.expert_num = config_json["num_experts"]
         # Set inter_size and moe_inter_size for hybrid MoE

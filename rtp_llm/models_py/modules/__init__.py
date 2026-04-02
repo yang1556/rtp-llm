@@ -10,6 +10,8 @@ from rtp_llm.models_py.modules.base import (
     IndexerOp,
     LayerNorm,
     LayerNormTorch,
+    MultimodalDeepstackInjector,
+    MultimodalEmbeddingInjector,
     QKRMSNorm,
     RMSNorm,
     RMSNormTorch,
@@ -61,4 +63,7 @@ __all__ = [
     "DenseMLP",
     # MoE gating ops
     "SigmoidGateScaleAdd",
+    # Multimodal modules
+    "MultimodalDeepstackInjector",
+    "MultimodalEmbeddingInjector",
 ]

@@ -5,10 +5,11 @@
 #include <map>
 #include <vector>
 #include "rtp_llm/cpp/config/RoleTypes.h"
+#include "rtp_llm/cpp/core/Types.h"
 
 namespace rtp_llm {
 
-/** NCCL communication config (ip + ports). When set, DeviceFactory::initDevices uses this
+/** NCCL communication config (ip + ports). When set, initExecCtx uses this
  * instead of ParallelismConfig for master_ip and tp/dp_tp/ffn_tp ports. Aligns with Python NcclCommConfig. */
 struct NcclCommConfig {
     std::string master_ip   = "";
@@ -145,19 +146,20 @@ struct KVCacheConfig {
     int64_t                                 memory_cache_sync_timeout_ms = 10000;
     int                                     linear_step                  = 1;  // for linear attention cache reuse
     // Fields merged from PyKvCacheConfig
-    int     int8_kv_cache                = 0;
-    int     fp8_kv_cache                 = 0;
-    int64_t kv_cache_mem_mb              = -1;
-    int     seq_size_per_block           = 64;
-    int     kernel_seq_size_per_block    = 0;
-    int     test_block_num               = 0;
-    int     use_block_cache              = -1;  // -1 means not set, use Optional<int> equivalent
-    bool    enable_device_cache          = true;
-    bool    enable_memory_cache          = false;
-    bool    enable_remote_cache          = false;
-    bool    write_cache_sync             = false;
-    bool    enable_tiered_memory_cache   = false;
-    int64_t device_cache_min_free_blocks = 0;
+    int         int8_kv_cache                = 0;
+    int         fp8_kv_cache                 = 0;
+    std::string ssm_state_dtype              = "bf16";
+    int64_t     kv_cache_mem_mb              = -1;
+    int         seq_size_per_block           = 64;
+    int         kernel_seq_size_per_block    = 0;
+    int         test_block_num               = 0;
+    int         use_block_cache              = -1;  // -1 means not set, use Optional<int> equivalent
+    bool        enable_device_cache          = true;
+    bool        enable_memory_cache          = false;
+    bool        enable_remote_cache          = false;
+    bool        write_cache_sync             = false;
+    bool        enable_tiered_memory_cache   = false;
+    int64_t     device_cache_min_free_blocks = 0;
 
     // Remote connector configuration fields
     bool        reco_enable_vipserver                = false;
@@ -229,13 +231,11 @@ struct HWKernelConfig {
 };
 
 struct DeviceResourceConfig {
-    int64_t     device_reserve_memory_bytes = -1073741824;
-    int64_t     host_reserve_memory_bytes   = 4LL * 1024 * 1024 * 1024;
-    int         overlap_math_sm_count       = 0;
-    int         overlap_comm_type           = 0;
-    int         m_split                     = 0;
-    bool        enable_comm_overlap         = true;
-    int         enable_layer_micro_batch    = 0;
+    int         overlap_math_sm_count    = 0;
+    int         overlap_comm_type        = 0;
+    int         m_split                  = 0;
+    bool        enable_comm_overlap      = true;
+    int         enable_layer_micro_batch = 0;
     std::string to_string() const;
 };
 
@@ -256,8 +256,7 @@ struct MoeConfig {
 };
 
 struct ModelSpecificConfig {
-    int64_t     max_lora_model_size = -1;
-    bool        load_python_model   = false;
+    bool        load_python_model = false;
     std::string to_string() const;
 };
 
@@ -519,6 +518,8 @@ struct LinearAttentionConfig {
     int         linear_num_key_heads   = 0;
     int         linear_num_value_heads = 0;
     int         linear_value_head_dim  = 0;
+    DataType    ssm_state_dtype        = DataType::TYPE_BF16;
+    DataType    conv_state_dtype       = DataType::TYPE_BF16;
     std::string to_string() const;
 };
 

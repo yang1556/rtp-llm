@@ -120,6 +120,7 @@ std::string KVCacheConfig::to_string() const {
         << "linear_step: " << linear_step << "\n"
         << "int8_kv_cache: " << int8_kv_cache << "\n"
         << "fp8_kv_cache: " << fp8_kv_cache << "\n"
+        << "ssm_state_dtype: " << ssm_state_dtype << "\n"
         << "kv_cache_mem_mb: " << kv_cache_mem_mb << "\n"
         << "seq_size_per_block: " << seq_size_per_block << "\n"
         << "kernel_seq_size_per_block: " << kernel_seq_size_per_block << "\n"
@@ -161,7 +162,9 @@ std::string LinearAttentionConfig::to_string() const {
         << "linear_key_head_dim: " << linear_key_head_dim << "\n"
         << "linear_num_key_heads: " << linear_num_key_heads << "\n"
         << "linear_num_value_heads: " << linear_num_value_heads << "\n"
-        << "linear_value_head_dim: " << linear_value_head_dim;
+        << "linear_value_head_dim: " << linear_value_head_dim << "\n"
+        << "ssm_state_dtype: " << getDataTypeStr(ssm_state_dtype) << "\n"
+        << "conv_state_dtype: " << getDataTypeStr(conv_state_dtype);
     return oss.str();
 }
 // HybridAttentionConfig
@@ -197,9 +200,7 @@ std::string HWKernelConfig::to_string() const {
 // DeviceResourceConfig
 std::string DeviceResourceConfig::to_string() const {
     std::ostringstream oss;
-    oss << "device_reserve_memory_bytes: " << device_reserve_memory_bytes << "\n"
-        << "host_reserve_memory_bytes: " << host_reserve_memory_bytes << "\n"
-        << "overlap_math_sm_count: " << overlap_math_sm_count << "\n"
+    oss << "overlap_math_sm_count: " << overlap_math_sm_count << "\n"
         << "overlap_comm_type: " << overlap_comm_type << "\n"
         << "m_split: " << m_split << "\n"
         << "enable_comm_overlap: " << enable_comm_overlap << "\n"
@@ -228,7 +229,6 @@ std::string MoeConfig::to_string() const {
 // ModelSpecificConfig
 std::string ModelSpecificConfig::to_string() const {
     std::ostringstream oss;
-    oss << "max_lora_model_size: " << max_lora_model_size << "\n";
     oss << "load_python_model:" << load_python_model << "\n";
     return oss.str();
 }

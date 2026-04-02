@@ -1,7 +1,6 @@
 #pragma once
 
 #include "rtp_llm/cpp/engine_base/stream/GenerateStream.h"
-#include "rtp_llm/cpp/core/Buffer.h"
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -107,18 +106,31 @@ public:
         return decode_streams_;
     }
 
-    bool needReturnAllProbs() const {
+    bool hasMMDeepstackEmbed() const {
         for (auto& stream : context_streams_) {
-            if (stream->getReturnAllProbs()) {
-                return true;
-            }
-        }
-        for (auto& stream : decode_streams_) {
-            if (stream->getReturnAllProbs()) {
+            if (stream->hasMultimodalDeepstackEmbeds()) {
                 return true;
             }
         }
         return false;
+    }
+
+    ReturnAllProbsMode needReturnAllProbs() const {
+        // get the max return all probs mode from all streams
+        ReturnAllProbsMode return_all_probs = ReturnAllProbsMode::NONE;
+        for (auto& stream : context_streams_) {
+            auto cur_return_all_probs = stream->getReturnAllProbs();
+            if (cur_return_all_probs > return_all_probs) {
+                return_all_probs = cur_return_all_probs;
+            }
+        }
+        for (auto& stream : decode_streams_) {
+            auto cur_return_all_probs = stream->getReturnAllProbs();
+            if (cur_return_all_probs > return_all_probs) {
+                return_all_probs = cur_return_all_probs;
+            }
+        }
+        return return_all_probs;
     }
 
     bool needReturnCumLogProbs() const {

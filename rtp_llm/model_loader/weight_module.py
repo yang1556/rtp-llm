@@ -46,9 +46,6 @@ class WeightModule(ABC):
         super().__init_subclass__(**kwargs)
         cls._registry[cls.__name__] = cls
 
-    def get_components(self):
-        return [self]
-
     @property
     def lora_a_name(self):
         return f"{self.name}.{self.lora_A_suffix}"
@@ -448,8 +445,6 @@ class AtomicWeight(WeightModule):
             head_num=load_config.head_num,
             head_num_kv=load_config.head_num_kv,
             size_per_head=load_config.size_per_head,
-            use_stack_weight=load_config.use_stack_weight,
-            moe_pure_tp_mode=load_config.moe_pure_tp_mode,
             bits=load_config.bit,
         )
 
@@ -665,6 +660,9 @@ class AtomicWeight(WeightModule):
     def _get_split_func(self):
         return W.gpt_style_tp_strategy[self.name]
 
+    def get_components(self):
+        return [self]
+
     @classmethod
     def support(
         cls, quant_config: QuantizationConfig, src_weight_info: WeightModule
@@ -687,44 +685,6 @@ class QuantWeight(WeightModule):
     def __init__(self, name: str, quant_config, *args, **kwargs):
         super().__init__(name)
         self.quant_config = quant_config
-
-
-class MMAtomicWeight(AtomicWeight):
-    def __init__(
-        self,
-        name: str,
-        weights: List[CkptWeightInfo],
-        process_fun: Callable[[List[torch.Tensor]], torch.Tensor] = identity,
-        data_type: Optional[torch.dtype] = None,
-        split_func: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
-        **kwargs,
-    ) -> None:
-        super().__init__(name, weights, process_fun, data_type, **kwargs)
-        self.split_func = split_func
-
-    def _get_split_func(self):
-        return self.split_func
-
-
-class CustomAtomicWeight(AtomicWeight):
-    """自定义权重组件"""
-
-    prefix = "__custom__."
-
-    def __init__(
-        self,
-        name: str,
-        weights: List[CkptWeightInfo],
-        process_fun: Callable[[List[torch.Tensor]], torch.Tensor] = identity,
-        data_type: Optional[torch.dtype] = None,
-        split_func: Optional[Callable[[torch.Tensor], torch.Tensor]] = sp_id,
-        **kwargs,
-    ) -> None:
-        super().__init__(name, weights, process_fun, data_type, **kwargs)
-        self.split_func = split_func
-
-    def _get_split_func(self):
-        return self.split_func
 
 
 class CustomAtomicWeight(AtomicWeight):
@@ -760,8 +720,6 @@ class CompositeWeight(WeightModule):
         )
 
     def get_components(self):
-        if isinstance(self, QuantWeight):
-            return [self]
         res = []
         for sub_weight in self.sub_weights.values():
             res.extend(sub_weight.get_components())

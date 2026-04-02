@@ -15,8 +15,8 @@ using namespace std;
 namespace rtp_llm {
 
 grpc::Status LocalRpcServer::init(const EngineInitParams&                       maga_init_params,
-                                  py::object                                    mm_process_engine,
-                                  std::unique_ptr<ProposeModelEngineInitParams> propose_params) {
+                                  std::unique_ptr<ProposeModelEngineInitParams> propose_params,
+                                  py::object                                    mm_process_engine) {
     meta_.reset(new RpcServerRuntimeMeta());
     maga_init_params_ = maga_init_params;
     weight_manager_   = maga_init_params.weight_manager;
@@ -30,18 +30,14 @@ grpc::Status LocalRpcServer::init(const EngineInitParams&                       
                                 "running engine init with gil held may cause program hang, please check");
         engine_.reset(new NormalEngine(maga_init_params, std::move(propose_params)));
     }
-    if (!mm_process_engine.is_none()) {
-        auto vit_separation = maga_init_params.vit_config.vit_separation;
-        if (vit_separation == VitSeparation::VIT_SEPARATION_REMOTE) {
-            mm_processor_.reset(new RemoteMultimodalProcessor(mm_process_engine,
-                                                              maga_init_params.model_config_.mm_model_config,
+    if (maga_init_params.model_config_.mm_model_config.is_multimodal) {
+        if (mm_process_engine.is_none()) {
+            mm_processor_.reset(new RemoteMultimodalProcessor(maga_init_params.model_config_.mm_model_config,
                                                               maga_init_params.model_config_.max_seq_len));
-        } else if (vit_separation == VitSeparation::VIT_SEPARATION_LOCAL) {
+        } else {
             mm_processor_.reset(new LocalMultimodalProcessor(mm_process_engine,
                                                              maga_init_params.model_config_.mm_model_config,
                                                              maga_init_params.model_config_.max_seq_len));
-        } else {
-            return grpc::Status(grpc::StatusCode::INTERNAL, "invalid vit separation value in config");
         }
     }
 
@@ -150,8 +146,6 @@ grpc::Status LocalRpcServer::GenerateStreamCall(grpc::ServerContext*            
     }
     CHECK_ERROR_STATUS(generate_context);
 
-    input->lora_id  = engine_->getLoraManager()->getLoraId(input->generate_config->adapter_name);
-    auto lora_guard = lora::LoraResourceGuard(engine_->getLoraManager(), input->generate_config->adapter_name);
     RTP_LLM_LOG_DEBUG("request [%ld] trans to stream success", request_id);
     {
         RTP_LLM_PROFILE_SCOPE("rpc.enqueue_engine");
@@ -206,7 +200,6 @@ grpc::Status LocalRpcServer::GetWorkerStatus(grpc::ServerContext*   context,
     for (const auto& task : engine_schedule_info.running_task_info_list) {
         TaskInfoPB* task_info = response->add_running_task_info();
         task_info->set_request_id(task.request_id);
-        task_info->set_inter_request_id(task.inter_request_id);
         task_info->set_prefix_length(task.prefix_length);
         task_info->set_input_length(task.input_length);
         task_info->set_waiting_time_ms(task.waiting_time_ms);
@@ -219,7 +212,6 @@ grpc::Status LocalRpcServer::GetWorkerStatus(grpc::ServerContext*   context,
     for (const auto& task : engine_schedule_info.finished_task_info_list) {
         TaskInfoPB* task_info = response->add_finished_task_list();
         task_info->set_request_id(task.request_id);
-        task_info->set_inter_request_id(task.inter_request_id);
         task_info->set_prefix_length(task.prefix_length);
         task_info->set_input_length(task.input_length);
         task_info->set_waiting_time_ms(task.waiting_time_ms);
@@ -231,6 +223,7 @@ grpc::Status LocalRpcServer::GetWorkerStatus(grpc::ServerContext*   context,
     response->set_dp_size(status_info.dp_size);
     response->set_tp_size(status_info.tp_size);
     response->set_status_version(status_info.status_version);
+    response->set_latest_finished_version(status_info.latest_finished_version);
     response->set_alive(status_info.alive);
     response->set_precision(status_info.precision);
     reportWorkerStatusTime(request_begin_time_us, request_after_ws_time_us);
@@ -259,12 +252,13 @@ WorkerStatusInfo LocalRpcServer::getWorkerStatusInfo(int64_t latest_finished_ver
         default:
             status_info.role = "RoleType.UNKNOWN";
     }
-    status_info.dp_size        = maga_init_params_.parallelism_config.dp_size;
-    status_info.tp_size        = maga_init_params_.parallelism_config.tp_size;
-    status_info.dp_rank        = maga_init_params_.parallelism_config.dp_rank;
-    status_info.status_version = currentTimeUs();
-    status_info.alive          = true;
-    auto quant_method          = maga_init_params_.model_config_.quant_algo.getQuantMethod();
+    status_info.dp_size                 = maga_init_params_.parallelism_config.dp_size;
+    status_info.tp_size                 = maga_init_params_.parallelism_config.tp_size;
+    status_info.dp_rank                 = maga_init_params_.parallelism_config.dp_rank;
+    status_info.status_version          = currentTimeUs();
+    status_info.latest_finished_version = status_info.engine_schedule_info.latest_finished_version;
+    status_info.alive                   = true;
+    auto quant_method                   = maga_init_params_.model_config_.quant_algo.getQuantMethod();
 
     switch (quant_method) {
         case QuantMethod::WeightOnlyPerCol:
@@ -311,15 +305,6 @@ KVCacheInfo LocalRpcServer::getCacheStatusInfo(int64_t latest_version, bool need
     return cache_info;
 }
 
-void LocalRpcServer::addLora(const std::string&                        adapter_name,
-                             const rtp_llm::lora::loraLayerWeightsMap& lora_a_weights,
-                             const rtp_llm::lora::loraLayerWeightsMap& lora_b_weights) {
-    engine_->addLora(adapter_name, lora_a_weights, lora_b_weights);
-}
-void LocalRpcServer::removeLora(const std::string& adapter_name) {
-    engine_->removeLora(adapter_name);
-}
-
 size_t LocalRpcServer::onflightRequestNum() {
     return onflight_requests_;
 }
@@ -329,7 +314,7 @@ EngineScheduleInfo LocalRpcServer::getEngineScheduleInfo(int64_t latest_finished
     std::vector<EngineScheduleInfo::TaskInfo> running_task_info_list = engine_->getScheduler().runningTaskList();
     for (auto& task_info : info.running_task_info_list) {
         for (auto& running_task : running_task_info_list) {
-            if (task_info.inter_request_id == running_task.inter_request_id) {
+            if (task_info.request_id == running_task.request_id) {
                 task_info.is_waiting = false;
             }
         }
