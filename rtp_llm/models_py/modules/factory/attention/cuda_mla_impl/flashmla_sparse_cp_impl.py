@@ -3,7 +3,6 @@ Unified Sparse MLA implementation for both prefill and decode stages.
 Uses flash_mla_sparse_fwd kernel with triton-based index conversion.
 """
 
-import os
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -434,7 +433,7 @@ class RoundRobinSparseMlaFp8CPOp(SparseMlaFp8Op):
         self._local_kv_pack_src_slots = None
         self._prefix_padded_topk_buffer = None
         self._global_fp8_metadata = None
-        self._prefix_cache_mode = self._resolve_prefix_cache_mode(parallelism_config)
+        self._use_prefix_q_path = True
 
     def plan(
         self, mla_params: rtp_llm_ops.FlashInferMlaAttnParams, block_table: torch.Tensor
@@ -518,6 +517,7 @@ class RoundRobinSparseMlaFp8CPOp(SparseMlaFp8Op):
 
         # Determine whether prefix cache is active
         self.has_prefix_cache = prefix_lengths.sum().item() > 0
+        self._use_prefix_q_path = self._should_use_prefix_q_path()
 
         new_total_kv = self.kv_restore_unpad_indices.size(0)
         self._ws_total_kv = new_total_kv
@@ -701,37 +701,22 @@ class RoundRobinSparseMlaFp8CPOp(SparseMlaFp8Op):
             result[self.total_local_ids] = global_slot[self.total_global_ids]
         return result
 
-    def _resolve_prefix_cache_mode(
-        self, parallelism_config: Optional[ParallelismConfig]
-    ) -> str:
-        cp_config = (
-            getattr(parallelism_config, "prefill_cp_config", None)
-            if parallelism_config is not None
-            else None
-        )
-        configured_mode = None
-        if cp_config is not None:
-            configured_mode = getattr(cp_config, "roundrobin_prefix_cache_mode", None)
-        mode = configured_mode or os.getenv(
-            "RTP_LLM_ROUNDROBIN_PREFIX_CACHE_MODE", "ag_q"
-        )
-        mode = str(mode).strip().lower()
-        aliases = {
-            "ag_q": "ag_q",
-            "all_gather_q": "ag_q",
-            "all_gather_q_out_lse_topk": "ag_q",
-            "q": "ag_q",
-            "ag_kv": "ag_kv",
-            "all_gather_kv": "ag_kv",
-            "all_gather_kv_workspace": "ag_kv",
-            "kv": "ag_kv",
-        }
-        if mode not in aliases:
-            raise ValueError(
-                "Unsupported round-robin prefix cache mode "
-                f"{mode!r}. Expected one of: ag_q, ag_kv."
-            )
-        return aliases[mode]
+    def _should_use_prefix_q_path(self) -> bool:
+        """Return whether prefix-hit should use the q-path.
+
+        Model-specific constants:
+        - all_gather KV: 656 B/token
+        - all_gather q/topk/out/lse: 104.25 KiB/token
+
+        Therefore q-side communication is cheaper only when:
+            global_q_len / total_kv_len <= 656 / (104.25 * 1024) ~= 0.00614
+        """
+        global_q_len = int(self.kv_restore_unpad_indices.size(0))
+        total_kv_len = int(self.total_kv_len)
+        if global_q_len <= 0 or total_kv_len <= 0:
+            return True
+        q_to_kv_ratio = global_q_len / total_kv_len
+        return q_to_kv_ratio <= 0.00614
 
     def _alloc_workspace_kv_cache(self, kv_cache: KVCache) -> torch.Tensor:
         """Lazily allocate the temporary KV cache workspace, reused across layers within one forward pass."""
@@ -1060,11 +1045,9 @@ class RoundRobinSparseMlaFp8CPOp(SparseMlaFp8Op):
         kv_cache=None,
         layer_id: int = 0,
     ) -> torch.Tensor:
-        if self._prefix_cache_mode == "ag_q":
+        if self._use_prefix_q_path:
             return self._forward_prefix_cache_ag_q(q, topk, kv_cache, layer_id)
-        if self._prefix_cache_mode == "ag_kv":
-            return self._forward_prefix_cache_ag_kv(q, topk, kv_cache, layer_id)
-        raise AssertionError(f"Unhandled prefix cache mode: {self._prefix_cache_mode}")
+        return self._forward_prefix_cache_ag_kv(q, topk, kv_cache, layer_id)
 
     def _forward_prefix_cache_ag_kv(
         self,
