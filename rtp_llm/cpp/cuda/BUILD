@@ -104,13 +104,13 @@ cc_library(
         "//rtp_llm/cpp/core:types",
         "//rtp_llm/cpp/core:types_hdr",
         "//rtp_llm/cpp/config:config_modules",
-        "//rtp_llm/cpp/kernels:kernels_tensor_ops",
+        "//rtp_llm/models_py/bindings/common/kernels:kernels_tensor_ops",
         "@local_config_cuda//cuda:cuda_headers",
         "@local_config_cuda//cuda:cudart",
         "//3rdparty/contextFusedMultiHeadAttention:trt_fmha_impl",
         "//3rdparty/contextFusedMultiHeadAttentionSm70:trt_sm70_fmha_impl",
         "//rtp_llm/cpp/core:op_data",
-        "//rtp_llm/cpp/kernels:kernels_kv_cache"
+        "//rtp_llm/models_py/bindings/common/kernels:kernels_kv_cache"
     ],
     # for fused_multihead_attention_utils.h: alpha = reinterpret_cast<uint32_t const&>(h2)
     copts = copts() + ["-fno-strict-aliasing"],
@@ -134,7 +134,7 @@ cc_library(
         "//rtp_llm/cpp/config:config_modules",
         "//rtp_llm/cpp/config:model_config",
         "//rtp_llm/cpp/config:special_tokens",
-        "//rtp_llm/cpp/kernels:kernels_tensor_ops",
+        "//rtp_llm/models_py/bindings/common/kernels:kernels_tensor_ops",
         "@local_config_cuda//cuda:cuda_headers",
         "@local_config_cuda//cuda:cudart",
         "//3rdparty/trt_fused_multihead_attention:trt_fused_multihead_attention_header",
