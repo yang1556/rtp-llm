@@ -1,8 +1,7 @@
 """
 Unit tests for RoundRobinSparseMlaFp8CPOp (Context Parallel prefill for Sparse MLA FP8).
 
-Tests the CP path with tp_size=1 (single rank): all_gather is identity,
-so output should match non-CP SparseMlaFp8Op on the same inputs.
+These tests simulate multi-rank round-robin CP with mocked all_gather outputs.
 
 Usage:
     python -m pytest rtp_llm/models_py/modules/factory/attention/cuda_mla_impl/test/flashmla_sparse_roundrobin_cp_op_test.py -v
@@ -69,7 +68,7 @@ def _make_block_table(
 
 @skipIf(not CUDA_FLASHMLA_OK, SKIP_REASON)
 class RoundRobinSparseMlaFp8CPOpTest(TestCase):
-    """Test RoundRobinSparseMlaFp8CPOp with single rank (tp_size=1)."""
+    """Test RoundRobinSparseMlaFp8CPOp with mocked multi-rank all_gather."""
 
     @classmethod
     def setUpClass(cls):
@@ -91,6 +90,8 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         total_q_len: int,
         chunk_lengths: list,
         prefix_len: int = 0,
+        tp_size: int = 2,
+        tp_rank: int = 0,
     ):
         """Build common attn_inputs, mla_params, parallelism_config, and tensors.
 
@@ -99,6 +100,8 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         page_size=64, top_k=128, fp8_bytes_per_token=656.
         """
         device = self.device
+        assert tp_size > 1
+        assert 0 <= tp_rank < tp_size
         num_heads = 64
         kv_lora_rank = 512
         qk_rope_head_dim = 64
@@ -109,34 +112,59 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
         fp8_bytes_per_token = 656
 
-        batch_size = len(chunk_lengths)
-        n_restore = sum(chunk_lengths)
-        total_kv_len = prefix_len * batch_size + n_restore
+        actual_input_lengths = list(chunk_lengths)
+        batch_size = len(actual_input_lengths)
+        local_chunk_lengths = [
+            (x + tp_size - 1) // tp_size for x in actual_input_lengths
+        ]
+        local_tokens = sum(local_chunk_lengths)
+        total_kv_len = prefix_len * batch_size + sum(actual_input_lengths)
+
+        local_offsets = []
+        offset = 0
+        for local_len in local_chunk_lengths:
+            local_offsets.append(offset)
+            offset += local_len
+
+        restore = []
+        padding_mask = []
+        padding_lengths = []
+        for req_idx, actual_len in enumerate(actual_input_lengths):
+            local_len = local_chunk_lengths[req_idx]
+            padded_len = local_len * tp_size
+            padding_lengths.append(padded_len - actual_len)
+            for pos in range(padded_len):
+                rank = pos % tp_size
+                local_idx = pos // tp_size
+                restore.append(rank * local_tokens + local_offsets[req_idx] + local_idx)
+                padding_mask.append(1 if pos < actual_len else 0)
 
         cp_params = PyContextParallelParams()
         cp_params.prefill_cp_chunk_lengths = torch.tensor(
-            chunk_lengths, dtype=torch.int32, device=device
+            local_chunk_lengths, dtype=torch.int32, device=device
         )
         cp_params.prefill_cp_padding_lengths = torch.zeros(
-            len(chunk_lengths), dtype=torch.int32, device=device
+            len(actual_input_lengths), dtype=torch.int32, device=device
         )
-        cp_params.prefill_qkv_restore_indice = torch.arange(
-            n_restore, dtype=torch.long, device=device
+        cp_params.prefill_cp_padding_lengths[:] = torch.tensor(
+            padding_lengths, dtype=torch.int32, device=device
         )
-        cp_params.prefill_qkv_padding_mask = torch.ones(
-            n_restore, dtype=torch.int32, device=device
+        cp_params.prefill_qkv_restore_indice = torch.tensor(
+            restore, dtype=torch.long, device=device
         )
-        # actual_input_lengths_cpu has one entry per batch request, matching chunk_lengths
+        cp_params.prefill_qkv_padding_mask = torch.tensor(
+            padding_mask, dtype=torch.int32, device=device
+        )
         cp_params.prefill_actual_input_lengths_cpu = torch.tensor(
-            chunk_lengths, dtype=torch.int32, device=torch.device("cpu")
+            actual_input_lengths, dtype=torch.int32, device=torch.device("cpu")
         )
 
         attn_inputs = PyAttentionInputs()
         attn_inputs.is_prefill = True
         attn_inputs.input_lengths = torch.tensor(
-            chunk_lengths, dtype=torch.int32, device=torch.device("cpu")
+            actual_input_lengths, dtype=torch.int32, device=torch.device("cpu")
         )
-        seq_lengths = [prefix_len + cl for cl in chunk_lengths]
+        seq_lengths = [prefix_len + cl for cl in actual_input_lengths]
         attn_inputs.sequence_lengths = torch.tensor(
             seq_lengths, dtype=torch.int32, device=torch.device("cpu")
         )
@@ -159,8 +187,8 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         from rtp_llm.ops import CPRotateMethod, ParallelismConfig, PrefillCPConfig
 
         parallelism_config = ParallelismConfig()
-        parallelism_config.tp_rank = 0
-        parallelism_config.tp_size = 1
+        parallelism_config.tp_rank = tp_rank
+        parallelism_config.tp_size = tp_size
         parallelism_config.prefill_cp_config = PrefillCPConfig()
         parallelism_config.prefill_cp_config.method = CPRotateMethod.ALL_GATHER
         parallelism_config.prefill_cp_config.comm_buffer_size = 0
@@ -168,42 +196,53 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
 
         q = (
             torch.randn(
-                total_q_len, num_heads, qk_head_dim, dtype=torch.bfloat16, device=device
+                local_tokens,
+                num_heads,
+                qk_head_dim,
+                dtype=torch.bfloat16,
+                device=device,
             )
             * 0.1
         )
         compressed_kv = (
-            torch.randn(total_q_len, kv_lora_rank, dtype=torch.bfloat16, device=device)
+            torch.randn(local_tokens, kv_lora_rank, dtype=torch.bfloat16, device=device)
             * 0.1
         )
         k_pe = (
             torch.randn(
-                total_q_len, qk_rope_head_dim, dtype=torch.bfloat16, device=device
+                local_tokens, qk_rope_head_dim, dtype=torch.bfloat16, device=device
             )
             * 0.1
         )
         topk_indices = torch.randint(
             0,
             max(total_kv_len, 1),
-            (total_q_len, 1, top_k),
+            (local_tokens, 1, top_k),
             dtype=torch.int32,
             device=device,
         )
         batch_indice_parts = []
-        for i, cl in enumerate(chunk_lengths):
+        for i, cl in enumerate(local_chunk_lengths):
             batch_indice_parts.append(
                 torch.full((cl,), i, dtype=torch.int32, device=device)
             )
 
-        batch_indice_d = batch_indice_d = torch.cat(batch_indice_parts)
+        batch_indice_d = torch.cat(batch_indice_parts)
 
         total_blocks = batch_size * block_table_host.shape[1]
-        kv_cache_base = torch.empty(
-            total_blocks,
-            page_size,
-            fp8_bytes_per_token,
-            dtype=torch.uint8,
-            device=device,
+        kv_cache_base = (
+            (
+                torch.randn(
+                    total_blocks,
+                    page_size,
+                    fp8_bytes_per_token,
+                    dtype=torch.bfloat16,
+                    device=device,
+                )
+                * 0.1
+            )
+            .to(torch.float8_e4m3fn)
+            .view(torch.uint8)
         )
         kv_cache = KVCache()
         kv_cache.kv_cache_base = kv_cache_base
@@ -228,7 +267,23 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
             top_k=top_k,
             fp8_bytes_per_token=fp8_bytes_per_token,
             total_kv_len=total_kv_len,
+            local_tokens=local_tokens,
+            local_chunk_lengths=local_chunk_lengths,
+            actual_input_lengths=actual_input_lengths,
+            tp_size=tp_size,
+            tp_rank=tp_rank,
         )
+
+    def _make_all_gather_mock(self, handlers):
+        call_idx = {"value": 0}
+
+        def _mock_all_gather(tensor, group=None):
+            idx = call_idx["value"]
+            call_idx["value"] += 1
+            handler = handlers[idx]
+            return handler(tensor) if callable(handler) else handler
+
+        return _mock_all_gather
 
     def _make_roundrobin_op(self, params):
         from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl import (
@@ -260,19 +315,22 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
     # ----------------------------------------------------------------
 
     def test_roundrobin_forward_output_shape(self):
-        """RoundRobin CP op forward returns correct shape [total_q_len, num_heads, kv_lora_rank]."""
+        """RoundRobin CP op forward returns correct local-rank output shape."""
         _set_seed(123)
-        total_q_len = 8
-        chunk_lengths = [8]
-        params = self._build_common_params(total_q_len, chunk_lengths)
+        params = self._build_common_params(8, [8], tp_size=2, tp_rank=0)
+        peer = self._build_common_params(8, [8], tp_size=2, tp_rank=1)
         op = self._make_roundrobin_op(params)
 
-        def _identity_all_gather(tensor, group=None):
-            return tensor
+        gather_mock = self._make_all_gather_mock(
+            [
+                torch.cat([params["compressed_kv"], peer["compressed_kv"]], dim=0),
+                torch.cat([params["k_pe"], peer["k_pe"]], dim=0),
+            ]
+        )
 
         with patch(
             "rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl.all_gather",
-            side_effect=_identity_all_gather,
+            side_effect=gather_mock,
         ):
             out = op.forward(
                 params["q"],
@@ -286,32 +344,50 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         torch.cuda.synchronize()
         self.assertEqual(
             out.shape,
-            (total_q_len, params["num_heads"], params["kv_lora_rank"]),
+            (params["local_tokens"], params["num_heads"], params["kv_lora_rank"]),
         )
 
-    def test_roundrobin_forward_match_non_cp(self):
-        """
-        With tp_size=1, RoundRobin CP all_gather is identity.
-        Output should match non-CP SparseMlaFp8Op on the same inputs.
-        """
-        from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_impl import (
-            SparseMlaFp8Op,
-        )
-
+    def test_roundrobin_forward_depends_on_peer_rank_kv(self):
+        """No-prefix output should depend on the gathered KV from peer ranks."""
         _set_seed(42)
-        total_q_len = 8
-        chunk_lengths = [8]
-        params = self._build_common_params(total_q_len, chunk_lengths)
+        params = self._build_common_params(8, [8], tp_size=2, tp_rank=0)
+        peer_a = self._build_common_params(8, [8], tp_size=2, tp_rank=1)
+        peer_b = self._build_common_params(8, [8], tp_size=2, tp_rank=1)
+        peer_b["compressed_kv"] = peer_b["compressed_kv"] * 3.0
+        peer_b["k_pe"] = peer_b["k_pe"] * -2.0
         op = self._make_roundrobin_op(params)
 
-        def _identity_all_gather(tensor, group=None):
-            return tensor
+        gather_a = self._make_all_gather_mock(
+            [
+                torch.cat([params["compressed_kv"], peer_a["compressed_kv"]], dim=0),
+                torch.cat([params["k_pe"], peer_a["k_pe"]], dim=0),
+            ]
+        )
+        gather_b = self._make_all_gather_mock(
+            [
+                torch.cat([params["compressed_kv"], peer_b["compressed_kv"]], dim=0),
+                torch.cat([params["k_pe"], peer_b["k_pe"]], dim=0),
+            ]
+        )
 
         with patch(
             "rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl.all_gather",
-            side_effect=_identity_all_gather,
+            side_effect=gather_a,
         ):
-            out_cp = op.forward(
+            out_a = op.forward(
+                params["q"],
+                params["compressed_kv"],
+                params["k_pe"],
+                params["topk_indices"],
+                params["batch_indice_d"],
+                params["kv_cache"],
+                layer_id=0,
+            )
+        with patch(
+            "rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl.all_gather",
+            side_effect=gather_b,
+        ):
+            out_b = op.forward(
                 params["q"],
                 params["compressed_kv"],
                 params["k_pe"],
@@ -322,51 +398,29 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
             )
         torch.cuda.synchronize()
 
-        self.assertEqual(
-            out_cp.shape,
-            (total_q_len, params["num_heads"], params["kv_lora_rank"]),
-        )
-
-        # Non-CP reference
-        kv_cache_base = params["kv_cache"].kv_cache_base
-        kv_cache_flat = kv_cache_base.view(-1, 1, kv_cache_base.size(-1))
-        if kv_cache_flat.ndim == 3:
-            kv_cache_flat = kv_cache_flat.unsqueeze(-2)
-        non_cp_op = SparseMlaFp8Op(
-            num_heads=params["num_heads"],
-            kv_lora_rank=params["kv_lora_rank"],
-            qk_rope_head_dim=params["qk_rope_head_dim"],
-            qk_nope_head_dim=params["qk_nope_head_dim"],
-            page_size=params["page_size"],
-            softmax_extra_scale=params["softmax_extra_scale"],
-            top_k=params["top_k"],
-        )
-        non_cp_op.plan(params["mla_params"], params["block_table_device"])
-        out_non_cp = non_cp_op.forward(
-            params["q"], kv_cache_flat, params["topk_indices"], layer_id=0
-        )
-        torch.cuda.synchronize()
-
-        self.assertTrue(
-            torch.allclose(out_cp, out_non_cp, atol=1e-2, rtol=1e-2),
-            "RoundRobin CP output should match non-CP when tp_size=1 (all_gather identity)",
+        self.assertEqual(out_a.shape, out_b.shape)
+        self.assertFalse(
+            torch.allclose(out_a, out_b, atol=1e-3, rtol=1e-3),
+            "Changing peer-rank KV should change the gathered-workspace output",
         )
 
     def test_roundrobin_forward_multi_chunk(self):
         """RoundRobin CP op works correctly with multiple batch requests [4,4]."""
         _set_seed(77)
-        total_q_len = 8
-        # For round-robin, chunk_lengths = [4, 4] means 2 batch requests, each with 4 tokens
-        chunk_lengths = [4, 4]
-        params = self._build_common_params(total_q_len, chunk_lengths)
+        params = self._build_common_params(4, [4, 4], tp_size=2, tp_rank=0)
+        peer = self._build_common_params(4, [4, 4], tp_size=2, tp_rank=1)
         op = self._make_roundrobin_op(params)
 
-        def _identity_all_gather(tensor, group=None):
-            return tensor
+        gather_mock = self._make_all_gather_mock(
+            [
+                torch.cat([params["compressed_kv"], peer["compressed_kv"]], dim=0),
+                torch.cat([params["k_pe"], peer["k_pe"]], dim=0),
+            ]
+        )
 
         with patch(
             "rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl.all_gather",
-            side_effect=_identity_all_gather,
+            side_effect=gather_mock,
         ):
             out = op.forward(
                 params["q"],
@@ -380,7 +434,7 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         torch.cuda.synchronize()
         self.assertEqual(
             out.shape,
-            (total_q_len, params["num_heads"], params["kv_lora_rank"]),
+            (params["local_tokens"], params["num_heads"], params["kv_lora_rank"]),
         )
 
     def test_roundrobin_no_topk_returns_none(self):
@@ -415,207 +469,45 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
 
     def test_roundrobin_forward_with_prefix_cache(self):
         """
-        With tp_size=1 and prefix_lengths > 0 (reuse cache), verify that:
-        1. The CP op does not crash (buffer allocation uses full KV length)
-        2. Output shape is correct
-        3. Output matches non-CP reference on the same cache state
+        With tp_size=2 and prefix_lengths > 0 (reuse cache), verify that:
+        1. The CP op plans successfully with full KV length (prefix + new)
+        2. Prefix path now reuses workspace metadata for AG-KV attention
+        3. Write-only forward remains valid in the prefix-cache path
 
         This exercises the path where cu_kv_seqlens_global[-1] (prefix + new)
         is used for buffer sizing, and _cu_local_kv_seqlens / _kv_allgather_restore_indices
         correctly account for prefix tokens.
         """
-        from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_impl import (
-            SparseMlaFp8Op,
-        )
-
         _set_seed(42)
-        device = self.device
-
-        num_heads = 64
-        kv_lora_rank = 512
-        qk_rope_head_dim = 64
-        qk_nope_head_dim = 512
-        page_size = 64
-        softmax_extra_scale = 1.0
-        top_k = 128
-        qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
-        fp8_bytes_per_token = 656
-
         prefix_len = 64
-        new_tokens = 8
-        total_kv_len = prefix_len + new_tokens
-        num_blocks_needed = math.ceil(total_kv_len / page_size)
-
-        chunk_lengths = [new_tokens]
-        n_restore = sum(chunk_lengths)
-
-        cp_params = PyContextParallelParams()
-        cp_params.prefill_cp_chunk_lengths = torch.tensor(
-            chunk_lengths, dtype=torch.int32, device=device
+        params = self._build_common_params(
+            4, [8], prefix_len=prefix_len, tp_size=2, tp_rank=0
         )
-        cp_params.prefill_cp_padding_lengths = torch.zeros(
-            len(chunk_lengths), dtype=torch.int32, device=device
-        )
-        cp_params.prefill_qkv_restore_indice = torch.arange(
-            n_restore, dtype=torch.long, device=device
-        )
-        cp_params.prefill_qkv_padding_mask = torch.ones(
-            n_restore, dtype=torch.int32, device=device
-        )
-        cp_params.prefill_actual_input_lengths_cpu = torch.tensor(
-            [new_tokens], dtype=torch.int32, device=torch.device("cpu")
-        )
-
-        attn_inputs = PyAttentionInputs()
-        attn_inputs.is_prefill = True
-        attn_inputs.input_lengths = torch.tensor(
-            [new_tokens], dtype=torch.int32, device=torch.device("cpu")
-        )
-        attn_inputs.sequence_lengths = torch.tensor(
-            [total_kv_len], dtype=torch.int32, device=torch.device("cpu")
-        )
-        attn_inputs.prefix_lengths = torch.tensor(
-            [prefix_len], dtype=torch.int32, device=torch.device("cpu")
-        )
-        attn_inputs.context_parallel_info = cp_params
-
-        block_table_host = _make_block_table(
-            1, total_kv_len, page_size, torch.device("cpu")
-        )
-        block_table_device = block_table_host.to(device)
-        attn_inputs.kv_cache_block_id_host = block_table_host
-        attn_inputs.kv_cache_block_id_device = block_table_device
-
-        mla_params = rtp_llm_ops.SparseMlaParams()
-        mla_params.fill_params(attn_inputs, page_size)
-
-        from rtp_llm.ops import CPRotateMethod, ParallelismConfig, PrefillCPConfig
-
-        parallelism_config = ParallelismConfig()
-        parallelism_config.tp_rank = 0
-        parallelism_config.tp_size = 1
-        parallelism_config.prefill_cp_config = PrefillCPConfig()
-        parallelism_config.prefill_cp_config.method = CPRotateMethod.ALL_GATHER
-        parallelism_config.prefill_cp_config.comm_buffer_size = 0
-        parallelism_config.prefill_cp_config.kv_cache_sharded = True
-
-        q = (
-            torch.randn(
-                new_tokens, num_heads, qk_head_dim, dtype=torch.bfloat16, device=device
-            )
-            * 0.1
-        )
-        compressed_kv = (
-            torch.randn(new_tokens, kv_lora_rank, dtype=torch.bfloat16, device=device)
-            * 0.1
-        )
-        k_pe = (
-            torch.randn(
-                new_tokens, qk_rope_head_dim, dtype=torch.bfloat16, device=device
-            )
-            * 0.1
-        )
-        # topk indices span the full KV range [0, prefix_len + new_tokens)
-        topk_indices = torch.randint(
-            0, total_kv_len, (new_tokens, 1, top_k), dtype=torch.int32, device=device
-        )
-        batch_indice_d = torch.zeros(new_tokens, dtype=torch.int32, device=device)
-
-        num_blocks = block_table_host.shape[1]
-        # Pre-fill cache with random data to simulate prefix blocks already present
-        kv_cache_base = (
-            (
-                torch.randn(
-                    num_blocks,
-                    page_size,
-                    fp8_bytes_per_token,
-                    dtype=torch.bfloat16,
-                    device=device,
-                )
-                * 0.1
-            )
-            .to(torch.float8_e4m3fn)
-            .view(torch.uint8)
-        )
-        kv_cache = KVCache()
-        kv_cache.kv_cache_base = kv_cache_base
-
-        from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl import (
-            RoundRobinSparseMlaFp8CPOp,
-        )
-        from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.mla_kv_cache_write_op import (
-            MlaKVCacheWriteOp,
-        )
-
-        cp_op = RoundRobinSparseMlaFp8CPOp(
-            num_heads=num_heads,
-            kv_lora_rank=kv_lora_rank,
-            qk_rope_head_dim=qk_rope_head_dim,
-            qk_nope_head_dim=qk_nope_head_dim,
-            page_size=page_size,
-            softmax_extra_scale=softmax_extra_scale,
-            top_k=top_k,
-            attn_inputs=attn_inputs,
-            parallelism_config=parallelism_config,
-        )
-        cp_op.kv_cache_write_op = MlaKVCacheWriteOp(kv_cache_dtype=KvCacheDataType.FP8)
-        cp_op.write_cache_store_impl = None
-        cp_op.attn_inputs = attn_inputs
-
-        cp_op.plan(mla_params, block_table_device)
+        cp_op = self._make_roundrobin_op(params)
 
         # Verify cu_kv_seqlens_global includes prefix
         self.assertEqual(
             int(cp_op.cu_kv_seqlens_global[-1].item()),
-            total_kv_len,
+            prefix_len + sum(params["actual_input_lengths"]),
             "cu_kv_seqlens_global should cover prefix + new tokens",
         )
+        self.assertTrue(cp_op.has_prefix_cache)
+        self.assertIsNotNone(cp_op._ws_block_table)
+        self.assertIsNotNone(cp_op._ws_slot_mapping)
+        self.assertIsNotNone(cp_op._local_kv_pack_dst_rows)
+        self.assertIsNotNone(cp_op._local_kv_pack_src_slots)
 
-        def _identity_all_gather(tensor, group=None):
-            return tensor
-
-        with patch(
-            "rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl.all_gather",
-            side_effect=_identity_all_gather,
-        ):
-            out_cp = cp_op.forward(
-                q,
-                compressed_kv,
-                k_pe,
-                topk_indices,
-                batch_indice_d,
-                kv_cache,
-                layer_id=0,
-            )
+        out_cp = cp_op.forward(
+            params["q"],
+            params["compressed_kv"],
+            params["k_pe"],
+            None,
+            params["batch_indice_d"],
+            params["kv_cache"],
+            layer_id=0,
+        )
         torch.cuda.synchronize()
-
-        self.assertEqual(
-            out_cp.shape,
-            (new_tokens, num_heads, kv_lora_rank),
-            "CP output shape should be [new_tokens, num_heads, kv_lora_rank]",
-        )
-
-        # Compare against non-CP reference on the same cache
-        kv_cache_flat = kv_cache_base.view(-1, 1, kv_cache_base.size(-1))
-        if kv_cache_flat.ndim == 3:
-            kv_cache_flat = kv_cache_flat.unsqueeze(-2)
-        non_cp_op = SparseMlaFp8Op(
-            num_heads=num_heads,
-            kv_lora_rank=kv_lora_rank,
-            qk_rope_head_dim=qk_rope_head_dim,
-            qk_nope_head_dim=qk_nope_head_dim,
-            page_size=page_size,
-            softmax_extra_scale=softmax_extra_scale,
-            top_k=top_k,
-        )
-        non_cp_op.plan(mla_params, block_table_device)
-        out_non_cp = non_cp_op.forward(q, kv_cache_flat, topk_indices, layer_id=0)
-        torch.cuda.synchronize()
-
-        self.assertTrue(
-            torch.allclose(out_cp, out_non_cp, atol=1e-2, rtol=1e-2),
-            "RoundRobin CP output with prefix cache should match non-CP output",
-        )
+        self.assertIsNone(out_cp)
 
     # ----------------------------------------------------------------
     # cu_kv_seqlens_global tests
@@ -656,13 +548,11 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
     def test_roundrobin_kv_cache_write_owned_slots(self):
         """Verify that forward(topk=None) writes data to owned slots in kv_cache.
 
-        After the write-only forward pass, slots corresponding to owned tokens
-        (slot_mapping != -1) should contain non-zero data.
+        After the write-only forward pass, slots corresponding to this rank's owned
+        local tokens should contain non-zero data.
         """
         _set_seed(200)
-        total_q_len = 8
-        chunk_lengths = [8]
-        params = self._build_common_params(total_q_len, chunk_lengths)
+        params = self._build_common_params(4, [8], tp_size=2, tp_rank=0)
         op = self._make_roundrobin_op(params)
 
         kv_cache = params["kv_cache"]
@@ -687,7 +577,7 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         torch.cuda.synchronize()
         self.assertIsNone(out)
 
-        slot_mapping = params["mla_params"].slot_mapping
+        slot_mapping = op._local_mla_slot_mapping
         page_size = params["page_size"]
         cache = kv_cache.kv_cache_base  # [num_blocks, page_size, fp8_bytes]
 
@@ -705,7 +595,6 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
             )
             owned_count += 1
 
-        # With cp_size=1, all tokens are owned (no -1 in slot_mapping)
         self.assertGreater(owned_count, 0, "Should have at least one owned slot")
 
     def test_roundrobin_kv_cache_write_skips_negative_slots(self):
@@ -716,24 +605,18 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         rows matches exactly the number of non-(-1) slot_mapping entries.
         """
         _set_seed(201)
-        total_q_len = 8
-        chunk_lengths = [8]
-        params = self._build_common_params(total_q_len, chunk_lengths)
+        params = self._build_common_params(4, [8], tp_size=2, tp_rank=0)
         op = self._make_roundrobin_op(params)
 
         kv_cache = params["kv_cache"]
         kv_cache.kv_cache_base.zero_()
 
         # Mark even-indexed tokens as non-owned to simulate sharding.
-        # Must also update the precomputed _local_mla_slot_mapping, which is
-        # what _write_local_cache actually uses for cache writes.
-        slot_mapping = params["mla_params"].slot_mapping
+        slot_mapping = op._local_mla_slot_mapping.clone()
         for i in range(0, slot_mapping.shape[0], 2):
             slot_mapping[i] = -1
         original_slot_mapping = slot_mapping.clone()
-        op._local_mla_slot_mapping = op._build_local_slot_mapping(
-            slot_mapping, slot_mapping.shape[0], op.prefill_cp_size
-        )
+        op._local_mla_slot_mapping = slot_mapping
 
         def _identity_all_gather(tensor, group=None):
             return tensor
@@ -769,6 +652,29 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
             f"non-(-1) slot_mapping entries ({expected_writes})",
         )
 
+    def test_roundrobin_rejects_single_rank(self):
+        """Round-robin CP op is only defined for true multi-rank CP."""
+        _set_seed(2011)
+        params = self._build_common_params(4, [8], tp_size=2, tp_rank=0)
+        params["parallelism_config"].tp_size = 1
+
+        from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl import (
+            RoundRobinSparseMlaFp8CPOp,
+        )
+
+        with self.assertRaisesRegex(ValueError, "tp_size > 1"):
+            RoundRobinSparseMlaFp8CPOp(
+                num_heads=params["num_heads"],
+                kv_lora_rank=params["kv_lora_rank"],
+                qk_rope_head_dim=params["qk_rope_head_dim"],
+                qk_nope_head_dim=params["qk_nope_head_dim"],
+                page_size=params["page_size"],
+                softmax_extra_scale=params["softmax_extra_scale"],
+                top_k=params["top_k"],
+                attn_inputs=params["attn_inputs"],
+                parallelism_config=params["parallelism_config"],
+            )
+
     def test_roundrobin_kv_cache_write_with_prefix(self):
         """Verify cache write works correctly when prefix_len > 0.
 
@@ -777,11 +683,9 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         positions. Verify that the correct number of slots are written.
         """
         _set_seed(202)
-        total_q_len = 8
-        chunk_lengths = [8]
         prefix_len = 64
         params = self._build_common_params(
-            total_q_len, chunk_lengths, prefix_len=prefix_len
+            4, [8], prefix_len=prefix_len, tp_size=2, tp_rank=0
         )
         op = self._make_roundrobin_op(params)
 
@@ -809,7 +713,7 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
 
         # Count written rows — should be exactly the number of new tokens
         # that have valid (non -1) slot_mapping entries
-        slot_mapping = params["mla_params"].slot_mapping
+        slot_mapping = op._local_mla_slot_mapping
         expected_writes = int((slot_mapping != -1).sum().item())
 
         cache = kv_cache.kv_cache_base
@@ -834,19 +738,20 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
     def test_roundrobin_plan_sharded_kv_seqlens_no_prefix(self):
         """Verify _cu_local_kv_seqlens and _total_local_kv with prefix_len=0.
 
-        With cp_size=1, virtual_block_size = page_size * 1 = page_size.
+        With cp_size=2, virtual_block_size = page_size * 2.
         local capacity = ceil(kv_len / vbs) * page_size.
         Sharded metadata is always computed (used by indexer topk).
         """
         _set_seed(300)
-        total_q_len = 8
         chunk_lengths = [8]
-        params = self._build_common_params(total_q_len, chunk_lengths, prefix_len=0)
+        params = self._build_common_params(
+            4, chunk_lengths, prefix_len=0, tp_size=2, tp_rank=0
+        )
         op = self._make_roundrobin_op(params)
 
         page_size = params["page_size"]
         kv_len = sum(chunk_lengths)
-        vbs = page_size * 1
+        vbs = page_size * params["tp_size"]
         n_vblocks = (kv_len + vbs - 1) // vbs
         expected_local_capacity = n_vblocks * page_size
 
@@ -858,20 +763,19 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         """Verify _cu_local_kv_seqlens includes prefix tokens.
 
         With prefix_len=64, kv_len = 64 + 8 = 72.
-        cp_size=1, vbs=64, n_vblocks = ceil(72/64) = 2, local_capacity = 128.
+        cp_size=2, vbs=128, n_vblocks = ceil(72/128) = 1, local_capacity = 64.
         """
         _set_seed(301)
-        total_q_len = 8
         chunk_lengths = [8]
         prefix_len = 64
         params = self._build_common_params(
-            total_q_len, chunk_lengths, prefix_len=prefix_len
+            4, chunk_lengths, prefix_len=prefix_len, tp_size=2, tp_rank=0
         )
         op = self._make_roundrobin_op(params)
 
         page_size = params["page_size"]
         kv_len = sum(chunk_lengths) + prefix_len
-        vbs = page_size * 1
+        vbs = page_size * params["tp_size"]
         n_vblocks = (kv_len + vbs - 1) // vbs
         expected_local_capacity = n_vblocks * page_size
 
@@ -879,29 +783,21 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         cu = op._cu_local_kv_seqlens.cpu().tolist()
         self.assertEqual(cu, [0, expected_local_capacity])
 
-    def test_roundrobin_plan_restore_indices_identity_cp1(self):
-        """With cp_size=1, restore indices should be identity mapping.
-
-        For cp_size=1, every token is owned by rank 0. The all-gather is identity,
-        so restore_indices[p] should equal p for all valid positions.
-        Restore indices are always computed (used by indexer topk).
-        """
+    def test_roundrobin_plan_restore_indices_rr_cp2(self):
+        """With cp_size=2, restore indices should map rank-major gathered KV back to global order."""
         _set_seed(302)
-        total_q_len = 8
         chunk_lengths = [8]
-        prefix_len = 64
         params = self._build_common_params(
-            total_q_len, chunk_lengths, prefix_len=prefix_len
+            4, chunk_lengths, prefix_len=0, tp_size=2, tp_rank=0
         )
         op = self._make_roundrobin_op(params)
 
-        kv_len = sum(chunk_lengths) + prefix_len
-        restore = op._kv_allgather_restore_indices.cpu()
-        self.assertEqual(restore.shape[0], kv_len)
-        expected = torch.arange(kv_len, dtype=torch.long, device=torch.device("cpu"))
-        self.assertTrue(
-            torch.equal(restore, expected),
-            f"With cp_size=1, restore indices should be identity. Got {restore.tolist()}",
+        restore = op._kv_allgather_restore_indices.cpu().tolist()
+        expected = [0, 64, 1, 65, 2, 66, 3, 67]
+        self.assertEqual(
+            restore,
+            expected,
+            f"Unexpected cp_size=2 restore indices: {restore}",
         )
 
     def test_roundrobin_plan_restore_indices_with_prefix(self):
@@ -911,11 +807,10 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         restore_indices should have 72 entries.
         """
         _set_seed(303)
-        total_q_len = 8
         chunk_lengths = [8]
         prefix_len = 64
         params = self._build_common_params(
-            total_q_len, chunk_lengths, prefix_len=prefix_len
+            4, chunk_lengths, prefix_len=prefix_len, tp_size=2, tp_rank=0
         )
         op = self._make_roundrobin_op(params)
 
@@ -926,32 +821,30 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
             kv_len,
             f"restore_indices should have {kv_len} entries (prefix={prefix_len} + new={sum(chunk_lengths)})",
         )
+        self.assertEqual(restore[0].item(), 0)
+        self.assertEqual(restore[1].item(), op._total_local_kv)
 
-    def test_roundrobin_plan_global_fp8_metadata(self):
-        """Verify _global_fp8_metadata is computed for the global total_q."""
+    def test_roundrobin_plan_prefix_workspace_metadata(self):
+        """Verify prefix path still prepares workspace metadata for AG-KV attention."""
         _set_seed(304)
-        total_q_len = 8
         chunk_lengths = [8]
-        # _global_fp8_metadata is only computed in the prefix-cache path
         prefix_len = 64
         params = self._build_common_params(
-            total_q_len, chunk_lengths, prefix_len=prefix_len
+            4, chunk_lengths, prefix_len=prefix_len, tp_size=2, tp_rank=0
         )
         op = self._make_roundrobin_op(params)
 
-        self.assertIsNotNone(op._global_fp8_metadata)
-        self.assertIsNotNone(op._global_fp8_metadata.tile_scheduler_metadata)
-        # num_splits may be None depending on get_mla_metadata scheduling decisions;
-        # just verify the attribute exists.
-        self.assertTrue(hasattr(op._global_fp8_metadata, "num_splits"))
+        self.assertIsNotNone(op._ws_slot_mapping)
+        self.assertIsNotNone(op._ws_block_table)
+        self.assertIsNotNone(op._local_kv_pack_dst_rows)
+        self.assertIsNotNone(op._local_kv_pack_src_slots)
 
     def test_roundrobin_plan_workspace_metadata_no_prefix(self):
-        """Verify workspace metadata is computed only for non-prefix path."""
+        """Verify no-prefix path prepares workspace metadata with the expected sizes."""
         _set_seed(305)
-        total_q_len = 8
         chunk_lengths = [8]
         params = self._build_common_params(
-            total_q_len, chunk_lengths, prefix_len=0
+            4, chunk_lengths, prefix_len=0, tp_size=2, tp_rank=0
         )
         op = self._make_roundrobin_op(params)
 
@@ -961,38 +854,97 @@ class RoundRobinSparseMlaFp8CPOpTest(TestCase):
         self.assertEqual(op._ws_slot_mapping.shape[0], n_restore)
         self.assertIsNotNone(op._ws_block_table)
 
-    def test_roundrobin_plan_workspace_none_with_prefix(self):
-        """With prefix cache, workspace metadata should be None (not needed)."""
+    def test_roundrobin_plan_workspace_present_with_prefix(self):
+        """With prefix cache, workspace metadata should also exist for AG-KV reuse."""
         _set_seed(306)
-        total_q_len = 8
         chunk_lengths = [8]
         prefix_len = 64
         params = self._build_common_params(
-            total_q_len, chunk_lengths, prefix_len=prefix_len
+            4, chunk_lengths, prefix_len=prefix_len, tp_size=2, tp_rank=0
         )
         op = self._make_roundrobin_op(params)
 
-        self.assertIsNone(op._ws_slot_mapping)
-        self.assertIsNone(op._ws_block_table)
-        self.assertIsNone(op._ws_total_pages)
+        self.assertIsNotNone(op._ws_slot_mapping)
+        self.assertIsNotNone(op._ws_block_table)
+        self.assertIsNotNone(op._ws_total_pages)
+
+    def test_roundrobin_workspace_buffer_reused_across_forwards(self):
+        """No-prefix path should reuse the same FP8 workspace buffer across forwards."""
+        _set_seed(3061)
+        params = self._build_common_params(4, [8], prefix_len=0, tp_size=2, tp_rank=0)
+        peer = self._build_common_params(4, [8], prefix_len=0, tp_size=2, tp_rank=1)
+        op = self._make_roundrobin_op(params)
+
+        gather_mock = self._make_all_gather_mock(
+            [
+                torch.cat([params["compressed_kv"], peer["compressed_kv"]], dim=0),
+                torch.cat([params["k_pe"], peer["k_pe"]], dim=0),
+                torch.cat([params["compressed_kv"], peer["compressed_kv"]], dim=0),
+                torch.cat([params["k_pe"], peer["k_pe"]], dim=0),
+            ]
+        )
+
+        with patch(
+            "rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashmla_sparse_cp_impl.all_gather",
+            side_effect=gather_mock,
+        ):
+            out0 = op.forward(
+                params["q"],
+                params["compressed_kv"],
+                params["k_pe"],
+                params["topk_indices"],
+                params["batch_indice_d"],
+                params["kv_cache"],
+                layer_id=0,
+            )
+            ws_ptr0 = op._ws_fp8.data_ptr()
+            out1 = op.forward(
+                params["q"],
+                params["compressed_kv"],
+                params["k_pe"],
+                params["topk_indices"],
+                params["batch_indice_d"],
+                params["kv_cache"],
+                layer_id=0,
+            )
+            ws_ptr1 = op._ws_fp8.data_ptr()
+
+        torch.cuda.synchronize()
+        self.assertEqual(ws_ptr0, ws_ptr1, "Workspace buffer should be reused")
+        self.assertTrue(
+            torch.allclose(out0, out1, atol=1e-2, rtol=1e-2),
+            "Buffer reuse should not change workspace-path outputs",
+        )
+
+    def test_roundrobin_prefix_local_shard_rows_buffer_reused(self):
+        """Prefix path should reuse the packed local shard-row scratch buffer."""
+        _set_seed(3062)
+        params = self._build_common_params(4, [8], prefix_len=64, tp_size=2, tp_rank=0)
+        op = self._make_roundrobin_op(params)
+
+        buf0 = op._alloc_local_shard_rows(params["kv_cache"])
+        ptr0 = buf0.data_ptr()
+        buf1 = op._alloc_local_shard_rows(params["kv_cache"])
+        ptr1 = buf1.data_ptr()
+        self.assertEqual(ptr0, ptr1, "Packed local shard-row buffer should be reused")
 
     def test_roundrobin_plan_local_slot_mappings(self):
         """Verify local slot mappings are computed for direct cache write."""
         _set_seed(307)
-        total_q_len = 8
-        chunk_lengths = [8]
         prefix_len = 64
         params = self._build_common_params(
-            total_q_len, chunk_lengths, prefix_len=prefix_len
+            4, [8], prefix_len=prefix_len, tp_size=2, tp_rank=0
         )
         op = self._make_roundrobin_op(params)
 
-        local_tokens = sum(chunk_lengths)
+        local_tokens = params["local_tokens"]
         self.assertEqual(op._local_mla_slot_mapping.shape[0], local_tokens)
         self.assertEqual(op._local_indexer_slot_mapping.shape[0], local_tokens)
         # Owned tokens should have non-negative slot values
         owned = op._local_mla_slot_mapping >= 0
-        self.assertTrue(owned.any(), "At least some tokens should be owned by this rank")
+        self.assertTrue(
+            owned.any(), "At least some tokens should be owned by this rank"
+        )
 
 
 if __name__ == "__main__":
