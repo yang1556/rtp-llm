@@ -14,6 +14,7 @@
 #include "rtp_llm/cpp/models/logits_processor/LogitsProcessorStates.h"
 #include "rtp_llm/cpp/models/SampleInfos.h"
 #include "rtp_llm/cpp/utils/TensorDebugUtils.h"
+#include "rtp_llm/cpp/utils/ErrorCode.h"
 #if USING_CUDA
 #include "rtp_llm/cpp/cuda/ops/StandaloneOps.h"
 #include "ATen/cuda/CUDAContext.h"
@@ -507,8 +508,14 @@ absl::Status NormalBatchStreamProcessor::dispatch(const StreamGroups& stream_gro
                                                   const MergedOutput& merge_outputs) const {
     RTP_LLM_LOG_DEBUG(__PRETTY_FUNCTION__);
     const auto& sampler_output    = merge_outputs.sampler_output;
+    const auto& model_output      = merge_outputs.model_output;
     const auto& new_all_token_ids = sampler_output.token_ids;
     RTP_LLM_LOG_DEBUG("new_all_token_ids = [%s]", tensorDebugStringWithData<int32_t>(new_all_token_ids).c_str());
+
+    if (model_output.nan_flag.defined()) {
+        checkNanFlagAndSetFailed(stream_groups, model_output.nan_flag);
+    }
+
     const size_t total_batch_size_out = stream_groups.totalSamplerBatchSizeOut();
     RTP_LLM_CHECK(total_batch_size_out == (size_t)new_all_token_ids.size(0));
     int  batch_idx_in     = 0;
@@ -646,6 +653,37 @@ void NormalBatchStreamProcessor::dispatchSingleStream(GenerateStreamPtr    strea
                     loss,
                     src_batch_indices,
                     all_hidden_states});
+}
+
+void NormalBatchStreamProcessor::checkNanFlagAndSetFailed(const StreamGroups&  stream_groups,
+                                                          const torch::Tensor& nan_flag) const {
+    auto         nan_flag_cpu  = nan_flag.cpu().contiguous();
+    const float* nan_flag_data = nan_flag_cpu.data_ptr<float>();
+    int64_t      flag_size     = nan_flag_cpu.size(0);
+
+    int batch_idx = 0;
+
+    for (auto& stream : stream_groups.decodeStreams()) {
+        auto cur_batch_size = stream->currentBatchSize();
+        for (int i = 0; i < cur_batch_size; ++i) {
+            if (batch_idx < flag_size && nan_flag_data[batch_idx] > 0) {
+                RTP_LLM_LOG_ERROR("decode stream [%ld] has nan, set stopped and return error", stream->streamId());
+                stream->setStop(ErrorCode::NAN_DETECTED, "NaN detected in decode forward pass");
+            }
+            batch_idx += 1;
+        }
+    }
+
+    for (auto& stream : stream_groups.contextStreams()) {
+        auto cur_batch_size = stream->currentBatchSize();
+        for (int i = 0; i < cur_batch_size; ++i) {
+            if (batch_idx < flag_size && nan_flag_data[batch_idx] > 0) {
+                RTP_LLM_LOG_ERROR("context stream [%ld] has nan, set stopped and return error", stream->streamId());
+                stream->setStop(ErrorCode::NAN_DETECTED, "NaN detected in context forward pass");
+            }
+            batch_idx += 1;
+        }
+    }
 }
 
 }  // namespace rtp_llm

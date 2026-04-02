@@ -52,7 +52,7 @@ rtp_llm::EngineInitParams createEngineInitParams(const CustomConfig&     config,
                                                  rtp_llm::KVCacheConfig& kv_cache_config) {
     model_config.attn_config.head_num                           = 2;
     model_config.attn_config.size_per_head                      = 64;
-    model_config.num_layers                                     = 2;
+    model_config.num_layers                                     = model_config.num_layers != 0 ? model_config.num_layers : 2;
     model_config.max_seq_len                                    = 20;
     model_config.vocab_size                                     = 100;
     model_config.hidden_size                                    = 128;

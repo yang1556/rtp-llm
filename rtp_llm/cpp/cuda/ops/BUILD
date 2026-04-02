@@ -127,6 +127,7 @@ cc_library(
         ":gpu_base",
         ":torch_beam_search_op_impl",
         "//rtp_llm/cpp/kernels:scaled_fp8_quant",
+        "//rtp_llm/cpp/kernels:kernels_nan_check",
         "//rtp_llm/cpp/utils:debug_utils",
     ],
     visibility = ["//visibility:public"],
