@@ -4,7 +4,9 @@ import torch
 import torch.nn.functional as F
 from aiter import layernorm2d_fwd as layernorm2d_fwd
 from aiter import rms_norm
-from aiter import rmsnorm2d_fwd_with_add as fused_add_rmsnorm
+from aiter.ops.triton.normalization.rmsnorm import (
+    rmsnorm2d_fwd_with_add as fused_add_rmsnorm,
+)
 from torch import nn
 
 from rtp_llm.models_py.modules.base.common.norm import (
@@ -52,7 +54,6 @@ class RMSResNorm(BaseResNorm):
             residual_out,
             self.weight.data,
             self.variance_epsilon,
-            0,
         )
         return output, residual_out
 
