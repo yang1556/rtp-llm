@@ -619,9 +619,17 @@ class RoundRobinSparseMlaFp8CPOp(SparseMlaFp8Op):
         # no-prefix after all_gather + restore.
         if total_kv > 0:
             owned_mask = ranks == self.prefill_cp_rank
-            physical_slots = self.block_table[
-                req_ids, positions_flat // page_size
-            ].long() * page_size + (positions_flat % page_size)
+            req_ids_d = req_ids.to(self.device)
+            # Sharded RR cache stores one local page per virtual block, not per
+            # global page. Map global token position to:
+            #   page id   = global_pos // virtual_block_size
+            #   page lane = (global_pos % virtual_block_size) // cp_size
+            block_offsets_d = (positions_flat // vbs).to(self.device)
+            token_offsets_d = ((positions_flat % vbs) // C).to(self.device)
+            physical_slots = (
+                self.block_table[req_ids_d, block_offsets_d].long() * page_size
+                + token_offsets_d
+            )
             self._local_kv_pack_dst_rows = (cu_offsets + local_idx)[owned_mask].to(
                 self.device
             )
