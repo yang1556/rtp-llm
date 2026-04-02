@@ -119,6 +119,11 @@ class MagaServerManager(object):
         if ptuning_path is not None:
             current_env[PTUNING_PATH] = ptuning_path
 
+        # Remove PYTEST_CURRENT_TEST so the server subprocess's setup_args()
+        # parses its own CLI arguments (--task_type, --port, etc.) instead of
+        # discarding them via the "running under pytest" guard.
+        current_env.pop("PYTEST_CURRENT_TEST", None)
+
         current_env["START_PORT"] = str(self._port)
         if self._device_ids:
             current_env["CUDA_VISIBLE_DEVICES"] = ",".join(

@@ -30,6 +30,7 @@ def test_gpu_remote():
 
 @pytest.mark.gpu(type="L20", count=1)
 @pytest.mark.cuda
+@pytest.mark.manual
 def test_gpu_remote_l20():
     """Verify GPU available on remote L20 worker."""
     import torch

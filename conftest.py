@@ -68,21 +68,6 @@ def _get_gpu_count_from_markers(node) -> int:
     return 1
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _worker_gpu_lock(request):
-    """No-op session fixture.
-
-    GPU locking is fully handled by the function-scoped ``gpu_lock`` fixture.
-    Each test dynamically acquires N GPUs via DeviceResource file locks.
-
-    On REAPI remote workers, GPU_COUNT is set by the scheduler to ensure
-    the worker has enough GPUs, but CUDA_VISIBLE_DEVICES is NOT pre-set —
-    DeviceResource discovers available GPUs at runtime and uses file locks
-    for cross-process isolation (multiple sessions on the same machine).
-    """
-    yield
-
-
 @pytest.fixture(scope="function")
 def gpu_lock(request):
     """

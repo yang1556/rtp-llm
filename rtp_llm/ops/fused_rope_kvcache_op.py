@@ -3,11 +3,16 @@ from typing import Optional
 
 import torch
 
-from rtp_kernel.fused_rope_kvcache import (
-    convert_offset_to_block_array,
-    decode_fused_rope_kvcache,
-    prefill_fused_rope_kvcache,
-)
+try:
+    from rtp_kernel.fused_rope_kvcache import (
+        convert_offset_to_block_array,
+        decode_fused_rope_kvcache,
+        prefill_fused_rope_kvcache,
+    )
+except ImportError:
+    convert_offset_to_block_array = None
+    decode_fused_rope_kvcache = None
+    prefill_fused_rope_kvcache = None
 
 from librtp_compute_ops import LayerKVCache, PyAttentionInputs, get_scalar_type
 from libth_transformer_config import (

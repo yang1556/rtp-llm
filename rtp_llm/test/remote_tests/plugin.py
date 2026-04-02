@@ -22,6 +22,7 @@ from .remote_exec_rtp import (
     build_runtime_config,
     collect_remote_files,
     collect_session_files,
+    infer_gpu_type_from_markexpr,
     quote_args,
     resolve_default_reapi_endpoints,
     resolve_gpu_type_from_items,
@@ -202,11 +203,6 @@ def pytest_addoption(parser):
         help="Extra pytest args forwarded to the remote session command",
     )
     g.addoption(
-        "--remote-ci-profile",
-        default=None,
-        help="RTP CI profile name forwarded as --rtp-ci-profile on remote worker pytest",
-    )
-    g.addoption(
         "--remote-no-cache",
         action="store_true",
         default=False,
@@ -371,7 +367,7 @@ class RemoteREAPIPlugin:
             self.gpu_type_override = config.getoption("--remote-gpu-type")
             self.workers = config.getoption("--remote-workers")
             self.pytest_args = config.getoption("--remote-pytest-args")
-            self.ci_profile = config.getoption("--remote-ci-profile")
+            self.ci_profile = config.getoption("--rtp-ci-profile", default=None)
             self.no_cache = config.getoption("--remote-no-cache")
             self._result = None
             self._gpu_request: Optional[GPURequest] = None
@@ -523,9 +519,24 @@ class RemoteREAPIPlugin:
 
     def _session_collection_modifyitems(self, config, items) -> None:
         if not items:
-            log.warning("Session mode: no tests collected — nothing to run remotely")
-            return
-        gpu_type = resolve_gpu_type_from_items(items, override=self.gpu_type_override)
+            # No tests collected locally (e.g. ROCm/PPU host lacks GPU hardware).
+            # Try to infer GPU type from --remote-gpu-type or markexpr.
+            gpu_type = self.gpu_type_override
+            if not gpu_type:
+                markexpr = getattr(config.option, "markexpr", "") or ""
+                gpu_type = infer_gpu_type_from_markexpr(markexpr)
+            if not gpu_type:
+                log.warning("Session mode: no tests collected — nothing to run remotely")
+                return
+            log.info(
+                "Session mode: 0 tests collected locally, gpu_type=%s "
+                "(from %s) — submitting session for remote re-collection",
+                gpu_type,
+                "--remote-gpu-type" if self.gpu_type_override else "markexpr",
+            )
+        else:
+            gpu_type = resolve_gpu_type_from_items(items, override=self.gpu_type_override)
+
         self._gpu_request = GPURequest(gpu_type=gpu_type, gpu_count=self.workers)
         log.info(
             "Session mode: resolved gpu_type=%s, gpu_count=%d from %d collected items",

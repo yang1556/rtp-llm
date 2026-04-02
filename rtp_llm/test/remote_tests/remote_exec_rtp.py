@@ -177,7 +177,8 @@ def build_remote_setup_command(rootdir: Path) -> str:
         "echo \">>>PHASE:pip_install_start $(date +%s)\"; "
         "export RTP_SKIP_BAZEL_BUILD=1; "
         "export RTP_LOG_COMPACT=1; "
-        "source internal_source/ci/pip_install.sh; "
+        "source internal_source/ci/prepare_venv.sh && "
+        "uv pip install -e '.[dev]' --no-build-isolation-package rtp-llm; "
         "echo \">>>PHASE:pip_install_done $(date +%s)\"; "
     )
 
@@ -196,7 +197,8 @@ def _collect_base_files(rootdir: Path) -> List[str]:
         "setup.py",
         "setup.cfg",
         "conftest.py",
-        "internal_source/ci/pip_install.sh",
+        "internal_source/ci/prepare_venv.sh",
+        "internal_source/ci/ci_pip_install.sh",
         "internal_source/ci/package_index_config.py",
     ):
         if (rootdir / name).exists():
@@ -211,7 +213,7 @@ def _collect_repo_runtime_files(rootdir: Path) -> List[str]:
         for p in rootdir.glob(pattern):
             if p.is_file() and not any(d in p.parts for d in _EXCLUDE_DIRS):
                 files.append(str(p.relative_to(rootdir)))
-    for pattern in ("rtp_llm/libs/*.so", "rtp_llm/libs/**/*.so"):
+    for pattern in ("rtp_llm/libs/*.so", "rtp_llm/libs/*.so.*", "rtp_llm/libs/**/*.so"):
         files.extend(str(p.relative_to(rootdir)) for p in rootdir.glob(pattern) if p.is_file())
     for pattern in ("rtp_llm/tokenizer_data/*", "rtp_llm/config/*.json"):
         files.extend(str(p.relative_to(rootdir)) for p in rootdir.glob(pattern) if p.is_file())
@@ -299,6 +301,35 @@ def resolve_item_gpu_request(item: Any) -> GPURequest:
     gpu_count = int(marker.kwargs.get("count", 1))
     gpu_type = str(marker.kwargs.get("type", DEFAULT_GPU_TYPE))
     return GPURequest(gpu_type, gpu_count)
+
+
+_KNOWN_GPU_TYPES = frozenset({
+    "A10", "GeForce_RTX_3090", "GeForce_RTX_4090",
+    "Tesla_V100S_PCIE_32GB", "L20", "H20",
+    "SM100", "SM100_ARM", "MI308X",
+    "PPU_ZW810E",
+})
+
+
+def infer_gpu_type_from_markexpr(markexpr: str) -> Optional[str]:
+    """Best-effort extraction of GPU type from a pytest ``-m`` expression.
+
+    Scans for known GPU type tokens that appear *positively* (i.e. not preceded
+    by ``not``).  Returns the first match, or ``None`` if nothing is found.
+    """
+    if not markexpr:
+        return None
+    import re
+    # Tokenize: split into words, identify negated tokens
+    negated: set = set()
+    tokens = re.findall(r'\b\w+\b', markexpr)
+    for i, tok in enumerate(tokens):
+        if tok == "not" and i + 1 < len(tokens):
+            negated.add(tokens[i + 1])
+    for gpu_type in _KNOWN_GPU_TYPES:
+        if gpu_type in tokens and gpu_type not in negated:
+            return gpu_type
+    return None
 
 
 def resolve_gpu_type_from_items(items: list, *, override: Optional[str] = None) -> str:

@@ -513,7 +513,7 @@ def run_atrex(
     return output
 
 
-def test_flash_attn_output(
+def _run_flash_attn_output(
     batch_size,
     nheads,
     seqlen_q,
@@ -714,7 +714,7 @@ def asm_V_shuffle(VC):
     return VC
 
 
-def test_paged_attention(
+def _run_paged_attention(
     ctx_lens: int,
     num_seqs: int,
     num_heads: int,
@@ -927,7 +927,7 @@ class FmhaTest(TestCase):
                 mha_type=mha_type,
                 dtype=str(dtype),
             ):
-                out, out_ref, out_pt = test_flash_attn_output(
+                out, out_ref, out_pt = _run_flash_attn_output(
                     batch_size,
                     nheads,
                     seqlen_q,
@@ -953,7 +953,7 @@ class FmhaTest(TestCase):
         num_heads = (32, 8)
         ctx_len = 128
         torch_dtype = dtypes.bf16
-        result = test_paged_attention(
+        result = _run_paged_attention(
             ctx_len, 128, num_heads, 128, False, 16, torch_dtype, "auto", 0, "cuda:0"
         )
         self.assertIsInstance(result, dict)

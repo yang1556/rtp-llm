@@ -86,14 +86,16 @@ try:
 except BaseException as e:
     logging.info(f"Exception: {e}, traceback: {traceback.format_exc()}")
 
-# frontend cannot load libpython3.10.so, so we need to load it manually
+# frontend cannot load libpython, so we need to load it manually
+import sys
 import sysconfig
 from ctypes import cdll
 
 try:
-    cdll.LoadLibrary(sysconfig.get_config_var("LIBDIR") + "/libpython3.10.so")
+    _pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    cdll.LoadLibrary(sysconfig.get_config_var("LIBDIR") + f"/libpython{_pyver}.so")
 except OSError:
-    pass  # OK if libpython3.10.so not found (e.g. different Python version)
+    pass
 
 try:
     from libth_transformer_config import (
@@ -202,6 +204,7 @@ except BaseException as e:
     )
     RtpEmbeddingOp = RtpLLMOp = EmptyClass
 
+    logging.warning(f"libth_transformer import failed: {type(e).__name__}: {e}")
     logging.info(
         "libth_transformer not imported, you may under python standalone mode or frontend mode now."
     )
