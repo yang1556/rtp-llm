@@ -29,7 +29,7 @@ def _load_tokenizer(model_type: str, tokenizer_path: str) -> PreTrainedTokenizer
             pad_token="<|endoftext|>",
             unk_token="<|endoftext|>",
         )
-    return AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+    return AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True, local_files_only=True)
 
 
 def write_odps(table_name: str, records: List[Any], fields: List[str] = []):

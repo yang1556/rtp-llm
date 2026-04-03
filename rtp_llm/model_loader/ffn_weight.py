@@ -472,3 +472,8 @@ class MoeWeight(CompositeWeight):
             else:
                 self._shuff_moe_weight(keys[0], tensor, load_config)
         return super()._postprocess(tensor, device, load_config)
+
+# Stub for internal source compatibility
+class MoeWithSharedWeight(MoeWeight):
+    pass
+
