@@ -680,9 +680,11 @@ absl::Status MtpExecutor::decodeStep(const std::list<GenerateStreamPtr>& streams
     // dispatch
     {
         RTP_LLM_PROFILE_SCOPE("executor.mtp.decode_step(dispatch_output)");
-        auto result = batch_stream_processor_->dispatchDecode(
+        MergedOutput target_model_merged_output{std::move(model_output), std::move(sampler_output)};
+        auto         result = batch_stream_processor_->dispatchDecode(
             stream_groups,
             speculative_sampler_output,
+            target_model_merged_output,
             {std::move(draft_prefill_model_output), std::move(draft_prefill_sampler_output)});
         // clean holder tensors from grpc
         for (auto& stream : streams) {
@@ -784,9 +786,9 @@ void MtpExecutor::draftModelDecode(GptModelInputs&             model_input,
     // clear host buffers holder
     buffer_holder_.release();
 
-    const auto& mtp_cache_cfg          = cache_manager_->getMTPModuleCacheConfig(0);
-    model_input.kv_block_stride_bytes  = mtp_cache_cfg.kv_block_stride_bytes;
-    model_input.kv_scale_stride_bytes  = mtp_cache_cfg.kv_scale_stride_bytes;
+    const auto& mtp_cache_cfg         = cache_manager_->getMTPModuleCacheConfig(0);
+    model_input.kv_block_stride_bytes = mtp_cache_cfg.kv_block_stride_bytes;
+    model_input.kv_scale_stride_bytes = mtp_cache_cfg.kv_scale_stride_bytes;
 
     GptModelOutputs            draft_decode_model_output;
     std::vector<torch::Tensor> draft_token_ids_list;
@@ -871,8 +873,7 @@ void MtpExecutor::draftModelDecode(GptModelInputs&             model_input,
 
         const auto& cache_cfg             = cache_manager_->cacheConfig();
         model_input.kv_block_stride_bytes = cache_cfg.kv_block_stride_bytes;
-        model_input.kv_scale_stride_bytes  = cache_cfg.kv_scale_stride_bytes;
-
+        model_input.kv_scale_stride_bytes = cache_cfg.kv_scale_stride_bytes;
     }
 }
 

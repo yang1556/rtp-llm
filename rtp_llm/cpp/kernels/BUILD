@@ -473,6 +473,42 @@ cc_library(
 )
 
 cc_library(
+    name = "kernels_nan_check",
+    srcs = [
+        "nan_check_kernels.cu",
+    ],
+    hdrs = [
+        "nan_check_kernels.h",
+    ],
+    deps = any_cuda_deps + [
+        "//rtp_llm/cpp/utils:core_utils",
+        "//rtp_llm/cpp/utils:math_utils",
+        "//rtp_llm/cpp/cuda:cuda_utils_cu",
+    ],
+    copts = any_cuda_copts(),
+    include_prefix = "src",
+    visibility = ["//visibility:public"],
+)
+
+# NaN-check implementation target:
+# - exports callable C++ symbols used by pybind and C++ callers
+# - does NOT perform torch operator schema/kernel registration
+cc_library(
+    name = "nan_check_torch_op",
+    srcs = ["nan_check_torch_op.cc"],
+    hdrs = ["nan_check_torch_op.h"],
+    deps = [
+        "//rtp_llm/cpp/core:types_hdr",
+    ] + torch_deps() + select({
+        "@//:using_cuda": [":kernels_nan_check"],
+        "@//:using_rocm": [":kernels_nan_check"],
+        "//conditions:default": [],
+    }),
+    copts = any_cuda_copts(),
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "kernels_kv_cache",
     srcs = [
         "kv_cache_kernels.cu",
