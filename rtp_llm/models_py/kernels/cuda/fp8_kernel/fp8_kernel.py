@@ -57,6 +57,8 @@ def _transform_scale_ue8m0(sf, mn):
     import deep_gemm.utils.layout
 
     sf = sf.index_select(-2, torch.arange(mn, device=sf.device) // 128)
+    if not sf.is_cuda:
+        sf = sf.cuda()
     sf = deep_gemm.utils.layout.get_mn_major_tma_aligned_packed_ue8m0_tensor(sf)
     return sf
 
