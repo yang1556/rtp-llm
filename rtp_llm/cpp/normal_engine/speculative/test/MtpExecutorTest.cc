@@ -768,7 +768,7 @@ TEST_F(MtpExecutorTest, testDecodeTargetNanAndDraftNanAcceptedPreserveFirstReaso
     next_draft_output.logits            = torch::tensor({1.9f, 1.10f, 1.11f, 1.12f}).reshape({(int64_t)batch_size, 4});
     next_draft_output.all_hidden_states = torch::tensor({0.1f, 0.1f, 0.2f, 0.22f, 0.3f, 0.33f}).reshape({3, 2});
     // Draft prefill output NaN (will be checked only if accept_len > 0)
-    next_draft_output.nan_flag = torch::tensor({1}, torch::kInt32);
+    next_draft_output.nan_flag = torch::tensor({1.0f}, torch::kFloat32);
 
     // Post-draft-model input for next prefill step (shape is not validated by FakeModel).
     next_draft_input.combo_tokens       = torch::tensor({3}, torch::kInt32);
@@ -793,7 +793,7 @@ TEST_F(MtpExecutorTest, testDecodeTargetNanAndDraftNanAcceptedPreserveFirstReaso
                                .reshape({(int64_t)(batch_size * (propose_step + 1)), 4});
     target_output.all_hidden_states =
         torch::tensor({0.01f, 0.02f, 0.03f, 0.04f, 0.05f, 0.06f}).reshape({(int64_t)(propose_step + 1), 2});
-    target_output.nan_flag = torch::tensor({1}, torch::kInt32);
+    target_output.nan_flag = torch::tensor({1.0f}, torch::kFloat32);
 
     components.fake_target_model->setInputs({target_input});
     components.fake_target_model->setOutputs({target_output});
@@ -878,7 +878,7 @@ TEST_F(MtpExecutorTest, testDecodeDraftNanRejectedDoesNotStop) {
     auto next_draft_output              = GptModelOutputs{};
     next_draft_output.logits            = torch::tensor({1.9f, 1.10f, 1.11f, 1.12f}).reshape({(int64_t)batch_size, 4});
     next_draft_output.all_hidden_states = torch::tensor({0.1f, 0.1f, 0.2f, 0.22f, 0.3f, 0.33f}).reshape({3, 2});
-    next_draft_output.nan_flag          = torch::tensor({1}, torch::kInt32);
+    next_draft_output.nan_flag          = torch::tensor({1.0f}, torch::kFloat32);
 
     // Post-draft-model input for next prefill step (shape is not validated by FakeModel).
     next_draft_input.combo_tokens       = torch::tensor({3}, torch::kInt32);

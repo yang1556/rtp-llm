@@ -1314,8 +1314,8 @@ TEST_F(CudaCheckAndResetNANTest, TestFP8_KVCachePrefill_RemainderTailDetection) 
     ASSERT_EQ(cudaGetLastError(), cudaSuccess);
 
     float h_nan_flag = 0;
-    cudaMemcpy(&h_nan_flag, d_nan_flag, sizeof(int32_t), cudaMemcpyDeviceToHost);
-    EXPECT_EQ(h_nan_flag, 1) << "NaN in FP8 remainder byte should be detected in prefill";
+    cudaMemcpy(&h_nan_flag, d_nan_flag, sizeof(float), cudaMemcpyDeviceToHost);
+    EXPECT_FLOAT_EQ(h_nan_flag, 1.0f) << "NaN in FP8 remainder byte should be detected in prefill";
 
     uint8_t tail_after = 0xFFu;
     cudaMemcpy(&tail_after, k_tail_ptr, sizeof(uint8_t), cudaMemcpyDeviceToHost);
@@ -1994,14 +1994,14 @@ TEST_F(CudaCheckAndResetNANTest, TestFloat_KVCacheDecode_MultiWarpNanDetection) 
     ASSERT_EQ(cudaGetLastError(), cudaSuccess) << "Kernel launch failed";
 
     // Read back nan_flag
-    std::vector<int32_t> h_nan_flag(batch_size);
-    cudaMemcpy(h_nan_flag.data(), d_nan_flag, batch_size * sizeof(int32_t), cudaMemcpyDeviceToHost);
+    std::vector<float> h_nan_flag(batch_size);
+    cudaMemcpy(h_nan_flag.data(), d_nan_flag, batch_size * sizeof(float), cudaMemcpyDeviceToHost);
 
     // Both batches should have NaN detected — NaN was placed in warp 1's heads only.
     // If the bug exists (threadIdx.x == 0), these will be 0 (FAIL).
     // If fixed (lane_id == 0), these will be 1 (PASS).
-    EXPECT_EQ(h_nan_flag[0], 1) << "Batch 0: NaN in head 48 (warp 1) not detected — multi-warp reduction bug";
-    EXPECT_EQ(h_nan_flag[1], 1) << "Batch 1: NaN in head 60 (warp 1) not detected — multi-warp reduction bug";
+    EXPECT_FLOAT_EQ(h_nan_flag[0], 1.0f) << "Batch 0: NaN in head 48 (warp 1) not detected — multi-warp reduction bug";
+    EXPECT_FLOAT_EQ(h_nan_flag[1], 1.0f) << "Batch 1: NaN in head 60 (warp 1) not detected — multi-warp reduction bug";
 
     // Verify NaN was reset to 0
     {

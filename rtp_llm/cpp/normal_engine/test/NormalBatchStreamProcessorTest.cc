@@ -432,13 +432,13 @@ TEST_F(NormalBatchStreamProcessorTest, testNanFlagDetection) {
     //   - stream1 batch: has NaN
     //   - stream2 batch: no NaN
     //   - stream3 batch: has NaN
-    std::vector<int32_t> nan_flag_data = {1, 0, 1};  // 3 batches
+    std::vector<float> nan_flag_data = {1, 0, 1};  // 3 batches
 
     MergedOutput merge_outputs;
     // dispatch() only uses nan_flag (shape [total_batch_size]) and sampler_output.token_ids (must be < vocab_size)
     merge_outputs.model_output.hidden_states   = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}).reshape({3, 2});
     merge_outputs.model_output.logits          = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}).reshape({3, 2});
-    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kInt32);
+    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kFloat32);
     merge_outputs.sampler_output.token_ids     = torch::tensor({0, 1, 0}, torch::kInt32).reshape({3, 1});
     merge_outputs.sampler_output.cum_log_probs = torch::tensor({1.0f, 2.0f, 3.0f});
 
@@ -505,13 +505,13 @@ TEST_F(NormalBatchStreamProcessorTest, testNanFlagDetection_DecodeStream) {
     EXPECT_TRUE(merge_input_status.ok());
 
     // nan_flag: [1] means token 0 has NaN
-    std::vector<int32_t> nan_flag_data      = {1};
+    std::vector<float> nan_flag_data      = {1};
     std::vector<int32_t> input_lengths_data = {1};
 
     MergedOutput merge_outputs;
     merge_outputs.model_output.hidden_states   = torch::tensor({1.0f, 2.0f}).reshape({1, 2});
     merge_outputs.model_output.logits          = torch::tensor({1.0f, 2.0f}).reshape({1, 2});
-    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kInt32);
+    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kFloat32);
     merge_outputs.sampler_output.token_ids     = torch::tensor({0}, torch::kInt32).reshape({1, 1});
     merge_outputs.sampler_output.cum_log_probs = torch::tensor({1.0f});
 
@@ -567,12 +567,12 @@ TEST_F(NormalBatchStreamProcessorTest, testNanFlagDetection_ContextStream) {
     // NOTE: NormalBatchStreamProcessor expects nan_flag shape == [total_batch_size],
     // i.e. one flag per batch (not per token).
     // nan_flag: [1] means this (single) batch has NaN.
-    std::vector<int32_t> nan_flag_data = {1};
+    std::vector<float> nan_flag_data = {1};
 
     MergedOutput merge_outputs;
     merge_outputs.model_output.hidden_states   = torch::tensor({1.0f, 2.0f}).reshape({1, 2});
     merge_outputs.model_output.logits          = torch::tensor({1.0f, 2.0f}).reshape({1, 2});
-    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kInt32);
+    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kFloat32);
     merge_outputs.sampler_output.token_ids     = torch::tensor({0}, torch::kInt32).reshape({1, 1});
     merge_outputs.sampler_output.cum_log_probs = torch::tensor({1.0f});
 
@@ -657,13 +657,13 @@ TEST_F(NormalBatchStreamProcessorTest, testNanFlagDetection_MultipleStreams) {
     //   - stream1 (token 0): has NaN
     //   - stream2 (token 1): no NaN
     //   - stream3 (token 2): has NaN
-    std::vector<int32_t> nan_flag_data      = {1, 0, 1};
+    std::vector<float> nan_flag_data      = {1, 0, 1};
     std::vector<int32_t> input_lengths_data = {1, 1, 1};
 
     MergedOutput merge_outputs;
     merge_outputs.model_output.hidden_states   = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}).reshape({3, 2});
     merge_outputs.model_output.logits          = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}).reshape({3, 2});
-    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kInt32);
+    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kFloat32);
     merge_outputs.sampler_output.token_ids     = torch::tensor({0, 1, 2}, torch::kInt32).reshape({3, 1});
     merge_outputs.sampler_output.cum_log_probs = torch::tensor({1.0f, 2.0f, 3.0f});
 
@@ -732,12 +732,12 @@ TEST_F(NormalBatchStreamProcessorTest, testNanFlagDetection_BeamSearch) {
     // In first step of beam_search, currentBatchSize() = 1, but nextBatchSize() = num_beams = 3
     // nan_flag shape should be [1] (one flag for the single batch in first step)
     // nan_flag: [1] means this batch has NaN
-    std::vector<int32_t> nan_flag_data = {1};
+    std::vector<float> nan_flag_data = {1};
 
     MergedOutput merge_outputs;
     merge_outputs.model_output.hidden_states = torch::tensor({1.0f, 2.0f}).reshape({1, 2});
     merge_outputs.model_output.logits        = torch::tensor({1.0f, 2.0f}).reshape({1, 2});
-    merge_outputs.model_output.nan_flag      = torch::tensor(nan_flag_data, torch::kInt32);
+    merge_outputs.model_output.nan_flag      = torch::tensor(nan_flag_data, torch::kFloat32);
     // nextBatchSize() = num_beams = 3, so token_ids shape should be [3, 1]
     merge_outputs.sampler_output.token_ids     = torch::tensor({0, 1, 0}, torch::kInt32).reshape({3, 1});
     merge_outputs.sampler_output.cum_log_probs = torch::tensor({1.0f, 2.0f, 3.0f});
@@ -806,12 +806,12 @@ TEST_F(NormalBatchStreamProcessorTest, testNanFlagDetection_NumReturnSequences) 
     //   - sequence 0: has NaN
     //   - sequence 1: no NaN
     //   - sequence 2: has NaN
-    std::vector<int32_t> nan_flag_data = {1, 0, 1};
+    std::vector<float> nan_flag_data = {1, 0, 1};
 
     MergedOutput merge_outputs;
     merge_outputs.model_output.hidden_states   = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}).reshape({3, 2});
     merge_outputs.model_output.logits          = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}).reshape({3, 2});
-    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kInt32);
+    merge_outputs.model_output.nan_flag        = torch::tensor(nan_flag_data, torch::kFloat32);
     merge_outputs.sampler_output.token_ids     = torch::tensor({0, 1, 0}, torch::kInt32).reshape({3, 1});
     merge_outputs.sampler_output.cum_log_probs = torch::tensor({1.0f, 2.0f, 3.0f});
 
