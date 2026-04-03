@@ -310,10 +310,15 @@ void StreamCacheResource::loadCacheSync() {
     if (!reuseCache() || (!enableMemoryCache() && !enableRemoteCache())) {
         return;
     }
+    RTP_LLM_PROFILE_FUNCTION();
     assert(reuse_cache());
-    auto meta               = std::make_shared<MetaImpl>(enableMemoryCache(), enableRemoteCache(), stream_->traceId());
-    auto connector_context  = std::make_shared<KVCacheConnectorReadWriteContextImpl>(batch_kv_cache_resource_, meta);
-    auto load_cache_context = resource_context_.cache_manager->asyncLoadCache(connector_context);
+    auto meta              = std::make_shared<MetaImpl>(enableMemoryCache(), enableRemoteCache(), stream_->traceId());
+    auto connector_context = std::make_shared<KVCacheConnectorReadWriteContextImpl>(batch_kv_cache_resource_, meta);
+    std::shared_ptr<AsyncContext> load_cache_context;
+    {
+        RTP_LLM_PROFILE_SCOPE("asyncLoadCache");
+        load_cache_context = resource_context_.cache_manager->asyncLoadCache(connector_context);
+    }
     waitLoadCacheDone(load_cache_context);
 }
 

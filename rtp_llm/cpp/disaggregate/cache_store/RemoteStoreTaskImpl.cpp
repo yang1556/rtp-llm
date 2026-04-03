@@ -1,14 +1,16 @@
 #include "rtp_llm/cpp/disaggregate/cache_store/RemoteStoreTaskImpl.h"
+#include "rtp_llm/cpp/utils/Logger.h"
+#include "rtp_llm/cpp/utils/ProfilingScope.h"
 
 namespace rtp_llm {
 
-RemoteStoreTaskImpl::RemoteStoreTaskImpl(const std::shared_ptr<RemoteStoreRequest>& request,
+RemoteStoreTaskImpl::RemoteStoreTaskImpl(const std::shared_ptr<RemoteStoreRequest>&                    request,
                                          const std::shared_ptr<CacheStoreRemoteStoreMetricsCollector>& collector,
-                                         CheckCancelFunc                            check_cancel_func):
+                                         CheckCancelFunc check_cancel_func):
     RemoteStoreTask(request, check_cancel_func) {
     to_load_buffers_          = request_->buffer_pairs;
     expect_done_buffer_count_ = to_load_buffers_.size();
-    collector_ = collector;
+    collector_                = collector;
     collector_->markStart();
 }
 
@@ -46,6 +48,7 @@ bool RemoteStoreTaskImpl::success() const {
 
 std::shared_ptr<TransferRequest>
 RemoteStoreTaskImpl::makeAvailableRequest(const std::shared_ptr<RequestBlockBuffer>& request_block_buffer) {
+    RTP_LLM_PROFILE_FUNCTION();
     if (request_block_buffer == nullptr) {
         return nullptr;
     }
@@ -63,6 +66,7 @@ RemoteStoreTaskImpl::makeAvailableRequest(const std::shared_ptr<RequestBlockBuff
     }
     auto transfer_request = std::make_shared<TransferRequest>(request_);
     {
+        RTP_LLM_PROFILE_SCOPE("transfer_request_lock");
         std::unique_lock<std::shared_mutex> lock(buffers_mutex_);
         if (done_) {
             // 已经完成过了或是已经失败, 不需要继续或是重复发送
@@ -70,6 +74,7 @@ RemoteStoreTaskImpl::makeAvailableRequest(const std::shared_ptr<RequestBlockBuff
         }
 
         auto blocks = request_block_buffer->getBlocks();
+        RTP_LLM_PROFILE_SCOPE_DYNAMIC("transfer_request_lock_[%lu]", blocks.size());
 
         for (auto [key, block] : blocks) {
             auto iter = to_load_buffers_.find(key);
@@ -102,12 +107,13 @@ RemoteStoreTaskImpl::makeAvailableRequest(const std::shared_ptr<RequestBlockBuff
         };
 
     RTP_LLM_LOG_DEBUG("remote store task make available request success, request id is %s",
-                     request_block_buffer->getRequestId().c_str());
+                      request_block_buffer->getRequestId().c_str());
     return transfer_request;
 }
 
 std::shared_ptr<TransferRequest>
 RemoteStoreTaskImpl::makeAvailableRequest(const std::vector<std::shared_ptr<BlockBuffer>>& blocks) {
+    RTP_LLM_PROFILE_FUNCTION();
     auto transfer_request = std::make_shared<TransferRequest>(request_);
     {
         std::unique_lock<std::shared_mutex> lock(buffers_mutex_);
@@ -117,7 +123,7 @@ RemoteStoreTaskImpl::makeAvailableRequest(const std::vector<std::shared_ptr<Bloc
         }
 
         if (!blocks.empty()) {
-            int block_size  = 0;
+            int block_size = 0;
             for (auto block : blocks) {
                 block_size = block->len;
                 break;
@@ -125,6 +131,7 @@ RemoteStoreTaskImpl::makeAvailableRequest(const std::vector<std::shared_ptr<Bloc
             collector_->setBlockSize(block_size * expect_done_buffer_count_);
         }
 
+        RTP_LLM_PROFILE_SCOPE_DYNAMIC("transfer_request_lock_[%lu]", blocks.size());
         for (auto block : blocks) {
             auto key  = block->key;
             auto iter = to_load_buffers_.find(key);
@@ -137,7 +144,7 @@ RemoteStoreTaskImpl::makeAvailableRequest(const std::vector<std::shared_ptr<Bloc
             if (to_load_buffers_.size() == expect_done_buffer_count_) {
                 // first block ready
                 collector_->markFirstBlockReady();
-            } 
+            }
             if (to_load_buffers_.size() == 1) {
                 // all blocks ready
                 collector_->markAllBlocksReady();
@@ -165,11 +172,12 @@ RemoteStoreTaskImpl::makeAvailableRequest(const std::vector<std::shared_ptr<Bloc
         };
 
     RTP_LLM_LOG_DEBUG("remote store task make available request success, request id is %s",
-                     request_->request_id.c_str());
+                      request_->request_id.c_str());
     return transfer_request;
 }
 
 void RemoteStoreTaskImpl::notifyRequestDone(const std::map<std::string, std::string>& block_keys, bool success) {
+    RTP_LLM_PROFILE_FUNCTION();
     {
         std::lock_guard<std::shared_mutex> lock(buffers_mutex_);
         if (done_) {
