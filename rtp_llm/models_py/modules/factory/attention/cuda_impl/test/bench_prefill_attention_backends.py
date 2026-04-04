@@ -216,16 +216,14 @@ def _try_create_trt_paged_op(num_heads, kv_heads, head_dim, dtype, batch_size, q
             return None
         params = op.prepare(inp)
 
-        # Build paged KV cache with ONLY prefix K/V (prefix_len tokens per batch)
-        # New token K/V comes from packed QKV input, written by RoPE op in framework
+        # Build paged KV cache with ALL K/V (kv_len tokens per batch)
+        # TRT Paged expects ALL KV already in cache (simulating FusedRopeKVCache write)
         kv_cache_tensor = torch.zeros(total_pages, 2, kv_heads, page_size, head_dim, dtype=dtype, device=device)
         for b in range(batch_size):
-            kv_start = b * kv_len  # offset into flat k/v arrays
+            kv_start = b * kv_len
             for p in range(pages_per_seq):
                 pg_s = p * page_size
-                pg_e = min(pg_s + page_size, prefix_len)  # only fill prefix portion
-                if pg_s >= prefix_len:
-                    break
+                pg_e = min(pg_s + page_size, kv_len)
                 pg_l = pg_e - pg_s
                 pi = b * pages_per_seq + p
                 kv_cache_tensor[pi, 0, :, :pg_l, :] = k[kv_start+pg_s:kv_start+pg_e].transpose(0, 1)
@@ -234,20 +232,11 @@ def _try_create_trt_paged_op(num_heads, kv_heads, head_dim, dtype, batch_size, q
         kv_cache = LayerKVCache()
         kv_cache.kv_cache_base = kv_cache_tensor
 
-        # Packed QKV for new tokens: [total_q_tokens, (H + 2*KVH) * D]
-        # Q from q tensor, K/V from the new-token portion of k/v tensors
-        total_q = batch_size * q_len
-        qkv_dim = (num_heads + 2 * kv_heads) * head_dim
-        packed = torch.empty(total_q, qkv_dim, dtype=dtype, device=device)
-        for b in range(batch_size):
-            qs = b * q_len
-            # new token K/V starts at offset prefix_len within this batch's kv segment
-            ks = b * kv_len + prefix_len
-            packed[qs:qs+q_len, :num_heads*head_dim] = q[qs:qs+q_len].reshape(q_len, num_heads*head_dim)
-            packed[qs:qs+q_len, num_heads*head_dim:(num_heads+kv_heads)*head_dim] = k[ks:ks+q_len].reshape(q_len, kv_heads*head_dim)
-            packed[qs:qs+q_len, (num_heads+kv_heads)*head_dim:] = v[ks:ks+q_len].reshape(q_len, kv_heads*head_dim)
+        # Input is Q only: [total_q_tokens, num_heads, head_dim]
+        # TRT Paged reads Q from input, K/V from paged cache
+        q_input = q.contiguous()
 
-        return op, params, kv_cache, packed
+        return op, params, kv_cache, q_input
     except Exception as e:
         import traceback
         logger.warning(f"TRT-V2-paged init failed: {e}\n{traceback.format_exc()}")
