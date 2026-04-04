@@ -457,7 +457,7 @@ class RemoteREAPIPlugin:
         ignore_args = quote_args(runtime.ignore_args)
         # Forward markexpr so conftest.py doesn't deselect manual tests
         markexpr = getattr(self.config.option, "markexpr", "") or ""
-        mark_arg = f"-m '{markexpr}' " if markexpr else ""
+        mark_arg = f"-m {shlex.quote(markexpr)} " if markexpr else ""
 
         outputs_prefix = ""
         outputs_postscript = ""
@@ -473,7 +473,7 @@ class RemoteREAPIPlugin:
             f"python -m pytest -xvs --tb=long --timeout={self.timeout} "
             f"--override-ini='addopts=' {ignore_args} "
             f"{mark_arg}"
-            f"-k '{test_id}' {test_path} 2>&1; ec=$?; "
+            f"-k {shlex.quote(test_id)} {shlex.quote(test_path)} 2>&1; ec=$?; "
             "echo EXIT_CODE=$ec; "
             'echo ">>>PHASE:pytest_end $(date +%s)"; '
             f"{outputs_postscript}"
@@ -731,6 +731,10 @@ class RemoteREAPIPlugin:
 
         item.ihook.pytest_runtest_logreport(report=report)
 
+        teardown_call = CallInfo.from_call(lambda: None, when="teardown")
+        teardown_report = pytest.TestReport.from_item_and_call(item, teardown_call)
+        item.ihook.pytest_runtest_logreport(report=teardown_report)
+
     @pytest.hookimpl(tryfirst=True)
     def pytest_runtestloop(self, session):
         if self.mode != RemoteDispatchMode.SESSION:
@@ -952,7 +956,7 @@ class RemoteREAPIPlugin:
         ignore_args = quote_args(runtime.ignore_args)
         # Forward markexpr to remote worker if set locally
         markexpr = getattr(self.config.option, "markexpr", "") or ""
-        mark_arg = f"-m '{markexpr}' " if markexpr else ""
+        mark_arg = f"-m {shlex.quote(markexpr)} " if markexpr else ""
         profile_arg = (
             f"--rtp-ci-profile={shlex.quote(ci_profile)} " if ci_profile else ""
         )
@@ -964,6 +968,7 @@ class RemoteREAPIPlugin:
             outputs_prefix = make_mkdir_prefix()
             outputs_postscript = make_tar_postscript() + "; "
 
+        # pytest_args comes from --remote-pytest-args (operator-controlled), not user input
         run_cmd = (
             f"{outputs_prefix}"
             "echo \">>>RTP_REMOTE_HOST_IP $(hostname -I 2>/dev/null | awk '{print $1}')\"; "

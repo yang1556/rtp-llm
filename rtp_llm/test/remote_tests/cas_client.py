@@ -82,11 +82,13 @@ class CASClient:
         self.instance_name = ""
         self._batch_upload_workers = max(1, batch_upload_workers)
         self._parallel_bytestream = max(1, parallel_bytestream)
+        self._extra_channels: list = []
 
     def _new_bs_stub(self):
         """Create a new ByteStream stub on a separate channel (for parallel uploads)."""
         ch = grpc.insecure_channel(
             self._addr, options=[("grpc.max_send_message_length", GRPC_MAX_MSG_SIZE)])
+        self._extra_channels.append(ch)
         return bs_grpc.ByteStreamStub(ch)
 
     def new_bytestream_stub(self) -> bs_grpc.ByteStreamStub:
@@ -98,7 +100,21 @@ class CASClient:
                 ("grpc.max_receive_message_length", GRPC_MAX_MSG_SIZE),
             ],
         )
+        self._extra_channels.append(ch)
         return bs_grpc.ByteStreamStub(ch)
+
+    def close(self):
+        """Close all gRPC channels (main + extras created for parallel ops)."""
+        for ch in self._extra_channels:
+            try:
+                ch.close()
+            except Exception:
+                pass
+        self._extra_channels.clear()
+        try:
+            self.channel.close()
+        except Exception:
+            pass
 
     def upload_directory(
         self,
@@ -300,7 +316,7 @@ class CASClient:
                         finish_write=is_last,
                     )
                     offset += len(data)
-                if offset == digest.size_bytes and not is_last:
+                if not is_last:
                     yield bs_pb2.WriteRequest(
                         resource_name=resource_name,
                         write_offset=offset,
@@ -329,6 +345,10 @@ class CASClient:
         self.bs_stub.Write(_chunks(), metadata=self.metadata)
 
     def _send_batch(self, requests):
-        self.stub.BatchUpdateBlobs(
+        resp = self.stub.BatchUpdateBlobs(
             re_pb2.BatchUpdateBlobsRequest(instance_name=self.instance_name, requests=requests),
             metadata=self.metadata)
+        for r in resp.responses:
+            if r.status.code != 0:
+                log.warning("BatchUpdateBlobs failed for %s: code=%d msg=%s",
+                            r.digest.hash[:12], r.status.code, r.status.message)

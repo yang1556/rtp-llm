@@ -14,6 +14,7 @@ independently.
 from __future__ import annotations
 
 import logging
+import os
 import tarfile
 import tempfile
 from pathlib import Path
@@ -25,6 +26,21 @@ if TYPE_CHECKING:
     from .executor import ExecutionResult
 
 log = logging.getLogger(__name__)
+
+
+def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
+    """Extract tar members safely, rejecting path traversal attempts."""
+    for member in tar.getmembers():
+        member_path = os.path.normpath(member.name)
+        if member_path.startswith("..") or os.path.isabs(member_path):
+            log.warning("Skipping unsafe tar member: %s", member.name)
+            continue
+        # Resolve to ensure no symlink tricks
+        target = (dest / member_path).resolve()
+        if not str(target).startswith(str(dest.resolve())):
+            log.warning("Skipping tar member escaping dest: %s", member.name)
+            continue
+        tar.extract(member, dest)
 
 # Bazel-compatible env var name — existing code already writes to this.
 OUTPUTS_ENV_VAR = "TEST_UNDECLARED_OUTPUTS_DIR"
@@ -123,7 +139,7 @@ def download_and_extract(
             tf.write(data)
             tmp_path = Path(tf.name)
         with tarfile.open(tmp_path, "r:gz") as tar:
-            tar.extractall(local_dest)
+            _safe_extract(tar, local_dest)
         log.info("Remote outputs extracted to %s", local_dest)
         return local_dest
     except Exception as exc:
