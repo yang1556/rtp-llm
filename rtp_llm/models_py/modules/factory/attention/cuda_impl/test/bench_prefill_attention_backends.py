@@ -4,18 +4,18 @@ Benchmark: Prefill Attention Backends on H20 (SM90)
 Backends:
 1. Dao-AILab FA3 (flash_attn_interface.flash_attn_varlen_func)
 2. Dao-AILab FA2 (flash_attn.flash_attn_varlen_func)
-3. FlashInfer fa3 ragged (BatchPrefillWithRaggedKVCacheWrapper backend="fa3")
-4. FlashInfer fa2 ragged (BatchPrefillWithRaggedKVCacheWrapper backend="fa2")
-5. FlashInfer fa3 paged (BatchPrefillWithPagedKVCacheWrapper backend="fa3")
-6. FlashInfer fa2 paged (BatchPrefillWithPagedKVCacheWrapper backend="fa2")
-7. TRT FMHA V2 (TRTAttnOp C++ pybind op, pure prefill only)
-8. PyTorch SDPA - reference
+3. FlashInfer fa3/fa2 ragged (BatchPrefillWithRaggedKVCacheWrapper)
+4. FlashInfer fa3/fa2 paged (BatchPrefillWithPagedKVCacheWrapper)
+5. TRT FMHA V2 normal (pure prefill) + paged (prefill-with-cache)
+6. PyTorch SDPA - reference
 
 Usage:
-    pytest bench_prefill_attention_backends.py -v -s --remote-session --remote-gpu-type=H20
+    pytest bench_prefill_attention_backends.py -v -s -m manual \
+        --remote-session --remote-gpu-type=H20
 """
 
 import logging
+import math
 import statistics
 from typing import Dict
 
@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 # Data preparation
 # ============================================================================
 
+PAGE_SIZE = 64
+
 
 def _make_qkv(batch_size, q_len, kv_len, num_heads, kv_heads, head_dim, dtype, device):
     total_q = batch_size * q_len
@@ -53,21 +55,20 @@ def _make_qkv(batch_size, q_len, kv_len, num_heads, kv_heads, head_dim, dtype, d
 
 
 def _fill_paged_kv(k, v, batch_size, kv_len, kv_heads, head_dim, page_size, dtype, device):
-    """Create paged KV cache filled with k/v data."""
-    pages_per_seq = (kv_len + page_size - 1) // page_size
+    """Create paged KV cache [total_pages, 2, kv_heads, page_size, head_dim] filled with k/v data."""
+    pages_per_seq = math.ceil(kv_len / page_size)
     total_pages = batch_size * pages_per_seq
     kv_data = torch.zeros(total_pages, 2, kv_heads, page_size, head_dim, dtype=dtype, device=device)
-    block_tables = torch.arange(total_pages, dtype=torch.int32, device=device).reshape(batch_size, pages_per_seq)
     for b in range(batch_size):
         s = b * kv_len
         for p in range(pages_per_seq):
-            pg_start = p * page_size
-            pg_end = min(pg_start + page_size, kv_len)
-            pg_len = pg_end - pg_start
-            page_idx = block_tables[b, p].item()
-            kv_data[page_idx, 0, :, :pg_len, :] = k[s + pg_start:s + pg_end].transpose(0, 1)
-            kv_data[page_idx, 1, :, :pg_len, :] = v[s + pg_start:s + pg_end].transpose(0, 1)
-    return kv_data, block_tables
+            pg_s = p * page_size
+            pg_e = min(pg_s + page_size, kv_len)
+            pg_l = pg_e - pg_s
+            pi = b * pages_per_seq + p
+            kv_data[pi, 0, :, :pg_l, :] = k[s + pg_s:s + pg_e].transpose(0, 1)
+            kv_data[pi, 1, :, :pg_l, :] = v[s + pg_s:s + pg_e].transpose(0, 1)
+    return kv_data, pages_per_seq
 
 
 # ============================================================================
@@ -93,8 +94,7 @@ def run_sdpa_reference(q, k, v, cu_q, cu_k, num_heads, kv_heads, head_dim):
     for i in range(batch_size):
         sq, eq = cu_q[i].item(), cu_q[i + 1].item()
         sk, ek = cu_k[i].item(), cu_k[i + 1].item()
-        q_len_i = eq - sq
-        kv_len_i = ek - sk
+        q_len_i, kv_len_i = eq - sq, ek - sk
         qi = q[sq:eq].transpose(0, 1).unsqueeze(0)
         ki = k[sk:ek].transpose(0, 1).unsqueeze(0)
         vi = v[sk:ek].transpose(0, 1).unsqueeze(0)
@@ -104,6 +104,7 @@ def run_sdpa_reference(q, k, v, cu_q, cu_k, num_heads, kv_heads, head_dim):
         if q_len_i == kv_len_i:
             oi = torch.nn.functional.scaled_dot_product_attention(qi, ki, vi, is_causal=True)
         else:
+            # Causal mask for prefill-with-cache: right-aligned
             attn_mask = torch.zeros(q_len_i, kv_len_i, dtype=qi.dtype, device=qi.device)
             for r in range(q_len_i):
                 allowed = kv_len_i - q_len_i + r + 1
@@ -114,129 +115,93 @@ def run_sdpa_reference(q, k, v, cu_q, cu_k, num_heads, kv_heads, head_dim):
     return torch.cat(outputs, dim=0)
 
 
+def _make_trt_attn_configs(num_heads, kv_heads, head_dim, page_size, max_seq_len):
+    from rtp_llm.ops import AttentionConfigs
+    ac = AttentionConfigs()
+    ac.head_num = num_heads
+    ac.kv_head_num = kv_heads
+    ac.size_per_head = head_dim
+    ac.is_causal = True
+    ac.tokens_per_block = page_size
+    ac.kernel_tokens_per_block = page_size
+    ac.max_seq_len = max_seq_len
+    return ac
+
+
+def _make_trt_attn_inputs(dtype, batch_size, q_len, kv_len, prefix_len=0,
+                           kv_cache_block_id=None):
+    from rtp_llm.ops.compute_ops import PyAttentionInputs, get_typemeta
+    device = "cuda"
+    inp = PyAttentionInputs()
+    inp.is_prefill = True
+    inp.dtype = get_typemeta(torch.zeros(1, dtype=dtype))
+    inp.input_lengths = torch.full((batch_size,), q_len, dtype=torch.int32, device=device)
+    inp.prefix_lengths = torch.full((batch_size,), prefix_len, dtype=torch.int32, device=device)
+    inp.sequence_lengths = torch.full((batch_size,), kv_len, dtype=torch.int32, device=device)
+    inp.cu_seqlens = torch.arange(0, (batch_size + 1) * q_len, q_len, dtype=torch.int32, device=device)
+    inp.cu_kv_seqlens = torch.arange(0, (batch_size + 1) * kv_len, kv_len, dtype=torch.int32, device=device)
+    inp.context_total_kv_length = batch_size * kv_len
+    inp.total_tokens = batch_size * q_len
+    inp.is_s_padded = False
+    if kv_cache_block_id is not None:
+        inp.kv_cache_kernel_block_id_host = kv_cache_block_id
+        inp.kv_cache_kernel_block_id_device = kv_cache_block_id.to(device)
+        inp.kv_cache_block_id_host = kv_cache_block_id
+        inp.kv_cache_block_id_device = kv_cache_block_id.to(device)
+    return inp
+
+
 def _try_create_trt_op(num_heads, kv_heads, head_dim, dtype, batch_size, q_len, kv_len):
-    """Try to create TRT V2 FMHA op. Returns (op, params, packed_qkv_fn) or None."""
+    """TRT V2 normal prefill (q_len == kv_len, no prefix). Returns (op, params) or None."""
     if q_len != kv_len:
         return None
     try:
-        from rtp_llm.ops.compute_ops import TRTAttnOp, PyAttentionInputs, get_typemeta
-        from rtp_llm.ops import AttentionConfigs
-
-        ac = AttentionConfigs()
-        ac.head_num = num_heads
-        ac.kv_head_num = kv_heads
-        ac.size_per_head = head_dim
-        ac.is_causal = True
-        ac.tokens_per_block = 64
-        ac.kernel_tokens_per_block = 64
-        ac.max_seq_len = q_len
-
-        device = "cuda"
-        inp = PyAttentionInputs()
-        inp.is_prefill = True
-        inp.dtype = get_typemeta(torch.zeros(1, dtype=dtype))
-        inp.input_lengths = torch.full((batch_size,), q_len, dtype=torch.int32, device=device)
-        inp.prefix_lengths = torch.zeros(batch_size, dtype=torch.int32, device=device)
-        inp.sequence_lengths = torch.full((batch_size,), q_len, dtype=torch.int32, device=device)
-        inp.cu_seqlens = torch.arange(0, (batch_size + 1) * q_len, q_len, dtype=torch.int32, device=device)
-        inp.cu_kv_seqlens = inp.cu_seqlens.clone()
-        inp.context_total_kv_length = batch_size * kv_len
-        inp.total_tokens = batch_size * q_len
-        inp.is_s_padded = False
-
+        from rtp_llm.ops.compute_ops import TRTAttnOp
+        ac = _make_trt_attn_configs(num_heads, kv_heads, head_dim, PAGE_SIZE, q_len)
+        inp = _make_trt_attn_inputs(dtype, batch_size, q_len, kv_len)
         op = TRTAttnOp(ac)
         if not op.support(inp):
-            logger.warning("TRT-V2: support() returned False")
             return None
-        params = op.prepare(inp)
-        return op, params
+        return op, op.prepare(inp)
     except Exception as e:
         import traceback
         logger.warning(f"TRT-V2 init failed: {e}\n{traceback.format_exc()}")
         return None
 
 
-def _try_create_trt_paged_op(num_heads, kv_heads, head_dim, dtype, batch_size, q_len, kv_len,
-                              q, k, v, page_size=64):
-    """Try to create TRT V2 Paged FMHA op.
+def _try_create_trt_paged_op(num_heads, kv_heads, head_dim, dtype, batch_size,
+                              q_len, kv_len, q, k, v):
+    """TRT V2 paged prefill (q_len < kv_len, with prefix cache).
 
-    Data flow (matching framework TRTPagedMHAImpl.forward):
-    1. RoPE+KVCache write puts ALL K/V (prefix + new) into paged kv_cache
-    2. TRT Paged kernel reads packed QKV (new tokens only) + paged kv_cache (prefix K/V)
-    3. Kernel internally merges prefix K/V from cache + new K/V from packed input
-
-    Returns (op, params, kv_cache, packed_qkv) or None.
+    Input: Q only [total_q, num_heads, head_dim].
+    KV cache: all K/V (prefix + new) pre-written to paged cache.
+    Returns (op, params, kv_cache, q_input) or None.
     """
     if q_len == kv_len:
-        return None  # Paged TRT needs prefix (q_len < kv_len)
+        return None
     try:
-        import math
-        from rtp_llm.ops.compute_ops import TRTPagedAttnOp, PyAttentionInputs, LayerKVCache, get_typemeta
-        from rtp_llm.ops import AttentionConfigs
-
-        device = "cuda"
+        from rtp_llm.ops.compute_ops import TRTPagedAttnOp, LayerKVCache
         prefix_len = kv_len - q_len
-
-        ac = AttentionConfigs()
-        ac.head_num = num_heads
-        ac.kv_head_num = kv_heads
-        ac.size_per_head = head_dim
-        ac.is_causal = True
-        ac.tokens_per_block = page_size
-        ac.kernel_tokens_per_block = page_size
-        ac.max_seq_len = kv_len
-
-        # Block table covers ALL kv_len pages (prefix + new token pages)
-        pages_per_seq = math.ceil(kv_len / page_size)
+        pages_per_seq = math.ceil(kv_len / PAGE_SIZE)
         total_pages = batch_size * pages_per_seq
+
         kv_cache_block_id = torch.zeros((batch_size, pages_per_seq), dtype=torch.int32)
         for b in range(batch_size):
-            kv_cache_block_id[b, :pages_per_seq] = torch.arange(
-                b * pages_per_seq, (b + 1) * pages_per_seq, dtype=torch.int32)
+            kv_cache_block_id[b] = torch.arange(b * pages_per_seq, (b + 1) * pages_per_seq, dtype=torch.int32)
 
-        inp = PyAttentionInputs()
-        inp.is_prefill = True
-        inp.dtype = get_typemeta(torch.zeros(1, dtype=dtype))
-        inp.input_lengths = torch.full((batch_size,), q_len, dtype=torch.int32, device=device)
-        inp.prefix_lengths = torch.full((batch_size,), prefix_len, dtype=torch.int32, device=device)
-        inp.sequence_lengths = torch.full((batch_size,), kv_len, dtype=torch.int32, device=device)
-        inp.cu_seqlens = torch.arange(0, (batch_size + 1) * q_len, q_len, dtype=torch.int32, device=device)
-        inp.cu_kv_seqlens = torch.arange(0, (batch_size + 1) * kv_len, kv_len, dtype=torch.int32, device=device)
-        inp.context_total_kv_length = batch_size * kv_len
-        inp.total_tokens = batch_size * q_len
-        inp.is_s_padded = False
-        inp.kv_cache_kernel_block_id_host = kv_cache_block_id
-        inp.kv_cache_kernel_block_id_device = kv_cache_block_id.to(device)
-        inp.kv_cache_block_id_host = kv_cache_block_id
-        inp.kv_cache_block_id_device = kv_cache_block_id.to(device)
-
+        ac = _make_trt_attn_configs(num_heads, kv_heads, head_dim, PAGE_SIZE, kv_len)
+        inp = _make_trt_attn_inputs(dtype, batch_size, q_len, kv_len, prefix_len, kv_cache_block_id)
         op = TRTPagedAttnOp(ac)
         if not op.support(inp):
-            logger.warning("TRT-V2-paged: support() returned False")
             return None
         params = op.prepare(inp)
 
-        # Build paged KV cache with ALL K/V (kv_len tokens per batch)
-        # TRT Paged expects ALL KV already in cache (simulating FusedRopeKVCache write)
-        kv_cache_tensor = torch.zeros(total_pages, 2, kv_heads, page_size, head_dim, dtype=dtype, device=device)
-        for b in range(batch_size):
-            kv_start = b * kv_len
-            for p in range(pages_per_seq):
-                pg_s = p * page_size
-                pg_e = min(pg_s + page_size, kv_len)
-                pg_l = pg_e - pg_s
-                pi = b * pages_per_seq + p
-                kv_cache_tensor[pi, 0, :, :pg_l, :] = k[kv_start+pg_s:kv_start+pg_e].transpose(0, 1)
-                kv_cache_tensor[pi, 1, :, :pg_l, :] = v[kv_start+pg_s:kv_start+pg_e].transpose(0, 1)
-
+        kv_cache_tensor, _ = _fill_paged_kv(k, v, batch_size, kv_len, kv_heads, head_dim,
+                                             PAGE_SIZE, dtype, "cuda")
         kv_cache = LayerKVCache()
         kv_cache.kv_cache_base = kv_cache_tensor
 
-        # Input is Q only: [total_q_tokens, num_heads, head_dim]
-        # TRT Paged reads Q from input, K/V from paged cache
-        q_input = q.contiguous()
-
-        return op, params, kv_cache, q_input
+        return op, params, kv_cache, q.contiguous()
     except Exception as e:
         import traceback
         logger.warning(f"TRT-V2-paged init failed: {e}\n{traceback.format_exc()}")
@@ -282,7 +247,6 @@ def benchmark_one_config(
                   num_heads=num_heads, warmup_iters=warmup_iters,
                   repeat_iters=repeat_iters, results=results)
 
-    # Reference
     ref_output = run_sdpa_reference(q, k, v, cu_q, cu_k, num_heads, kv_heads, head_dim)
 
     # 1. Dao-AILab FA3
@@ -295,61 +259,41 @@ def benchmark_one_config(
                    lambda: run_fa2_native(q, k, v, cu_q, cu_k, q_len, kv_len),
                    ref_output, **common)
 
-    # 3. FlashInfer fa3 ragged
-    try:
-        from flashinfer.prefill import BatchPrefillWithRaggedKVCacheWrapper
-        ws = torch.empty(256 * 1024 * 1024, dtype=torch.uint8, device=device)
-        w = BatchPrefillWithRaggedKVCacheWrapper(float_workspace_buffer=ws, kv_layout="NHD", backend="fa3")
-        w.plan(cu_q, cu_k, num_heads, kv_heads, head_dim, head_dim, causal=True, q_data_type=dtype)
-        _bench_backend("FI-fa3-ragged", lambda: w.run(q, k, v), ref_output, **common)
-    except Exception as e:
-        logger.warning(f"FI-fa3-ragged skipped: {e}")
-
-    # 4. FlashInfer fa2 ragged
-    try:
-        from flashinfer.prefill import BatchPrefillWithRaggedKVCacheWrapper
-        ws = torch.empty(256 * 1024 * 1024, dtype=torch.uint8, device=device)
-        w = BatchPrefillWithRaggedKVCacheWrapper(float_workspace_buffer=ws, kv_layout="NHD", backend="fa2")
-        w.plan(cu_q, cu_k, num_heads, kv_heads, head_dim, head_dim, causal=True, q_data_type=dtype)
-        _bench_backend("FI-fa2-ragged", lambda: w.run(q, k, v), ref_output, **common)
-    except Exception as e:
-        logger.warning(f"FI-fa2-ragged skipped: {e}")
-
-    # 5/6. FlashInfer paged (fa3 + fa2) — HND layout [num_pages, 2, kv_heads, page_size, head_dim]
-    for paged_backend, paged_name in [("fa3", "FI-fa3-paged"), ("fa2", "FI-fa2-paged")]:
+    # 3/4. FlashInfer ragged (fa3 + fa2) — shared workspace
+    ws = torch.empty(256 * 1024 * 1024, dtype=torch.uint8, device=device)
+    for backend, name in [("fa3", "FI-fa3-ragged"), ("fa2", "FI-fa2-ragged")]:
         try:
-            from flashinfer.prefill import BatchPrefillWithPagedKVCacheWrapper
-            page_size = 64
-            pages_per_seq = (kv_len + page_size - 1) // page_size
-            total_pages = batch_size * pages_per_seq
-            # KV cache: [total_pages, 2, kv_heads, page_size, head_dim] (HND)
-            kv_paged = torch.zeros(total_pages, 2, kv_heads, page_size, head_dim, dtype=dtype, device=device)
-            for b in range(batch_size):
-                s = b * kv_len
-                for p in range(pages_per_seq):
-                    pg_s = p * page_size
-                    pg_e = min(pg_s + page_size, kv_len)
-                    pg_l = pg_e - pg_s
-                    pi = b * pages_per_seq + p
-                    kv_paged[pi, 0, :, :pg_l, :] = k[s+pg_s:s+pg_e].transpose(0, 1)  # [kv_heads, pg_l, head_dim]
-                    kv_paged[pi, 1, :, :pg_l, :] = v[s+pg_s:s+pg_e].transpose(0, 1)
-
-            paged_kv_indptr = torch.arange(0, (batch_size+1)*pages_per_seq, pages_per_seq, dtype=torch.int32, device=device)
-            paged_kv_indices = torch.arange(total_pages, dtype=torch.int32, device=device)
-            last_page_len = kv_len - (pages_per_seq - 1) * page_size
-            paged_kv_last_page_len = torch.full((batch_size,), last_page_len, dtype=torch.int32, device=device)
-
-            ws = torch.empty(256 * 1024 * 1024, dtype=torch.uint8, device=device)
-            pw = BatchPrefillWithPagedKVCacheWrapper(float_workspace_buffer=ws, kv_layout="HND", backend=paged_backend)
-            pw.plan(cu_q, paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len,
-                    num_heads, kv_heads, head_dim, page_size,
-                    causal=True, q_data_type=dtype)
-            _bench_backend(paged_name, lambda pw=pw, q=q, kv=kv_paged: pw.run(q, kv), ref_output, **common)
+            from flashinfer.prefill import BatchPrefillWithRaggedKVCacheWrapper
+            w = BatchPrefillWithRaggedKVCacheWrapper(float_workspace_buffer=ws, kv_layout="NHD", backend=backend)
+            w.plan(cu_q, cu_k, num_heads, kv_heads, head_dim, head_dim, causal=True, q_data_type=dtype)
+            _bench_backend(name, lambda w=w: w.run(q, k, v), ref_output, **common)
         except Exception as e:
-            import traceback
-            logger.warning(f"{paged_name} skipped: {e}\n{traceback.format_exc()}")
+            logger.warning(f"{name} skipped: {e}")
 
-    # 7. TRT FMHA V2 (pure prefill only)
+    # 5/6. FlashInfer paged (fa3 + fa2) — reuse workspace, share paged KV data
+    try:
+        from flashinfer.prefill import BatchPrefillWithPagedKVCacheWrapper
+        kv_paged, pages_per_seq = _fill_paged_kv(k, v, batch_size, kv_len, kv_heads, head_dim,
+                                                   PAGE_SIZE, dtype, device)
+        total_pages = batch_size * pages_per_seq
+        paged_kv_indptr = torch.arange(0, (batch_size + 1) * pages_per_seq, pages_per_seq,
+                                        dtype=torch.int32, device=device)
+        paged_kv_indices = torch.arange(total_pages, dtype=torch.int32, device=device)
+        last_page_len = kv_len - (pages_per_seq - 1) * PAGE_SIZE
+        paged_kv_last_page_len = torch.full((batch_size,), last_page_len, dtype=torch.int32, device=device)
+
+        for backend, name in [("fa3", "FI-fa3-paged"), ("fa2", "FI-fa2-paged")]:
+            try:
+                pw = BatchPrefillWithPagedKVCacheWrapper(float_workspace_buffer=ws, kv_layout="HND", backend=backend)
+                pw.plan(cu_q, paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len,
+                        num_heads, kv_heads, head_dim, PAGE_SIZE, causal=True, q_data_type=dtype)
+                _bench_backend(name, lambda pw=pw, kv=kv_paged: pw.run(q, kv), ref_output, **common)
+            except Exception as e:
+                logger.warning(f"{name} skipped: {e}")
+    except Exception as e:
+        logger.warning(f"FI-paged skipped: {e}")
+
+    # 7. TRT FMHA V2 normal (pure prefill only)
     trt_result = _try_create_trt_op(num_heads, kv_heads, head_dim, dtype, batch_size, q_len, kv_len)
     if trt_result is not None:
         trt_op, trt_params = trt_result
@@ -359,20 +303,16 @@ def benchmark_one_config(
         packed[:, :num_heads * head_dim] = q.reshape(total, num_heads * head_dim)
         packed[:, num_heads * head_dim:(num_heads + kv_heads) * head_dim] = k.reshape(total, kv_heads * head_dim)
         packed[:, (num_heads + kv_heads) * head_dim:] = v.reshape(total, kv_heads * head_dim)
-        _bench_backend("TRT-V2",
-                       lambda: trt_op.forward(packed, None, trt_params),
-                       ref_output, **common)
+        _bench_backend("TRT-V2", lambda: trt_op.forward(packed, None, trt_params), ref_output, **common)
 
-    # 8. TRT FMHA V2 Paged (prefill-with-cache only, q_len < kv_len)
-    trt_paged_result = _try_create_trt_paged_op(
-        num_heads, kv_heads, head_dim, dtype, batch_size, q_len, kv_len, q, k, v)
-    if trt_paged_result is not None:
-        trt_p_op, trt_p_params, trt_p_kvcache, trt_p_packed = trt_paged_result
-        _bench_backend("TRT-V2-paged",
-                       lambda: trt_p_op.forward(trt_p_packed, trt_p_kvcache, trt_p_params),
-                       ref_output, **common)
+    # 8. TRT FMHA V2 Paged (prefill-with-cache)
+    trt_paged = _try_create_trt_paged_op(num_heads, kv_heads, head_dim, dtype, batch_size,
+                                          q_len, kv_len, q, k, v)
+    if trt_paged is not None:
+        tp_op, tp_params, tp_kvc, tp_q = trt_paged
+        _bench_backend("TRT-V2-paged", lambda: tp_op.forward(tp_q, tp_kvc, tp_params), ref_output, **common)
 
-    # 9. SDPA reference timing
+    # 9. SDPA reference
     _bench_backend("SDPA-ref",
                    lambda: run_sdpa_reference(q, k, v, cu_q, cu_k, num_heads, kv_heads, head_dim),
                    ref_output, **common)

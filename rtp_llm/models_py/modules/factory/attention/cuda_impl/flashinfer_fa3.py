@@ -4,25 +4,19 @@ Uses FlashInfer's BatchPrefillWithRaggedKVCacheWrapper with backend="fa3",
 which runs FlashInfer's own Hopper-optimized attention kernels.
 """
 
-import logging
-from typing import Any, Optional
+from typing import Any
 
 import torch
 
-from rtp_llm.models_py.modules.factory.attention import common
 from rtp_llm.models_py.modules.factory.attention.cuda_impl.flashinfer_rotary_emb import (
     MhaRotaryEmbeddingOp,
-)
-from rtp_llm.models_py.modules.factory.attention.cuda_impl.kv_cache_write_op import (
-    KVCacheWriteOp,
 )
 from rtp_llm.models_py.modules.factory.attention.cuda_impl.py_flashinfer_mha import (
     PyFlashinferPrefillImplBase,
     PyFlashinferPrefillAttnOp,
 )
-from rtp_llm.models_py.modules.factory.attention.fmha_impl_base import FMHAImplBase
-from rtp_llm.ops import AttentionConfigs, FMHAType, ParallelismConfig, RopeStyle
-from rtp_llm.ops.compute_ops import LayerKVCache, PyAttentionInputs
+from rtp_llm.ops import AttentionConfigs, FMHAType, RopeStyle
+from rtp_llm.ops.compute_ops import PyAttentionInputs
 
 _HAS_FLASHINFER_FA3 = False
 try:
