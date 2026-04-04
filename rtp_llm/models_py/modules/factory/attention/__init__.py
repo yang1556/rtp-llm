@@ -65,11 +65,19 @@ try:
             from rtp_llm.models_py.modules.factory.attention.cuda_impl.xqa import (
                 get_xqa_impl,
             )
+            from rtp_llm.models_py.modules.factory.attention.cuda_impl.flash_attention_3 import (
+                FlashAttention3PrefillImpl,
+            )
+            from rtp_llm.models_py.modules.factory.attention.cuda_impl.flashinfer_fa3 import (
+                FlashInferFA3PrefillImpl,
+            )
 
             PREFILL_MHA_IMPS.extend(
                 [
                     FlashInferTRTLLMSpecDecodeImpl,
                     FlashInferTRTLLMPrefillImpl,
+                    FlashAttention3PrefillImpl,
+                    FlashInferFA3PrefillImpl,
                     TRTMHAImpl,
                     PyFlashinferPrefillImpl,
                     PyFlashinferPagedPrefillImpl,

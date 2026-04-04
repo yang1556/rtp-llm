@@ -80,8 +80,14 @@ def _is_fmha_impl_disabled(
     if fmha_config is None:
         return False
 
+    # Flash Attention 3 (Dao-AILab) implementations
+    if "FlashAttention3" in impl_class_name:
+        return not fmha_config.enable_flash_attention_3
+    # FlashInfer FA3 backend implementations
+    elif "FlashInferFA3" in impl_class_name:
+        return not fmha_config.enable_flashinfer_fa3
     # XQA implementations
-    if "XQA" in impl_class_name:
+    elif "XQA" in impl_class_name:
         return not fmha_config.enable_xqa
     # TRT implementations
     elif impl_class_name == "TRTMHAImpl":
