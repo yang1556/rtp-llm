@@ -237,6 +237,9 @@ class CASClient:
         return digest
 
     def download_blob(self, digest: re_pb2.Digest) -> bytes:
+        """Download a blob from CAS.  Uses ByteStream for large blobs."""
+        if digest.size_bytes > BYTESTREAM_THRESHOLD:
+            return self._bytestream_read(digest)
         try:
             resp = self.stub.BatchReadBlobs(
                 re_pb2.BatchReadBlobsRequest(instance_name=self.instance_name, digests=[digest]),
@@ -247,6 +250,23 @@ class CASClient:
         except grpc.RpcError:
             pass
         return b""
+
+    def _bytestream_read(self, digest: re_pb2.Digest) -> bytes:
+        """Download a blob via ByteStream.Read (symmetric to _bytestream_write)."""
+        stub = self.new_bytestream_stub()
+        resource_name = f"{self.instance_name}/blobs/{digest.hash}/{digest.size_bytes}"
+        chunks: list = []
+        try:
+            for resp in stub.Read(
+                bs_pb2.ReadRequest(resource_name=resource_name, read_offset=0, read_limit=0),
+                metadata=self.metadata,
+                timeout=300,
+            ):
+                chunks.append(resp.data)
+        except grpc.RpcError as e:
+            log.warning("ByteStream.Read failed for %s: %s", digest.hash[:12], e)
+            return b""
+        return b"".join(chunks)
 
     def _find_missing(self, digests: List[re_pb2.Digest]) -> Set[str]:
         missing = set()

@@ -220,6 +220,27 @@ def pytest_addoption(parser):
         metavar="PATH",
         help="Append rtp_llm.test.remote_tests logging to this file (relative to rootdir if not absolute)",
     )
+    g.addoption(
+        "--remote-collect-outputs",
+        action="store_true",
+        default=os.environ.get("RTP_REMOTE_COLLECT_OUTPUTS") == "1",
+        help=(
+            "Download TEST_UNDECLARED_OUTPUTS_DIR from remote worker after execution "
+            "(server logs, smoke_actual, OOM state). Env: RTP_REMOTE_COLLECT_OUTPUTS=1"
+        ),
+    )
+    g.addoption(
+        "--remote-outputs-dir",
+        default=None,
+        metavar="PATH",
+        help="Local directory for remote outputs (default: .pytest_cache/remote_outputs)",
+    )
+    g.addoption(
+        "--remote-outputs-max-mb",
+        type=int,
+        default=200,
+        help="Skip download if remote outputs archive exceeds this size in MiB (default: 200)",
+    )
 
 
 def _resolve_endpoints(config) -> tuple:
@@ -355,6 +376,12 @@ class RemoteREAPIPlugin:
         if log_file_opt:
             self._attach_remote_log_file(Path(log_file_opt))
 
+        # Output collection (TEST_UNDECLARED_OUTPUTS_DIR)
+        self._collect_outputs = config.getoption("--remote-collect-outputs")
+        _odir = config.getoption("--remote-outputs-dir", default=None)
+        self._outputs_dir = Path(_odir) if _odir else (self.rootdir / ".pytest_cache" / "remote_outputs")
+        self._outputs_max_bytes = config.getoption("--remote-outputs-max-mb") * 1024 * 1024
+
         if mode == RemoteDispatchMode.PER_TEST:
             self.concurrency = config.getoption("--remote-concurrency")
             self._input_root = None
@@ -431,7 +458,16 @@ class RemoteREAPIPlugin:
         # Forward markexpr so conftest.py doesn't deselect manual tests
         markexpr = getattr(self.config.option, "markexpr", "") or ""
         mark_arg = f"-m '{markexpr}' " if markexpr else ""
+
+        outputs_prefix = ""
+        outputs_postscript = ""
+        if self._collect_outputs:
+            from .output_collector import make_mkdir_prefix, make_tar_postscript
+            outputs_prefix = make_mkdir_prefix()
+            outputs_postscript = make_tar_postscript() + "; "
+
         run_cmd = (
+            f"{outputs_prefix}"
             "echo \">>>RTP_REMOTE_HOST_IP $(hostname -I 2>/dev/null | awk '{print $1}')\"; "
             'echo ">>>PHASE:pytest_start $(date +%s)"; '
             f"python -m pytest -xvs --tb=long --timeout={self.timeout} "
@@ -440,6 +476,7 @@ class RemoteREAPIPlugin:
             f"-k '{test_id}' {test_path} 2>&1; ec=$?; "
             "echo EXIT_CODE=$ec; "
             'echo ">>>PHASE:pytest_end $(date +%s)"; '
+            f"{outputs_postscript}"
             "exit $ec"
         )
         return ["bash", "-c", f"{runtime.remote_setup_prefix}{run_cmd}"]
@@ -504,13 +541,20 @@ class RemoteREAPIPlugin:
                 gpu_req.gpu_count,
             )
             stdout_log, stderr_log = _remote_stream_log_paths(self.rootdir, item.nodeid)
+            env_vars = dict(runtime.env_vars)
+            output_files = None
+            if self._collect_outputs:
+                from .output_collector import make_output_collection_env, make_output_files_decl
+                env_vars.update(make_output_collection_env())
+                output_files = make_output_files_decl()
             future = self._pool.submit(
                 self._execute_with_retry,
                 command=cmd,
                 input_root_digest=self._input_root,
-                env_vars=runtime.env_vars,
+                env_vars=env_vars,
                 platform_properties=runtime.platform_properties,
                 timeout=self.timeout,
+                output_files=output_files,
                 on_stage=_on_stage,
                 stream_stdout_file=stdout_log,
                 stream_stderr_file=stderr_log,
@@ -601,6 +645,17 @@ class RemoteREAPIPlugin:
         worker_ip = result.worker_host_ip or extract_remote_worker_ip(stdout)
         if worker_ip:
             log.info("[remote-worker] %s host_ip=%s", item.nodeid, worker_ip)
+
+        # Download TEST_UNDECLARED_OUTPUTS_DIR artifacts from CAS
+        if self._collect_outputs:
+            from .output_collector import download_and_extract
+            slug = re.sub(r"[^\w.-]+", "_", item.nodeid).strip("_")[:200] or "test"
+            out_path = download_and_extract(
+                self.cas, result, self._outputs_dir / slug,
+                max_bytes=self._outputs_max_bytes,
+            )
+            if out_path:
+                log.info("[remote-outputs] %s -> %s", item.nodeid, out_path)
 
         tw = self.config.get_terminal_writer()
         if result.stream_stdout_path or result.stream_stderr_path:
@@ -748,17 +803,35 @@ class RemoteREAPIPlugin:
                 last_stage[0] = stage
 
         sess_out, sess_err = _remote_stream_log_paths(self.rootdir, "session")
+        env_vars = dict(runtime.env_vars)
+        output_files = None
+        if self._collect_outputs:
+            from .output_collector import make_output_collection_env, make_output_files_decl
+            env_vars.update(make_output_collection_env())
+            output_files = make_output_files_decl()
         result = self.executor.execute(
             command=cmd,
             input_root_digest=input_root,
-            env_vars=runtime.env_vars,
+            env_vars=env_vars,
             platform_properties=runtime.platform_properties,
             timeout=self.timeout,
+            output_files=output_files,
             on_stage=_on_stage,
             stream_stdout_file=sess_out,
             stream_stderr_file=sess_err,
             no_cache=self.no_cache,
         )
+
+        if self._collect_outputs:
+            from .output_collector import download_and_extract
+            out_path = download_and_extract(
+                self.cas, result, self._outputs_dir / "session",
+                max_bytes=self._outputs_max_bytes,
+            )
+            if out_path:
+                log.info("[remote-outputs] session -> %s", out_path)
+                if tw:
+                    tw.line(f"Remote outputs: {out_path}")
 
         self._result = self._parse_remote_output(result, tw)
         log.info("Session completed with exit code %d", self._result)
@@ -883,7 +956,16 @@ class RemoteREAPIPlugin:
         profile_arg = (
             f"--rtp-ci-profile={shlex.quote(ci_profile)} " if ci_profile else ""
         )
+
+        outputs_prefix = ""
+        outputs_postscript = ""
+        if self._collect_outputs:
+            from .output_collector import make_mkdir_prefix, make_tar_postscript
+            outputs_prefix = make_mkdir_prefix()
+            outputs_postscript = make_tar_postscript() + "; "
+
         run_cmd = (
+            f"{outputs_prefix}"
             "echo \">>>RTP_REMOTE_HOST_IP $(hostname -I 2>/dev/null | awk '{print $1}')\"; "
             'echo ">>>PHASE:pytest_start $(date +%s)"; '
             f"python -m pytest {pytest_args} "
@@ -896,6 +978,8 @@ class RemoteREAPIPlugin:
             f"--tb=short 2>&1; ec=$?; "
             'echo ">>>PHASE:pytest_end $(date +%s)"; '
             "echo EXIT_CODE=$ec; "
-            f"echo '<<<JUNIT_XML>>>'; cat pytest_results.xml 2>/dev/null; echo '<<<END_JUNIT_XML>>>'"
+            f"echo '<<<JUNIT_XML>>>'; cat pytest_results.xml 2>/dev/null; echo '<<<END_JUNIT_XML>>>'; "
+            f"{outputs_postscript}"
+            "exit $ec"
         )
         return ["bash", "-c", f"{runtime.remote_setup_prefix}{run_cmd}"]

@@ -175,6 +175,13 @@ def build_remote_setup_command(rootdir: Path) -> str:
     return (
         "export HOME=/home/admin; "
         "export RTP_SKIP_BAZEL_BUILD=1; "
+        # Strip /usr/local/cuda/compat/ from LD_LIBRARY_PATH — CUDA forward
+        # compatibility libs crash on consumer GPUs (Error 804). Production
+        # maga_start.sh does driver-version checks; here we strip unconditionally
+        # because remote workers with driver >= 535 never need it, and consumer
+        # GPUs (RTX 3090 etc.) must never load it regardless of driver version.
+        "export LD_LIBRARY_PATH=$(echo $LD_LIBRARY_PATH | tr ':' '\\n' "
+        "| grep -v '/cuda/compat' | tr '\\n' ':' | sed 's/:$//'); "
         'echo ">>>PHASE:pip_install_start $(date +%s)"; '
         'eval "$(/opt/conda310/bin/python internal_source/ci/prepare_venv.py)"; '
         'echo ">>>PHASE:pip_install_done $(date +%s)"; '

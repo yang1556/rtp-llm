@@ -155,7 +155,7 @@ class DeviceResource:
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     return [int(p.strip()) for p in result.stdout.strip().splitlines()
-                            if p.strip()]
+                            if p.strip() and p.strip().isdigit()]
                 if result.returncode == 0:
                     return []
             except FileNotFoundError:
