@@ -162,24 +162,22 @@ def get_pytest_ignore_args(rootdir: Path) -> List[str]:
 def build_remote_setup_command(rootdir: Path) -> str:
     """Return shell prefix executed before remote pytest command.
 
-    Calls the shared pip_install.sh which handles:
-    - Finding/installing uv
-    - Finding base python
-    - Creating venv
-    - Bootstrap + single-step pip install
-    - Error checking
+    Calls prepare_venv.py which handles:
+    - Finding base python + detecting platform
+    - Computing isolated venv path (per CAS input root hash)
+    - Locking (fcntl.flock) to prevent concurrent install races
+    - Caching (.installed_ok) to skip install when venv already ready
+    - Creating venv + bootstrap + uv pip install
 
     CWD on the remote worker is github-opensource (CAS rootdir).
-    pip_install.sh is included in the CAS upload via _collect_base_files().
+    prepare_venv.py is included in the CAS upload via _collect_base_files().
     """
     return (
         "export HOME=/home/admin; "
-        "echo \">>>PHASE:pip_install_start $(date +%s)\"; "
         "export RTP_SKIP_BAZEL_BUILD=1; "
-        "export RTP_LOG_COMPACT=1; "
-        "source internal_source/ci/prepare_venv.sh && "
-        "uv pip install -e '.[dev]' --no-build-isolation-package rtp-llm; "
-        "echo \">>>PHASE:pip_install_done $(date +%s)\"; "
+        'echo ">>>PHASE:pip_install_start $(date +%s)"; '
+        'eval "$(/opt/conda310/bin/python internal_source/ci/prepare_venv.py)"; '
+        'echo ">>>PHASE:pip_install_done $(date +%s)"; '
     )
 
 
@@ -197,9 +195,9 @@ def _collect_base_files(rootdir: Path) -> List[str]:
         "setup.py",
         "setup.cfg",
         "conftest.py",
-        "internal_source/ci/prepare_venv.sh",
+        "internal_source/ci/prepare_venv.py",
+        "internal_source/ci/prepare_venv.sh",  # kept for backward compat with ci_pip_install.sh
         "internal_source/ci/ci_pip_install.sh",
-        "internal_source/ci/package_index_config.py",
     ):
         if (rootdir / name).exists():
             files.append(name)
@@ -310,6 +308,18 @@ _KNOWN_GPU_TYPES = frozenset({
     "PPU_ZW810E",
 })
 
+# Pytest markers must be valid Python identifiers (no hyphens), but some REAPI
+# workers register with hyphenated names.  This mapping translates marker-style
+# GPU type strings to the actual REAPI platform property values.
+_GPU_TYPE_TO_REAPI: Dict[str, str] = {
+    "PPU_ZW810E": "PPU-ZW810E",
+}
+
+
+def _to_reapi_gpu_type(gpu_type: str) -> str:
+    """Translate a marker-derived GPU type to the REAPI platform property value."""
+    return _GPU_TYPE_TO_REAPI.get(gpu_type, gpu_type)
+
 
 def infer_gpu_type_from_markexpr(markexpr: str) -> Optional[str]:
     """Best-effort extraction of GPU type from a pytest ``-m`` expression.
@@ -373,16 +383,19 @@ def build_runtime_config(
     gpu_request: GPURequest,
     *,
     extra_env: Optional[dict] = None,
+    input_root_hash: Optional[str] = None,
 ) -> RemoteRuntimeConfig:
     """Build env/platform/ignore/setup from a normalized GPU request."""
     env_vars: dict = {
         "GPU_COUNT": str(gpu_request.gpu_count),
     }
+    if input_root_hash:
+        env_vars["RTP_CAS_INPUT_ROOT"] = input_root_hash[:12]
     if extra_env:
         env_vars.update(extra_env)
 
     platform_properties: dict = {
-        "gpu": gpu_request.gpu_type,
+        "gpu": _to_reapi_gpu_type(gpu_request.gpu_type),
         "gpu_count": str(gpu_request.gpu_count),
     }
 

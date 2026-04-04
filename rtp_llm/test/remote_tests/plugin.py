@@ -486,7 +486,10 @@ class RemoteREAPIPlugin:
         self._pool = ThreadPoolExecutor(max_workers=workers)
         for item in self._remote_items:
             gpu_req = resolve_item_gpu_request(item)
-            runtime = build_runtime_config(self.rootdir, gpu_req)
+            runtime = build_runtime_config(
+                self.rootdir, gpu_req,
+                input_root_hash=self._input_root.hash if self._input_root else None,
+            )
             cmd = self._build_command(item, runtime)
 
             def _on_stage(stage: str, op_name: str, nodeid=item.nodeid):
@@ -708,7 +711,10 @@ class RemoteREAPIPlugin:
             input_root.size_bytes,
         )
 
-        runtime = build_runtime_config(self.rootdir, gpu_req)
+        runtime = build_runtime_config(
+            self.rootdir, gpu_req,
+            input_root_hash=input_root.hash,
+        )
         cmd = self._build_session_command(self.pytest_args, runtime, self.ci_profile)
         log.info(
             "[REMOTE_CMD] mode=session pytest_workers=%d markexpr=%s pytest_args=%s no_cache=%s",
