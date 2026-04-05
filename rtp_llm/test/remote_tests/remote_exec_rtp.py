@@ -198,7 +198,6 @@ def _collect_base_files(rootdir: Path) -> List[str]:
         "setup.cfg",
         "conftest.py",
         "internal_source/ci/prepare_venv.py",
-        "internal_source/ci/prepare_venv.sh",  # kept for backward compat with ci_pip_install.sh
         "internal_source/ci/ci_pip_install.sh",
     ):
         if (rootdir / name).exists():
@@ -276,6 +275,7 @@ def collect_session_files(rootdir: Path) -> List[str]:
     """Collect remote-session execution inputs."""
     files = _collect_base_files(rootdir)
     files.extend(_collect_repo_runtime_files(rootdir))
+    files.extend(_collect_smoke_files(rootdir))
     files.extend(_collect_session_extra_files(rootdir))
 
     files = sorted(set(files))
