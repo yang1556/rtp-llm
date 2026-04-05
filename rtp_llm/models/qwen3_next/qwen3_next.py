@@ -22,10 +22,10 @@ class Qwen3NextBase(BaseModel):
         moe_config = self.moe_config
         max_generate_batch_size = self.max_generate_batch_size
 
-        from rtp_llm.models_py.utils.arch import is_cuda
+        from rtp_llm.models_py.utils.arch import is_cuda, is_hip
 
-        if not is_cuda():
-            raise RuntimeError("Qwen3Next is only supported in cuda arch")
+        if not is_cuda() and not is_hip():
+            raise RuntimeError("Qwen3Next is only supported in cuda/hip arch")
         from rtp_llm.models_py.model_desc.qwen3_next import Qwen3NextModel
 
         self.py_model = Qwen3NextModel(
@@ -226,10 +226,10 @@ class Qwen35Moe(Qwen3NextBase):
         moe_config = self.moe_config
         max_generate_batch_size = self.max_generate_batch_size
 
-        from rtp_llm.models_py.utils.arch import is_cuda
+        from rtp_llm.models_py.utils.arch import is_cuda, is_hip
 
-        if not is_cuda():
-            raise RuntimeError("Qwen3Next is only supported in cuda arch")
+        if not is_cuda() and not is_hip():
+            raise RuntimeError("Qwen3Next is only supported in cuda/hip arch")
         from rtp_llm.models_py.model_desc.qwen3_next import Qwen35Model
 
         self.py_model = Qwen35Model(

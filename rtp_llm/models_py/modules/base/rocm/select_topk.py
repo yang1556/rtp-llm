@@ -3,14 +3,24 @@ import torch
 from torch import nn
 
 from rtp_llm.config.model_config import ModelConfig
-import aiter
 
 
 class SelectTopk(nn.Module):
-    def __init__(self, config: ModelConfig):
+    def __init__(
+        self,
+        config: ModelConfig,
+        fake_balance_expert: bool = False,
+        dp_rank: int = 0,
+        dp_size: int = 1,
+        ep_size: int = 1,
+    ):
         super().__init__()
         self.config = config
         self.top_k = config.moe_k
+        self.fake_balance_expert = fake_balance_expert
+        self.dp_rank = dp_rank
+        self.dp_size = dp_size
+        self.ep_size = ep_size
 
     def forward(
         self,
@@ -26,6 +36,6 @@ class SelectTopk(nn.Module):
             topk_weights,
             topk_ids,
             token_expert_indicies,
-            router_logits_fp32,  # TODO(woosuk): Optimize this.
+            router_logits_fp32,
             True,
         )

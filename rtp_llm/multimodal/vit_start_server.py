@@ -1,5 +1,6 @@
 import logging
 
+import torch
 from setproctitle import setproctitle
 
 from rtp_llm.config.engine_config import EngineConfig
@@ -55,11 +56,12 @@ def vit_start_server(
         app.start(grpc_port, http_port)
         return
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     vit_process_engine = MultimodalMixinFactory.create_multimodal_process_engine(
         model_config=model_config,
         engine_config=engine_config,
         vit_config=py_env_configs.vit_config,
-        device="cuda",
+        device=device,
         server_id=server_id,
         is_proxy_mode=is_proxy_mode,
     )

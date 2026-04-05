@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Optional
 
+import torch
 from typing_extensions import override
 
 from rtp_llm.async_decoder_engine.base_engine import BaseEngine
@@ -40,7 +41,7 @@ class EmbeddingCppEngine(BaseEngine):
                     model_config=self.model.model_config,
                     engine_config=self.engine_config,
                     vit_config=self.model.vit_config,
-                    device=f"cuda:{self.engine_config.parallelism_config.local_rank}",
+                    device=f"cuda:{self.engine_config.parallelism_config.local_rank}" if torch.cuda.is_available() else "cpu",
                 )
             )
         self.cpp_engine.init(

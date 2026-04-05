@@ -38,13 +38,8 @@ class RocmEpNormalStrategy(MoeStrategy):
 class RocmEpLowLatencyStrategy(MoeStrategy):
     """ROCm EP low latency strategy (not supported)"""
 
-    def create_router(self, config: MoEConfigAdapter) -> Any:
-        raise ValueError("deepep_low_latency for rocm moe is not yet supported")
-
-    def create_executor(
-        self, config: MoEConfigAdapter, weights: Dict[str, torch.Tensor]
-    ) -> Any:
-        raise ValueError("deepep_low_latency for rocm moe is not yet supported")
+    def can_handle(self, config: MoEConfigAdapter) -> bool:
+        return False
 
     def get_attributes(self) -> StrategyAttributes:
         # Not actually used, but needed for interface completeness

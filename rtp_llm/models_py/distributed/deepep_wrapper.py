@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """DeepEP wrapper with singleton pattern and simplified configuration.
 
 This module provides a unified interface for DeepEP initialization and management,
@@ -11,11 +13,13 @@ import platform
 import threading
 from dataclasses import dataclass
 from enum import IntEnum, auto
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
+
+if TYPE_CHECKING:
+    from deep_ep import Buffer as DeepEPBuffer
+    from deep_ep import Config as DeepEPConfig
 
 import torch
-from deep_ep import Buffer as DeepEPBuffer
-from deep_ep import Config as DeepEPConfig
 from torch.distributed import ProcessGroup
 
 from rtp_llm.config.engine_config import EngineConfig
@@ -37,6 +41,20 @@ __all__ = [
     "allow_mnnvl",
     "init_deepep_wrapper",
 ]
+
+
+def _get_deepep_buffer():
+    """Lazy import DeepEP Buffer to avoid import failure when deep_ep is not installed."""
+    from deep_ep import Buffer as DeepEPBuffer  # noqa: F811
+
+    return DeepEPBuffer
+
+
+def _get_deepep_config():
+    """Lazy import DeepEP Config to avoid import failure when deep_ep is not installed."""
+    from deep_ep import Config as DeepEPConfig  # noqa: F811
+
+    return DeepEPConfig
 
 
 def use_accl_ep() -> bool:
@@ -369,7 +387,7 @@ class DeepEPWrapper:
             cls._initialized = False
 
     @property
-    def buffer(self) -> DeepEPBuffer:
+    def buffer(self) -> "DeepEPBuffer":
         """Get the DeepEP buffer.
 
         Returns:
@@ -507,12 +525,12 @@ class DeepEPWrapper:
             else:
                 init_kwargs["allow_mnnvl"] = False
 
-        return DeepEPBuffer(**init_kwargs)  # type: ignore
+        return _get_deepep_buffer()(**init_kwargs)  # type: ignore
 
     def _init_low_latency_buffer(self, group: ProcessGroup) -> DeepEPBuffer:
         """Initialize buffer for low-latency mode."""
         config = self._config
-        num_rdma_bytes = DeepEPBuffer.get_low_latency_rdma_size_hint(
+        num_rdma_bytes = _get_deepep_buffer().get_low_latency_rdma_size_hint(
             config.ll_num_max_token_per_rank,
             config.hidden_size,
             config.ep_size,
@@ -548,7 +566,7 @@ class DeepEPWrapper:
             else:
                 init_kwargs["allow_mnnvl"] = False
 
-        return DeepEPBuffer(**init_kwargs)  # type: ignore
+        return _get_deepep_buffer()(**init_kwargs)  # type: ignore
 
     def _init_low_latency_m2n_buffer(self, group: ProcessGroup) -> DeepEPBuffer:
         """Initialize buffer for low-latency M2N mode."""
@@ -556,12 +574,12 @@ class DeepEPWrapper:
         num_m = config.attention_dp_size * config.attention_tp_size
         num_n = config.ffn_dp_size * config.ffn_tp_size
 
-        if not hasattr(DeepEPBuffer, "get_low_latency_rdma_size_hint_m2n"):
+        if not hasattr(_get_deepep_buffer(), "get_low_latency_rdma_size_hint_m2n"):
             raise RuntimeError(
                 "current deep_ep provider does not support low-latency m2n"
             )
 
-        num_rdma_bytes = DeepEPBuffer.get_low_latency_rdma_size_hint_m2n(
+        num_rdma_bytes = _get_deepep_buffer().get_low_latency_rdma_size_hint_m2n(
             config.ll_num_max_token_per_rank,
             config.hidden_size,
             num_m + num_n,
@@ -594,7 +612,7 @@ class DeepEPWrapper:
             init_kwargs["allow_nvlink_for_low_latency_mode"] = True
             init_kwargs["allow_mnnvl"] = False
 
-        return DeepEPBuffer(**init_kwargs)  # type: ignore
+        return _get_deepep_buffer()(**init_kwargs)  # type: ignore
 
     def _destroy_buffer(self) -> None:
         """Destroy the DeepEP buffer and free resources."""

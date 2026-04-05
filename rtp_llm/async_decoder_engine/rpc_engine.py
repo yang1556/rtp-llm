@@ -2,6 +2,7 @@ import logging
 import time
 from typing import Dict, Optional
 
+import torch
 from typing_extensions import override
 
 from rtp_llm.async_decoder_engine.base_engine import BaseEngine
@@ -58,7 +59,7 @@ class LanguageCppEngine(BaseEngine):
                     model_config=self.model.model_config,
                     engine_config=engine_config,
                     vit_config=self.model.vit_config,
-                    device=f"cuda:{engine_config.parallelism_config.local_rank}",
+                    device=f"cuda:{engine_config.parallelism_config.local_rank}" if torch.cuda.is_available() else "cpu",
                 )
             )
         self.rtp_llm_op_ = RtpLLMOp(

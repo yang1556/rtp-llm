@@ -1,8 +1,13 @@
+import importlib.util
 import torch
 
 
 def can_use_flash_attn(device_id=0):
-    """Check if a GPU supports FlashAttention."""
+    """Check if a GPU supports FlashAttention and the package is installed."""
+    # First check if flash_attn package is actually importable
+    if importlib.util.find_spec("flash_attn") is None:
+        return False
+
     major, minor = torch.cuda.get_device_capability(device_id)
     device_full_name = torch.cuda.get_device_name(device_id)
     device_name = device_full_name.split()[-1]

@@ -424,7 +424,10 @@ class MMProcessEngine:
 
             return result
         except Exception as e:
-            torch.cuda.empty_cache()
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
             gc.collect()
             if not self.is_proxy_mode:
                 kmonitor.report(AccMetrics.VIT_ERROR_QPS_METRIC, 1)
