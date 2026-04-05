@@ -7,8 +7,10 @@ from rtp_llm.ops.compute_ops import DeviceType, get_exec_ctx
 
 def is_cuda():
     device_type = get_exec_ctx().get_device_type()
-    # PPU reuses CUDA kernels via its CUDA SDK shim layer
-    return device_type in (DeviceType.Cuda, DeviceType.Ppu)
+    if device_type == DeviceType.Cuda:
+        return True
+    else:
+        return False
 
 
 def is_hip():
@@ -30,9 +32,5 @@ def get_num_device_sms() -> int:
 
 
 def get_sm(device_id: int = 0) -> Tuple[int, int]:
-    try:
-        major, minor = torch.cuda.get_device_capability(device_id)
-        return major, minor
-    except (RuntimeError, AssertionError):
-        # No CUDA device available (e.g. PPU host during pytest collection)
-        return (0, 0)
+    major, minor = torch.cuda.get_device_capability(device_id)
+    return major, minor
