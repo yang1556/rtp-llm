@@ -1087,8 +1087,6 @@ def build_all():
             shutil.rmtree(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
 
-    # Skip Bazel build only if explicitly disabled
-    if not should_skip_bazel_build():
         # Auto-detect platform if RTP_BAZEL_CONFIG not set
         build_config = detect_build_config()
         # build_bazel_extensions will call copy_extensions, which copies proto files

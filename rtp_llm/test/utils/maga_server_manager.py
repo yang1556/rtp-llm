@@ -138,7 +138,10 @@ class MagaServerManager(object):
             current_env["DG_JIT_CACHE_DIR"] = os.path.join(home_dir, ".deep_gemm")
 
         bazel_outputs_dir = os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR", os.getcwd())
-        cwd_path = os.environ.get("MAGA_SERVER_WORK_DIR", bazel_outputs_dir)
+        # Use MAGA_SERVER_WORK_DIR if set; otherwise default to CWD (not
+        # bazel_outputs_dir which may point to _rtp_test_outputs/ — a
+        # subdirectory that does not contain the rtp_llm package).
+        cwd_path = os.environ.get("MAGA_SERVER_WORK_DIR", os.getcwd())
         # 创建一个文件来存储子进程的日志
         self._log_file = (
             f"{bazel_outputs_dir}/{role_log_name}/{self._process_file_name}"
