@@ -5,6 +5,7 @@
 #include "rtp_llm/models_py/bindings/rocm/Gemm.h"
 #include "rtp_llm/models_py/bindings/rocm/FusedRopeKVCacheOp.h"
 #include "rtp_llm/models_py/bindings/common/CudaGraphPrefillCopy.h"
+#include "rtp_llm/cpp/rocm/hip_host_utils.h"
 
 namespace rtp_llm {
 
@@ -93,6 +94,10 @@ void registerBasicRocmOps(py::module& rtp_ops_m) {
                   py::arg("input_lengths"),
                   py::arg("hidden_size"),
                   py::arg("cu_seq_len"));
+
+    rtp_ops_m.def("is_hipgraph_capture_enabled",
+                  &rtp_llm::rocm::isHipGraphCaptureEnabled,
+                  "Return whether HIP graph capture mode is currently enabled");
 }
 
 void registerBaseRocmBindings(py::module& rtp_ops_m) {

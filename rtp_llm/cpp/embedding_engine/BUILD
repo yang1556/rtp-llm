@@ -19,9 +19,13 @@ cc_library(
         "//rtp_llm/cpp/models:models",
         "//rtp_llm/cpp/cache:cache",
         "//rtp_llm/cpp/models:context_parallel",
-        "//rtp_llm/cpp/cuda/CudaGraph:graph_base",
+        "//rtp_llm/cpp/cuda_graph:cuda_graph_base",
         "//rtp_llm/cpp/utils:profiling_scope",
-    ],
+    ] + select({
+        "//:using_cuda": ["//rtp_llm/cpp/cuda_graph:cuda_graph_impl"],
+        "@//:using_rocm": ["//rtp_llm/cpp/cuda_graph:cuda_graph_impl"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:public"]
 )
 
