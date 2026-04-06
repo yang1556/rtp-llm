@@ -8,7 +8,7 @@ from numpy import append
 
 from rtp_llm.models_py.distributed.collective_torch import Group, all_gather, recv, send
 from rtp_llm.models_py.distributed.user_buffers import get_user_buffers_communicator
-from rtp_llm.ops import AttentionConfigs, CPRotateMethod, FMHAType, ParallelismConfig
+from rtp_llm.ops import AttentionConfigs, CPRotateMethod, ParallelismConfig
 from rtp_llm.ops.compute_ops import (
     KVCache,
     ParamsBase,

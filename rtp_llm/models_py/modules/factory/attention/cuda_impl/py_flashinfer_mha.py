@@ -21,7 +21,6 @@ from rtp_llm.models_py.modules.factory.attention.cuda_mla_impl.flashinfer_mla im
 from rtp_llm.models_py.modules.factory.attention.fmha_impl_base import FMHAImplBase
 from rtp_llm.ops import (
     AttentionConfigs,
-    FMHAType,
     KvCacheDataType,
     ParallelismConfig,
     RopeStyle,

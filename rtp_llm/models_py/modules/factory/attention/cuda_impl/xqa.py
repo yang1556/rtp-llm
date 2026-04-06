@@ -9,7 +9,6 @@ from rtp_llm.models_py.modules.factory.attention.fmha_impl_base import FMHAImplB
 from rtp_llm.ops import (
     AttentionConfigs,
     FMHAConfig,
-    FMHAType,
     KvCacheDataType,
     ParallelismConfig,
 )

@@ -95,31 +95,6 @@ struct ConcurrencyConfig {
     std::string to_string() const;
 };
 
-enum class FMHAType {
-    FLASH_INFER,
-    NONE,
-    OPEN_SOURCE,
-    PAGED_OPEN_SOURCE,
-    PAGED_TRT_V2,
-    TRT_V1,
-    TRT_V2,
-    XQA,
-    AITER_PREFILL,
-    AITER_ASM_PREFILL,
-    AITER_PAGED_PREFILL,
-    AITER_DECODE,
-    AITER_ASM_DECODE,
-    AITER_TRITON_DECODE,
-    PY_FLASHINFER_PREFILL_PAGED,
-    PY_FLASHINFER_PREFILL_RAGGED,
-    PY_FLASHINFER_DECODE,
-    FLASHINFER_MLA_PREFILL,
-    FLASHINFER_MLA_DECODE,
-    SPARSE_FLASHMLA,
-    CP_FLASH_INFER,
-    HEADWISE,
-};
-
 struct FMHAConfig {
     bool        enable_fmha                   = true;
     bool        enable_trt_fmha               = true;
