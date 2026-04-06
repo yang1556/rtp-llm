@@ -169,9 +169,13 @@ class TestFlashInferFp8GroupwiseExecutor(unittest.TestCase):
             torch.randn(expert_num, K, moe_inter_size, device="cuda", dtype=torch.float32) * 0.01
         ).to(torch.bfloat16)
 
-        # Quantize weights to FP8
+        # Quantize weights to FP8 and dequantize back for reference
         w1_fp8 = w1_bf16.to(torch.float8_e4m3fn)
         w2_fp8 = w2_bf16.to(torch.float8_e4m3fn)
+        # Use dequantized weights for reference so both paths share
+        # the same quantization error baseline
+        w1_bf16 = w1_fp8.to(torch.bfloat16)
+        w2_bf16 = w2_fp8.to(torch.bfloat16)
 
         weights = {
             W.moe_w1: w1_fp8,
@@ -226,14 +230,16 @@ class TestFlashInferFp8GroupwiseExecutor(unittest.TestCase):
         self.assertFalse(torch.isnan(result.fused_expert_output).any())
         self.assertFalse(torch.isinf(result.fused_expert_output).any())
 
-        # Cosine similarity should be reasonable despite FP8 quantization
+        # Cosine similarity: both paths use same FP8 weights, remaining error
+        # is from activation quantization only — should be high
         cos_sim = torch.nn.functional.cosine_similarity(
             result.fused_expert_output.float().flatten(),
             ref.float().flatten(),
             dim=0,
         )
+        print(f"  cos_sim={cos_sim.item():.6f}")
         self.assertGreater(
-            cos_sim.item(), 0.8,
+            cos_sim.item(), 0.9,
             f"Cosine similarity too low: {cos_sim.item():.4f}"
         )
 
