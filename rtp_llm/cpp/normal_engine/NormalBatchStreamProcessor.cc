@@ -303,6 +303,7 @@ absl::StatusOr<GptModelInputs> NormalBatchStreamProcessor::gatherModelInput(cons
     if (is_multimodal_ && gathered_mm_features.size() > 0) {
         model_input.multimodal_features = std::move(gathered_mm_features);
     }
+
     return model_input;
 }
 

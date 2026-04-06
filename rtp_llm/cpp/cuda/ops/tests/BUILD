@@ -94,6 +94,20 @@ cc_test(
     exec_properties = {'gpu':'H20'},
 )
 
+cc_test(
+    name = "cuda_block_zero_kernel_test",
+    srcs = [
+        "CudaBlockZeroKernelTest.cc",
+    ],
+    data = [],
+    env = test_envs,
+    copts = copts(),
+    deps = test_deps + [
+        "//rtp_llm/cpp/kernels:kernels_block_zero",
+    ],
+    exec_properties = {'gpu':'A10'},
+)
+
 # Aliases: CudaGraph tests at //rtp_llm/cpp/cuda/CudaGraph/tests/
 alias(
     name = "test_cuda_graph_runner_libs",

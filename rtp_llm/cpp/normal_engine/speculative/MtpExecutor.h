@@ -9,6 +9,7 @@
 #include "rtp_llm/cpp/core/DeviceData.h"
 #include "rtp_llm/cpp/metrics/RtpLLMMetrics.h"
 #include "rtp_llm/cpp/models/eplb/ExpertBalancer.h"
+#include "rtp_llm/cpp/models/BlockZeroRunner.h"
 #include "rtp_llm/cpp/normal_engine/speculative/MtpBatchStreamProcessor.h"
 #include "rtp_llm/cpp/engine_base/ProposeModelEngineInitParams.h"
 #include "rtp_llm/cpp/normal_engine/speculative/SpeculativeSampler.h"
@@ -135,5 +136,7 @@ private:
     // group id tensors
     torch::Tensor target_kv_cache_layer_to_group;
     torch::Tensor draft_kv_cache_layer_to_group;
+
+    std::unique_ptr<BlockZeroRunner> block_zero_runner_;
 };
 };  // namespace rtp_llm
