@@ -254,9 +254,9 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
         input_fp8 = torch.empty(
             (total_padded, K), device=device, dtype=torch.float8_e4m3fn
         )
-        # Activation scale: (K//128, total_padded) for MN-major
+        # Activation scale: ep_scatter expects (total_padded, K//128) layout
         input_scale = torch.zeros(
-            (K // BLOCK_SIZE, total_padded), device=device, dtype=torch.float32
+            (total_padded, K // BLOCK_SIZE), device=device, dtype=torch.float32
         )
 
         output_index = torch.empty_like(topk_idx)
@@ -277,10 +277,9 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
             scale_ue8m0=False,
         )
 
-        # Quantize scattered activation to FP8 with per-group float32 scales
-        # Actually, the scatter already handles FP8 input.
-        # For FlashInfer, we need activation scales in MN-major: (K//128, cum_m)
-        # The scatter output scale is already in the right format if scale_ue8m0=False
+        # Transpose activation scale from (total_padded, K//128) to MN-major (K//128, total_padded)
+        # ep_scatter outputs row-major scales, FlashInfer expects MN-major
+        input_scale = input_scale.t().contiguous()
 
         # Determine mma_sm based on average tokens per expert
         avg_tokens = total_padded // max(E, 1)
