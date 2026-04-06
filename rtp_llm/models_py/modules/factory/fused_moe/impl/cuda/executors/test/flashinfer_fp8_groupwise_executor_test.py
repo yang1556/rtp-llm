@@ -37,7 +37,7 @@ class _ModelConfig:
         self.moe_inter_size = moe_inter_size
 
 
-def _make_config(expert_num=8, hidden_size=256, moe_inter_size=128, ep_size=1):
+def _make_config(expert_num=8, hidden_size=512, moe_inter_size=256, ep_size=1):
     """Create a minimal MoEConfigAdapter for testing."""
     config = MoEConfigAdapter.__new__(MoEConfigAdapter)
     config.expert_num = expert_num
@@ -292,28 +292,28 @@ class TestFlashInferFp8GroupwiseExecutor(unittest.TestCase):
         """Small token count — decode-like scenario, mma_sm=1."""
         self._run_test(
             expert_num=8, num_tokens=16,
-            hidden_size=256, moe_inter_size=128,
+            hidden_size=512, moe_inter_size=256,
         )
 
     def test_medium_tokens(self):
         """Medium token count."""
         self._run_test(
             expert_num=8, num_tokens=128,
-            hidden_size=256, moe_inter_size=128,
+            hidden_size=512, moe_inter_size=256,
         )
 
     def test_large_tokens(self):
         """Large token count — prefill scenario, should use mma_sm=2."""
         self._run_test(
             expert_num=8, num_tokens=512,
-            hidden_size=256, moe_inter_size=128,
+            hidden_size=512, moe_inter_size=256,
         )
 
     def test_many_experts(self):
         """Many experts with few tokens per expert."""
         self._run_test(
             expert_num=64, num_tokens=128,
-            hidden_size=256, moe_inter_size=128,
+            hidden_size=512, moe_inter_size=256,
         )
 
 

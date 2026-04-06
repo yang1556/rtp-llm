@@ -260,8 +260,11 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
         )
 
         output_index = torch.empty_like(topk_idx)
+        # m_indices must be padded to multiples of BLOCK_E=128 for ep_scatter
+        EP_BLOCK_E = 128
+        m_indices_size = ((total_padded + EP_BLOCK_E - 1) // EP_BLOCK_E) * EP_BLOCK_E
         m_indices = torch.empty(
-            total_padded, device=device, dtype=torch.int32
+            m_indices_size, device=device, dtype=torch.int32
         )
 
         ep_scatter(
