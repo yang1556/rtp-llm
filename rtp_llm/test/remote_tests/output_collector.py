@@ -107,8 +107,12 @@ def download_and_extract(
     result: "ExecutionResult",
     local_dest: Path,
     *,
+    max_bytes: int = 0,
 ) -> Optional[Path]:
     """Download the outputs archive from CAS and extract to *local_dest*.
+
+    Args:
+        max_bytes: If > 0, skip download when the archive exceeds this size.
 
     Returns the local directory on success, ``None`` if no archive was
     produced.
@@ -116,6 +120,14 @@ def download_and_extract(
     digest = result.output_files.get(OUTPUTS_ARCHIVE)
     if digest is None:
         log.debug("No %s in ActionResult — remote produced no outputs", OUTPUTS_ARCHIVE)
+        return None
+
+    if max_bytes and digest.size_bytes > max_bytes:
+        log.warning(
+            "Remote outputs archive too large (%.1f MiB > %.1f MiB limit), skipping download",
+            digest.size_bytes / (1024 * 1024),
+            max_bytes / (1024 * 1024),
+        )
         return None
 
     log.info(
