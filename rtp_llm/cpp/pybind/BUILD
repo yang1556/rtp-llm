@@ -97,6 +97,7 @@ cc_library(
             "//rtp_llm/cpp/core:exec_ctx_ops",
             "//rtp_llm/cpp/core:exec_ops_hdr",
             "//rtp_llm/cpp/core:distributed_comm_hdr",
+            "//rtp_llm/cpp/cuda_graph:cuda_graph_base",
         ],
         "//conditions:default": [],
     }),
