@@ -69,10 +69,20 @@ def make_output_files_decl() -> list:
 
 
 def make_tar_postscript() -> str:
-    """Shell snippet appended after pytest.  Runs regardless of exit code."""
+    """Shell snippet appended after pytest.  Runs regardless of exit code.
+
+    Collects all files from _rtp_test_outputs/ and logs/, plus dmesg.
+    Excludes coredump files (core.*) to keep archive size reasonable.
+    """
     return (
-        f'if [ -d "{WORKER_OUTPUTS_DIR}" ] && [ "$(ls -A {WORKER_OUTPUTS_DIR} 2>/dev/null)" ]; then '
-        f"tar -czf {OUTPUTS_ARCHIVE} -C {WORKER_OUTPUTS_DIR} . 2>/dev/null; "
+        f"mkdir -p {WORKER_OUTPUTS_DIR}/logs; "
+        # Copy all logs (engine.log, stack_trace.log, nccl.log, etc.)
+        f"cp -a logs/* {WORKER_OUTPUTS_DIR}/logs/ 2>/dev/null; "
+        # Collect dmesg for OOM/signal diagnostics
+        f"dmesg -T 2>/dev/null | tail -200 > {WORKER_OUTPUTS_DIR}/dmesg.log 2>/dev/null; "
+        # Tar everything in outputs dir, excluding coredumps
+        f'if [ "$(ls -A {WORKER_OUTPUTS_DIR} 2>/dev/null)" ]; then '
+        f"tar -czf {OUTPUTS_ARCHIVE} -C {WORKER_OUTPUTS_DIR} --exclude='core.*' --exclude='core' . 2>/dev/null; "
         f'echo ">>>RTP_OUTPUTS_ARCHIVE size=$(stat -c%s {OUTPUTS_ARCHIVE} 2>/dev/null || echo 0)"; '
         f"fi"
     )
@@ -97,24 +107,15 @@ def download_and_extract(
     result: "ExecutionResult",
     local_dest: Path,
     *,
-    max_bytes: int = 200 * 1024 * 1024,
 ) -> Optional[Path]:
     """Download the outputs archive from CAS and extract to *local_dest*.
 
     Returns the local directory on success, ``None`` if no archive was
-    produced or the archive exceeds *max_bytes*.
+    produced.
     """
     digest = result.output_files.get(OUTPUTS_ARCHIVE)
     if digest is None:
         log.debug("No %s in ActionResult — remote produced no outputs", OUTPUTS_ARCHIVE)
-        return None
-
-    if digest.size_bytes > max_bytes:
-        log.warning(
-            "Remote outputs archive too large (%d MiB > %d MiB limit), skipping",
-            digest.size_bytes // (1024 * 1024),
-            max_bytes // (1024 * 1024),
-        )
         return None
 
     log.info(
