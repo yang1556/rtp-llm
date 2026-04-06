@@ -10,9 +10,12 @@ except ModuleNotFoundError:
 from PIL import Image, ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-from pillow_heif import register_heif_opener
+try:
+    from pillow_heif import register_heif_opener
 
-register_heif_opener()
+    register_heif_opener()
+except (ModuleNotFoundError, ImportError):
+    pass  # pillow-heif is optional; HEIF/HEIC images will fall back to PIL
 
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -141,5 +144,9 @@ class VideoEmbeddingInterface(MultiModalEmbeddingInterface):
         **kwargs,
     ):
         assert len(mm_inputs) == 1
+        if VideoReader is None:
+            raise RuntimeError(
+                "decord is required for video processing. Install it with: pip install decord"
+            )
         data = get_bytes_io_from_url(mm_inputs[0].url, vit_config.download_headers)
         return VideoReader(data, ctx=cpu(0))

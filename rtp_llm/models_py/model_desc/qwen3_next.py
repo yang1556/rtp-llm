@@ -731,7 +731,7 @@ class Qwen3NextModel(GptModelBase):
             fmha_impl = self.prepare_fmha_impl(inputs)
 
         for i, decoder_layer in enumerate(self.layers):
-            # Switch to correct block_map for this layer in hybrid attention mode
+            # Switch to correct block_map for layer in hybrid attention mode
             gid = select_block_map_for_layer(attention_inputs, i)
             hidden_states = decoder_layer(
                 hidden_states,

@@ -28,6 +28,12 @@ def reshape_paged_kv_cache(
     layers and reshape to [block_num, 2, num_kv_heads, tokens_per_block, head_dim].
     If the tensor is already multi-dimensional it is returned as-is.
     """
+    import logging
+    logging.warning(
+        f"[DEBUG reshape_paged_kv_cache] input shape={paged_kv_cache.shape}, "
+        f"dim={paged_kv_cache.dim()}, numel={paged_kv_cache.numel()}, "
+        f"num_kv_heads={num_kv_heads}, tokens_per_block={tokens_per_block}, head_dim={head_dim}"
+    )
     if paged_kv_cache.dim() != 2:
         return paged_kv_cache
     block_num = paged_kv_cache.shape[0]

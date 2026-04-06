@@ -148,6 +148,10 @@ class Qwen2_VLImageEmbedding(MultiModalEmbeddingInterface):
 
     @staticmethod
     def load_video(data, configs, **kwargs):
+        if VideoReader is None:
+            raise RuntimeError(
+                "decord is required for video processing. Install it with: pip install decord"
+            )
         vr = VideoReader(data, ctx=cpu(0), num_threads=1)
         frames = len(vr)
 
@@ -260,6 +264,8 @@ class Qwen2_VLImageEmbedding(MultiModalEmbeddingInterface):
             )
             res = processor(images=None, videos=data, return_tensors="pt")
             return res["pixel_values_videos"], res["video_grid_thw"]
+        else:
+            raise Exception(f"unknown mm url type: {mm_type}")
 
     def get_preprocess_params(self):
         return {

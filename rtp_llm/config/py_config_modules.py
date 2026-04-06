@@ -53,7 +53,7 @@ class ServerConfig:
         self.ip: str = ""
         self.worker_info_port_num: int = MIN_WORKER_INFO_PORT_NUM
         self.shutdown_timeout: int = (
-            50  # Default timeout in seconds, -1 means wait indefinitely
+            600  # Default timeout in seconds (10 min), -1 means wait indefinitely
         )
         self.monitor_interval: int = 1  # Monitor interval in seconds
 

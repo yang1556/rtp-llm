@@ -106,6 +106,10 @@ class Qwen2_5_VLImageEmbedding(Qwen2_VLImageEmbedding):
 
     @staticmethod
     def load_video(data, configs, **kwargs):
+        if VideoReader is None:
+            raise RuntimeError(
+                "decord is required for video processing. Install it with: pip install decord"
+            )
         vr = VideoReader(data, ctx=cpu(0), num_threads=1)
         total_frames, video_fps = len(vr), vr.get_avg_fps()
         nframes = smart_nframes(configs, total_frames=total_frames, video_fps=video_fps)

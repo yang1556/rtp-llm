@@ -66,6 +66,10 @@ class LlavaImageEmbedding(MultiModalEmbeddingInterface):
 
     @staticmethod
     def load_video(data, config):
+        if VideoReader is None:
+            raise RuntimeError(
+                "decord is required for video processing. Install it with: pip install decord"
+            )
         fps = 1 if config.fps == -1 else config.fps
         vr = VideoReader(data, ctx=cpu(0), num_threads=1)
         total_frame_num = len(vr)

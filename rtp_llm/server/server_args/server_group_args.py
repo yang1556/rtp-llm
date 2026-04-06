@@ -67,8 +67,8 @@ def init_server_group_args(parser, server_config):
         env_name="SHUTDOWN_TIMEOUT",
         bind_to=(server_config, "shutdown_timeout"),
         type=int,
-        default=50,
-        help="Process manager shutdown timeout in seconds. Set to -1 to wait indefinitely for processes to finish (no force kill)",
+        default=600,
+        help="Process manager shutdown timeout in seconds (10 min). Set to -1 to wait indefinitely for processes to finish (no force kill)",
     )
     server_group.add_argument(
         "--monitor_interval",

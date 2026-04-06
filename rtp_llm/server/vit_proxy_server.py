@@ -45,8 +45,10 @@ class LoadBalancer:
         self.lock = threading.Lock()
 
     def get_worker_address(self) -> str:
-        """获取工作进程地址"""
-        return self.worker_addresses
+        """获取工作进程地址（已废弃，使用 get_worker 代替）"""
+        raise NotImplementedError(
+            "get_worker_address is deprecated, use get_worker() instead"
+        )
 
     def get_worker(self) -> str:
         """获取下一个工作进程地址"""
