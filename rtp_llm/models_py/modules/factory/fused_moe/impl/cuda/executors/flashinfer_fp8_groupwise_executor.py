@@ -343,6 +343,8 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
         dispose_tensor(fc2_input_scale)
 
         # === Gather: scatter-reduce back to original token order ===
+        # Ensure fc2_output is contiguous for Triton kernel alignment
+        fc2_output = fc2_output.contiguous()
         gather_out = torch.empty(
             hidden_states.shape, device=device, dtype=torch.bfloat16
         )
