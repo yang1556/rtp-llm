@@ -29,8 +29,6 @@ from rtp_llm.models_py.modules.factory.fused_moe.defs.quant_config import (
 )
 from rtp_llm.models_py.modules.factory.fused_moe.defs.type import ExecutorType
 from rtp_llm.models_py.triton_kernels.common.activation import silu_and_mul
-from rtp_llm.models_py.triton_kernels.moe.ep_kernels import (
-)
 from rtp_llm.models_py.utils.arch import get_sm
 from rtp_llm.models_py.utils.math import align, ceil_div
 from rtp_llm.models_py.utils.memory import dispose_tensor
