@@ -288,7 +288,10 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
             scale_tma_aligned=False,
             scale_ue8m0=False,
         )
-        # input_scale shape: (K//128, total_padded) — already MN-major for FlashInfer
+        # sgl_per_token_group_quant_fp8 with column_major_scales=True returns
+        # shape (total_padded, K//128) as a transposed view. FlashInfer MN-major
+        # expects (K//128, cum_m), so we need .T to get the correct shape.
+        input_scale_mn = input_scale.T.contiguous()
 
         # Determine mma_sm based on average tokens per expert
         avg_tokens = total_padded // max(E, 1)
@@ -298,7 +301,7 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
         fc1_output = group_gemm_fp8_nt_groupwise(
             a=input_fp8,
             b=self.w13_weight,
-            a_scale=input_scale,
+            a_scale=input_scale_mn,
             b_scale=self.w13_scale_mn,
             m_indptr=m_indptr,
             scale_granularity_mnk=(1, BLOCK_SIZE, BLOCK_SIZE),
@@ -325,12 +328,13 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
             scale_ue8m0=False,
         )
         dispose_tensor(fc1_act)
+        fc2_input_scale_mn = fc2_input_scale.T.contiguous()
 
         # === FC2: Down GEMM ===
         fc2_output = group_gemm_fp8_nt_groupwise(
             a=fc2_input_fp8,
             b=self.w2_weight,
-            a_scale=fc2_input_scale,
+            a_scale=fc2_input_scale_mn,
             b_scale=self.w2_scale_mn,
             m_indptr=m_indptr,
             scale_granularity_mnk=(1, BLOCK_SIZE, BLOCK_SIZE),
