@@ -30,8 +30,6 @@ from rtp_llm.models_py.modules.factory.fused_moe.defs.quant_config import (
 from rtp_llm.models_py.modules.factory.fused_moe.defs.type import ExecutorType
 from rtp_llm.models_py.triton_kernels.common.activation import silu_and_mul
 from rtp_llm.models_py.triton_kernels.moe.ep_kernels import (
-    ep_gather,
-    ep_scatter,
 )
 from rtp_llm.models_py.utils.arch import get_sm
 from rtp_llm.models_py.utils.math import align, ceil_div
@@ -240,56 +238,65 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
         for i in range(E):
             m_indptr[i + 1] = m_indptr[i] + padded_tokens[i]
 
-        # Scatter tokens to per-expert contiguous layout and quantize to FP8
         from rtp_llm.models_py.kernels.cuda.fp8_kernel import (
             sgl_per_token_group_quant_fp8,
         )
 
-        # Scatter: reorder tokens by expert assignment
-        num_tokens_gpu = torch.tensor(
-            padded_tokens, dtype=torch.int32, device=device
-        )
-        expert_start_loc = torch.zeros_like(num_tokens_gpu)
+        # === Token reordering: sort by expert into contiguous groups ===
+        M = hidden_states.shape[0]
+        top_k = topk_idx.shape[1]
 
-        input_fp8 = torch.empty(
-            (total_padded, K), device=device, dtype=torch.float8_e4m3fn
-        )
-        # Activation scale: ep_scatter expects (total_padded, K//128) layout
-        input_scale = torch.zeros(
-            (total_padded, K // BLOCK_SIZE), device=device, dtype=torch.float32
-        )
+        # Flatten topk assignments: for each (token, k) pair, get expert id
+        flat_topk_ids = topk_idx.view(-1)  # [M * top_k]
+        flat_topk_weights = topk_weights.view(-1)  # [M * top_k]
+        # Token index for each flat entry
+        token_indices = torch.arange(M, device=device, dtype=torch.int32).unsqueeze(1).expand(-1, top_k).reshape(-1)
 
-        output_index = torch.empty_like(topk_idx)
-        # m_indices must be padded to multiples of BLOCK_E=128 for ep_scatter
-        EP_BLOCK_E = 128
-        m_indices_size = ((total_padded + EP_BLOCK_E - 1) // EP_BLOCK_E) * EP_BLOCK_E
-        m_indices = torch.empty(
-            m_indices_size, device=device, dtype=torch.int32
-        )
+        # Sort by expert id to group tokens per expert
+        sorted_expert_ids, sort_order = flat_topk_ids.sort(stable=True)
 
-        ep_scatter(
-            hidden_states,
-            payload.expert_x_scale,
-            topk_idx,
-            num_tokens_gpu,
-            expert_start_loc,
-            input_fp8,
-            input_scale,
-            m_indices,
-            output_index,
+        # Build per-expert token lists and scatter into grouped layout
+        sorted_token_indices = token_indices[sort_order]
+        sorted_weights = flat_topk_weights[sort_order]
+
+        # Gather bf16 activations in expert-grouped order
+        grouped_bf16 = hidden_states[sorted_token_indices.long()]  # [M*top_k, K]
+
+        # Pad each expert group to multiple of 4 for FlashInfer
+        # We already have padded_tokens computed; now place tokens into padded layout
+        grouped_input = torch.zeros(
+            (total_padded, K), device=device, dtype=hidden_states.dtype
+        )
+        grouped_weights_flat = torch.zeros(total_padded, device=device, dtype=torch.float32)
+        grouped_token_map = torch.full((total_padded,), -1, device=device, dtype=torch.int64)
+
+        offset = 0
+        src_offset = 0
+        for i in range(E):
+            actual = num_tokens_per_expert[i]
+            padded = padded_tokens[i]
+            if actual > 0:
+                grouped_input[offset:offset + actual] = grouped_bf16[src_offset:src_offset + actual]
+                grouped_weights_flat[offset:offset + actual] = sorted_weights[src_offset:src_offset + actual]
+                grouped_token_map[offset:offset + actual] = sorted_token_indices[src_offset:src_offset + actual].long()
+            src_offset += actual
+            offset += padded
+
+        # Quantize grouped bf16 activations to fp8 with per-block scales
+        input_fp8, input_scale = sgl_per_token_group_quant_fp8(
+            grouped_input,
+            group_size=BLOCK_SIZE,
+            column_major_scales=True,
+            scale_tma_aligned=False,
             scale_ue8m0=False,
         )
-
-        # Transpose activation scale from (total_padded, K//128) to MN-major (K//128, total_padded)
-        # ep_scatter outputs row-major scales, FlashInfer expects MN-major
-        input_scale = input_scale.t().contiguous()
+        # input_scale shape: (K//128, total_padded) — already MN-major for FlashInfer
 
         # Determine mma_sm based on average tokens per expert
         avg_tokens = total_padded // max(E, 1)
         mma_sm = 2 if avg_tokens >= self.MMA_2SM_THRESHOLD else 1
 
         # === FC1: Gate+Up GEMM ===
-        # A=[total_padded, K] @ B=[E, 2N_inter, K]^T → C=[total_padded, 2N_inter]
         fc1_output = group_gemm_fp8_nt_groupwise(
             a=input_fp8,
             b=self.w13_weight,
@@ -321,12 +328,7 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
         )
         dispose_tensor(fc1_act)
 
-        # fc2_input_scale shape after column_major: (N_inter//128, total_padded)
-        # This is already MN-major format for FlashInfer a_scale
-
-        # Build m_indptr for FC2 (same expert assignment, same padding)
         # === FC2: Down GEMM ===
-        # A=[total_padded, N_inter] @ B=[E, K, N_inter]^T → C=[total_padded, K]
         fc2_output = group_gemm_fp8_nt_groupwise(
             a=fc2_input_fp8,
             b=self.w2_weight,
@@ -342,12 +344,19 @@ class FlashInferFp8GroupwiseExecutor(FusedMoeExpertExecutor):
         dispose_tensor(fc2_input_fp8)
         dispose_tensor(fc2_input_scale)
 
-        # === Gather: scatter-reduce back to original token order ===
-        # Ensure fc2_output is contiguous for Triton kernel alignment
-        fc2_output = fc2_output.contiguous()
-        gather_out = torch.empty(
+        # === Gather: weighted scatter-reduce back to original token order ===
+        gather_out = torch.zeros(
             hidden_states.shape, device=device, dtype=torch.bfloat16
         )
-        ep_gather(fc2_output, topk_idx, topk_weights, output_index, gather_out)
+        # For each position in grouped output, add weighted result to original token
+        valid_mask = grouped_token_map >= 0
+        valid_indices = grouped_token_map[valid_mask]
+        valid_output = fc2_output[valid_mask]  # [num_valid, K]
+        valid_weights = grouped_weights_flat[valid_mask].unsqueeze(1)  # [num_valid, 1]
+        gather_out.scatter_add_(
+            0,
+            valid_indices.unsqueeze(1).expand_as(valid_output),
+            (valid_output * valid_weights).to(torch.bfloat16),
+        )
 
         return CombineForwardPayload(fused_expert_output=gather_out)
