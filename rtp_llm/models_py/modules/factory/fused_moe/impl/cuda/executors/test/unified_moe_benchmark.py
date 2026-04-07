@@ -584,21 +584,47 @@ def _make_config(E, K, N, top_k, max_batch):
 
 # (label, E, tokens_per_expert, N, K, stype)
 # tokens_per_expert: int for uniform, list[int] for non-uniform
+
+# Per-expert M values: 8, 16, 64, 256, 512, 1024, 2048
 UNIFORM_SCENARIOS = [
-    ("Decode-2tok/exp",     8,    2, 2048, 7168, "decode"),
-    ("Decode-8tok/exp",     8,    8, 2048, 7168, "decode"),
-    ("Decode-16tok/exp",    8,   16, 2048, 7168, "decode"),
-    ("Prefill-32tok/exp",   8,   32, 2048, 7168, "prefill"),
-    ("Prefill-128tok/exp",  8,  128, 2048, 7168, "prefill"),
-    ("Prefill-512tok/exp",  8,  512, 2048, 7168, "prefill"),
-    ("ManyExp-8tok/exp",   64,    8, 2048, 7168, "decode"),
+    ("M/E=8",       8,     8, 2048, 7168, "decode"),
+    ("M/E=16",      8,    16, 2048, 7168, "decode"),
+    ("M/E=64",      8,    64, 2048, 7168, "prefill"),
+    ("M/E=256",     8,   256, 2048, 7168, "prefill"),
+    ("M/E=512",     8,   512, 2048, 7168, "prefill"),
+    ("M/E=1024",    8,  1024, 2048, 7168, "prefill"),
+    ("M/E=2048",    8,  2048, 2048, 7168, "prefill"),
+    ("E64-M/E=8",  64,     8, 2048, 7168, "decode"),
 ]
 
-# Non-uniform activation patterns (fixed total_M=256, E=8)
-SKEWED_SCENARIOS = [
-    ("Skewed-A(longtail)", 8, [96, 64, 32, 24, 16, 12, 8, 4], 2048, 7168, "skewed"),
-    ("Skewed-B(extreme)",  8, [192, 32, 16, 8, 4, 2, 1, 1],  2048, 7168, "skewed"),
-]
+
+def _make_skewed_a(total_m, E=8):
+    """Long-tail: 1 hot expert gets ~38%, rest follow geometric decay."""
+    ratios = [0.375, 0.25, 0.125, 0.094, 0.063, 0.047, 0.031, 0.015]
+    counts = [max(1, int(r * total_m)) for r in ratios[:E]]
+    diff = total_m - sum(counts)
+    counts[0] += diff
+    return counts
+
+
+def _make_skewed_b(total_m, E=8):
+    """Extreme: 1 expert gets ~75%, rest get scraps."""
+    counts = [1] * E
+    counts[0] = total_m - (E - 1)
+    return counts
+
+
+# Non-uniform activation for each M/E level
+# total_M = uniform M/E * E, then redistribute non-uniformly
+SKEWED_SCENARIOS = []
+for m_per_e in [8, 64, 256, 512, 1024, 2048]:
+    total_m = m_per_e * 8
+    sk_a = _make_skewed_a(total_m)
+    sk_b = _make_skewed_b(total_m)
+    SKEWED_SCENARIOS.append(
+        (f"SkA-totM={total_m}", 8, sk_a, 2048, 7168, "skewed"))
+    SKEWED_SCENARIOS.append(
+        (f"SkB-totM={total_m}", 8, sk_b, 2048, 7168, "skewed"))
 
 ALL_SCENARIOS = UNIFORM_SCENARIOS + SKEWED_SCENARIOS
 
@@ -628,29 +654,31 @@ class TestUnifiedMoeBenchmark(unittest.TestCase):
         impl_names = [name for name, _, _ in IMPLEMENTATIONS]
         col_width = 12
 
-        print("\n" + "=" * 160)
+        print("\n" + "=" * 170)
         print(f"  Unified MoE Benchmark — SM100 (Full MoE: FC1+SiLU+FC2)")
         print(f"  N=2048 (inter), K=7168 (hidden), Warmup={WARMUP_ITERS}, Iters={BENCH_ITERS}, Seed={SEED}")
         print(f"  Implementations: {', '.join(impl_names)}")
         print(f"  * = fused end-to-end MoE (includes routing+gather overhead)")
-        print("=" * 160)
+        print("=" * 170)
 
         # Print header
-        hdr = f"{'Scenario':<22} {'Type':<8} {'E':>4} {'TotM':>7} | "
+        hdr = f"{'Scenario':<22} {'Type':<8} {'E':>4} {'TotM':>7} {'maxM/E':>6} | "
         for name, _, is_fused in IMPLEMENTATIONS:
             mark = "*" if is_fused else ""
             hdr += f"{name + mark:>{col_width}} {'TF':>7} | "
         hdr += f"{'Best':>12}"
         print(hdr)
-        print("-" * 160)
+        print("-" * 170)
 
         all_errors = []
 
         for label, E, tpe, N, K, stype in ALL_SCENARIOS:
             if isinstance(tpe, int):
                 total_tokens = E * tpe
+                max_m_per_e = tpe
             else:
                 total_tokens = sum(tpe)
+                max_m_per_e = max(tpe)
 
             results = {}
             for name, bench_fn, _ in IMPLEMENTATIONS:
@@ -660,7 +688,7 @@ class TestUnifiedMoeBenchmark(unittest.TestCase):
                     all_errors.append(f"[{name}] {label}: {err}")
 
             # Format output
-            row = f"{label:<22} {stype:<8} {E:>4} {total_tokens:>7} | "
+            row = f"{label:<22} {stype:<8} {E:>4} {total_tokens:>7} {max_m_per_e:>6} | "
             candidates = []
             for name, _, is_fused in IMPLEMENTATIONS:
                 ms, tf, _ = results[name]
@@ -674,12 +702,13 @@ class TestUnifiedMoeBenchmark(unittest.TestCase):
             row += f"{best:>12}"
             print(row)
 
-        print("=" * 160)
+        print("=" * 170)
         print("Legend: FP4-CD=CuteDSL, FP4-TRT=TRT-LLM FP4, FP4-CUT=CUTLASS FP4 (vLLM/SGLang),")
         print("        FP8-FI=FlashInfer groupwise, FP8-DGM=DeepGEMM masked, FP8-DGC=DeepGEMM contiguous,")
         print("        FP8-CUT=CUTLASS per-tensor, FP8-TRT=TRT-LLM FP8")
         print("  * = fused end-to-end MoE (includes routing + gather overhead)")
         print(f"  Workload: Full MoE (FC1[M,K]x[2N,K]^T + SiLU + FC2[M,N]x[K,N]^T)")
+        print(f"  SkA = long-tail (38%/25%/12.5%/...), SkB = extreme (75%/rest=1 each)")
 
         if all_errors:
             print(f"\nErrors ({len(all_errors)}):")
