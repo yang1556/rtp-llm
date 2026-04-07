@@ -39,22 +39,6 @@ def init_fmha_group_args(parser, fmha_config):
         help="控制是否启用开源版本的FMHA实现。可选值: True (启用), False (禁用)。",
     )
     fmha_group.add_argument(
-        "--enable_paged_open_source_fmha",
-        env_name="ENABLE_PAGED_OPEN_SOURCE_FMHA",
-        bind_to=(fmha_config, "enable_paged_open_source_fmha"),
-        type=str2bool,
-        default=True,
-        help="控制是否启用Paged开源版本的FMHA实现。可选值: True (启用), False (禁用)。",
-    )
-    fmha_group.add_argument(
-        "--enable_trtv1_fmha",
-        env_name="ENABLE_TRTV1_FMHA",
-        bind_to=(fmha_config, "enable_trtv1_fmha"),
-        type=str2bool,
-        default=True,
-        help="控制是否启用TRTv1风格的FMHA功能。可选值: True (启用), False (禁用)。",
-    )
-    fmha_group.add_argument(
         "--disable_flash_infer",
         env_name="DISABLE_FLASH_INFER",
         bind_to=(fmha_config, "disable_flash_infer"),

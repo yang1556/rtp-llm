@@ -87,8 +87,6 @@ std::string FMHAConfig::to_string() const {
         << "enable_trt_fmha: " << enable_trt_fmha << "\n"
         << "enable_paged_trt_fmha: " << enable_paged_trt_fmha << "\n"
         << "enable_open_source_fmha: " << enable_open_source_fmha << "\n"
-        << "enable_paged_open_source_fmha: " << enable_paged_open_source_fmha << "\n"
-        << "enable_trtv1_fmha: " << enable_trtv1_fmha << "\n"
         << "disable_flash_infer: " << disable_flash_infer << "\n"
         << "enable_xqa: " << enable_xqa << "\n"
         << "use_aiter_pa: " << use_aiter_pa << "\n"

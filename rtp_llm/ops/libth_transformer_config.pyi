@@ -502,10 +502,8 @@ class FMHAConfig:
     disable_flash_infer: bool
     enable_fmha: bool
     enable_open_source_fmha: bool
-    enable_paged_open_source_fmha: bool
     enable_paged_trt_fmha: bool
     enable_trt_fmha: bool
-    enable_trtv1_fmha: bool
     enable_xqa: bool
     use_aiter_pa: bool
     use_asm_pa: bool

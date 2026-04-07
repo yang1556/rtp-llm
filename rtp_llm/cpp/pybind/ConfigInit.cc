@@ -205,8 +205,6 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def_readwrite("enable_trt_fmha", &FMHAConfig::enable_trt_fmha)
         .def_readwrite("enable_paged_trt_fmha", &FMHAConfig::enable_paged_trt_fmha)
         .def_readwrite("enable_open_source_fmha", &FMHAConfig::enable_open_source_fmha)
-        .def_readwrite("enable_paged_open_source_fmha", &FMHAConfig::enable_paged_open_source_fmha)
-        .def_readwrite("enable_trtv1_fmha", &FMHAConfig::enable_trtv1_fmha)
         .def_readwrite("disable_flash_infer", &FMHAConfig::disable_flash_infer)
         .def_readwrite("enable_xqa", &FMHAConfig::enable_xqa)
         .def_readwrite("use_aiter_pa", &FMHAConfig::use_aiter_pa)
@@ -220,8 +218,6 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                                       self.enable_trt_fmha,
                                       self.enable_paged_trt_fmha,
                                       self.enable_open_source_fmha,
-                                      self.enable_paged_open_source_fmha,
-                                      self.enable_trtv1_fmha,
                                       self.disable_flash_infer,
                                       self.enable_xqa,
                                       self.use_aiter_pa,
@@ -230,7 +226,7 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                                       self.absorb_opt_len);
             },
             [](py::tuple t) {
-                if (t.size() != 12)
+                if (t.size() != 10)
                     throw std::runtime_error("Invalid state!");
                 FMHAConfig c;
                 try {
@@ -238,14 +234,12 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                     c.enable_trt_fmha               = t[1].cast<bool>();
                     c.enable_paged_trt_fmha         = t[2].cast<bool>();
                     c.enable_open_source_fmha       = t[3].cast<bool>();
-                    c.enable_paged_open_source_fmha = t[4].cast<bool>();
-                    c.enable_trtv1_fmha             = t[5].cast<bool>();
-                    c.disable_flash_infer           = t[6].cast<bool>();
-                    c.enable_xqa                    = t[7].cast<bool>();
-                    c.use_aiter_pa                  = t[8].cast<bool>();
-                    c.use_asm_pa                    = t[9].cast<bool>();
-                    c.use_triton_pa                 = t[10].cast<bool>();
-                    c.absorb_opt_len                = t[11].cast<int64_t>();
+                    c.disable_flash_infer           = t[4].cast<bool>();
+                    c.enable_xqa                    = t[5].cast<bool>();
+                    c.use_aiter_pa                  = t[6].cast<bool>();
+                    c.use_asm_pa                    = t[7].cast<bool>();
+                    c.use_triton_pa                 = t[8].cast<bool>();
+                    c.absorb_opt_len                = t[9].cast<int64_t>();
                 } catch (const std::exception& e) {
                     throw std::runtime_error(std::string("FMHAConfig unpickle error: ") + e.what());
                 }

@@ -100,8 +100,6 @@ struct FMHAConfig {
     bool        enable_trt_fmha               = true;
     bool        enable_paged_trt_fmha         = true;
     bool        enable_open_source_fmha       = true;
-    bool        enable_paged_open_source_fmha = true;
-    bool        enable_trtv1_fmha             = true;
     bool        disable_flash_infer           = false;
     bool        enable_xqa                    = true;
     bool        use_aiter_pa                  = true;
