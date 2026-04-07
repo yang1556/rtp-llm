@@ -235,7 +235,10 @@ class PyFlashinferPrefillPagedAttnOp(object):
                 attn_inputs.input_lengths
             )
             self.cu_seq_lens[: attn_inputs.cu_seqlens.size(0)] = attn_inputs.cu_seqlens
-            qo_indptr = self.qo_indptr
+            # Use dynamically computed qo_indptr from fill_params instead of fixed
+            # self.qo_indptr to ensure FlashInfer plans with actual token counts,
+            # avoiding numerical differences from processing padding tokens.
+            qo_indptr = self.fmha_params.qo_indptr_d
 
         self.prefill_wrapper.plan(
             qo_indptr,
