@@ -228,7 +228,7 @@ def start_server(py_env_configs: PyEnvConfigs):
         process_manager.add_processes(frontend_process)
 
         # Start parallel health checks and wait for completion
-        if not process_manager.run_health_checks():
+        if not process_manager.run_health_checks(timeout=3600):
             logging.error("Health checks failed")
             raise Exception("Health checks failed")
 
