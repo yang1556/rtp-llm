@@ -18,6 +18,7 @@ from rtp_llm.ops.compute_ops import (
 
 
 class TRTMHAImpl(FMHAImplBase):
+    NAME = "trt"
 
     def __init__(
         self,
@@ -121,6 +122,7 @@ class TRTMHAImpl(FMHAImplBase):
 
 
 class TRTPagedMHAImpl(FMHAImplBase):
+    NAME = "trt_paged"
 
     def __init__(
         self,

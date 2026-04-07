@@ -6,6 +6,49 @@ def init_fmha_group_args(parser, fmha_config):
     # FMHA
     ##############################################################################################################
     fmha_group = parser.add_argument_group("FMHA")
+
+    # New string-based attention backend selection
+    fmha_group.add_argument(
+        "--attn_backend",
+        env_name="ATTN_BACKEND",
+        bind_to=(fmha_config, "attn_backend"),
+        type=str,
+        default="auto",
+        help="Attention backend selection. 'auto' = priority-ordered auto-selection (default). "
+             "'none' = disable all attention. Or a specific backend name: "
+             "trt, trt_paged, flashinfer, py_flashinfer, py_flashinfer_paged, xqa, "
+             "trtllm_gen, trtllm_spec, headwise, headwise_fp8, "
+             "aiter_asm, aiter, aiter_triton, aiter_paged, cp_flashinfer, "
+             "flashinfer_mla, sparse_mla.",
+    )
+    fmha_group.add_argument(
+        "--prefill_attn_backend",
+        env_name="PREFILL_ATTN_BACKEND",
+        bind_to=(fmha_config, "prefill_attn_backend"),
+        type=str,
+        default="",
+        help="Override attention backend for prefill stage (including chunked prefill "
+             "and speculative verify). Empty = use --attn_backend.",
+    )
+    fmha_group.add_argument(
+        "--decode_attn_backend",
+        env_name="DECODE_ATTN_BACKEND",
+        bind_to=(fmha_config, "decode_attn_backend"),
+        type=str,
+        default="",
+        help="Override attention backend for decode stage. Empty = use --attn_backend.",
+    )
+    fmha_group.add_argument(
+        "--disable_attn_backends",
+        env_name="DISABLE_ATTN_BACKENDS",
+        bind_to=(fmha_config, "disable_attn_backends"),
+        type=str,
+        default="",
+        help="Comma-separated list of attention backend NAMEs to disable. "
+             "Example: --disable_attn_backends=flashinfer,xqa",
+    )
+
+    # Legacy boolean flags (kept for backward compatibility)
     fmha_group.add_argument(
         "--enable_fmha",
         env_name="ENABLE_FMHA",

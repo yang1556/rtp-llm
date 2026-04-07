@@ -17,6 +17,7 @@ from rtp_llm.ops.compute_ops import (
 
 
 class FlashInferPrefillImpl(FMHAImplBase):
+    NAME = "flashinfer"
 
     def __init__(
         self,
@@ -73,6 +74,8 @@ class FlashInferPrefillImpl(FMHAImplBase):
 
 
 class FlashInferDecodeImpl(FMHAImplBase):
+    NAME = "flashinfer"
+
 
     def __init__(
         self,

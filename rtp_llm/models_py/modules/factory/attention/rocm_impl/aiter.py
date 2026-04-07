@@ -125,7 +125,7 @@ class AiterPrefillAttnOp:
         self.head_num = attn_configs.head_num
         self.head_dim = attn_configs.size_per_head
         self.head_num_kv = attn_configs.kv_head_num
-        self.tokens_per_block = attn_configs.kernel_tokens_per_block
+        self.tokens_per_block = attn_configs.tokens_per_block
         self.is_causal = attn_configs.is_causal
         self.v1_kv_layout = v1_kv_layout
 
@@ -813,6 +813,7 @@ class AiterDecodeAttnOpTriton(AiterDecodeAttnOpBase):
 
 class AiterPrefillImplAsm(FMHAImplBase):
     """Aiter prefill attention implementation using ASM."""
+    NAME = "aiter_asm"
 
     def __init__(
         self,
@@ -865,6 +866,7 @@ class AiterPrefillImplAsm(FMHAImplBase):
 
 class AiterPrefillImplNonAsm(FMHAImplBase):
     """Aiter prefill attention implementation using non-ASM."""
+    NAME = "aiter"
 
     def __init__(
         self,
@@ -921,6 +923,7 @@ class AiterPrefillImplPaged(FMHAImplBase):
     - seq_len <= 4: Triton PA (short query optimization)
     - Otherwise: CK batch-prefill (general paged prefill)
     """
+    NAME = "aiter_paged"
 
     def __init__(
         self,
@@ -931,7 +934,7 @@ class AiterPrefillImplPaged(FMHAImplBase):
         self.need_rope_kv_cache = attn_configs.need_rope_kv_cache
         self.head_num_kv = attn_configs.kv_head_num
         self.head_dim = attn_configs.size_per_head
-        self.tokens_per_block = attn_configs.kernel_tokens_per_block
+        self.tokens_per_block = attn_configs.tokens_per_block
 
         self.batch_prefill_impl = AiterPrefillAttnOpPaged(attn_configs)
         self.triton_prefill_impl = AiterPrefillAttnOpTriton(attn_configs)
@@ -1001,6 +1004,8 @@ class AiterPrefillImplPaged(FMHAImplBase):
 
 
 class AiterDecodeImplAsm(FMHAImplBase):
+    NAME = "aiter_asm"
+
     def __init__(
         self,
         attn_configs: AttentionConfigs,
@@ -1048,6 +1053,8 @@ class AiterDecodeImplAsm(FMHAImplBase):
 
 
 class AiterDecodeImplNonAsm(FMHAImplBase):
+    NAME = "aiter"
+
     def __init__(
         self,
         attn_configs: AttentionConfigs,
@@ -1096,6 +1103,7 @@ class AiterDecodeImplNonAsm(FMHAImplBase):
 
 class AiterDecodeImplTriton(FMHAImplBase):
     """Aiter decode attention implementation using Triton."""
+    NAME = "aiter_triton"
 
     def __init__(
         self,

@@ -402,6 +402,7 @@ class PyFlashinferPrefillImplBase(FMHAImplBase):
 
 class PyFlashinferPagedPrefillImpl(PyFlashinferPrefillImplBase):
     """FlashInfer prefill implementation with paged KV cache layout using MhaRotaryEmbeddingOp."""
+    NAME = "py_flashinfer_paged"
 
     def _create_fmha_impl(
         self, attn_configs: AttentionConfigs, attn_inputs: PyAttentionInputs
@@ -438,6 +439,7 @@ class PyFlashinferPagedPrefillImpl(PyFlashinferPrefillImplBase):
 
 class PyFlashinferPrefillImpl(PyFlashinferPrefillImplBase):
     """FlashInfer prefill implementation with ragged KV cache layout using MhaRotaryEmbeddingOp."""
+    NAME = "py_flashinfer"
 
     def _create_fmha_impl(
         self, attn_configs: AttentionConfigs, attn_inputs: PyAttentionInputs
@@ -568,6 +570,8 @@ class PyFlashinferDecodeAttnOp(object):
 
 
 class PyFlashinferDecodeImpl(FMHAImplBase):
+    NAME = "py_flashinfer"
+
     def __init__(
         self,
         attn_configs: AttentionConfigs,

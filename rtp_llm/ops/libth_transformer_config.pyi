@@ -498,6 +498,10 @@ class FIFOSchedulerConfig:
 
 
 class FMHAConfig:
+    attn_backend: str
+    prefill_attn_backend: str
+    decode_attn_backend: str
+    disable_attn_backends: str
     absorb_opt_len: int
     disable_flash_infer: bool
     enable_fmha: bool

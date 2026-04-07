@@ -538,6 +538,7 @@ class FlashInferTRTLLMDecodeOp(object):
 
 
 class FlashInferTRTLLMPrefillImpl(FMHAImplBase):
+    NAME = "trtllm_gen"
 
     def __init__(
         self,
@@ -603,6 +604,7 @@ class FlashInferTRTLLMPrefillImpl(FMHAImplBase):
 
 
 class FlashInferTRTLLMSpecDecodeImpl(FMHAImplBase):
+    NAME = "trtllm_spec"
 
     def __init__(
         self,
@@ -679,6 +681,7 @@ class FlashInferTRTLLMSpecDecodeImpl(FMHAImplBase):
 
 
 class FlashInferTRTLLMDecodeImpl(FMHAImplBase):
+    NAME = "trtllm_gen"
 
     def __init__(
         self,

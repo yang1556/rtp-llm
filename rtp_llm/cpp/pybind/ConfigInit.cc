@@ -201,6 +201,10 @@ PYBIND11_MODULE(libth_transformer_config, m) {
     // Register FMHAConfig
     py::class_<FMHAConfig>(m, "FMHAConfig")
         .def(py::init<>())
+        .def_readwrite("attn_backend", &FMHAConfig::attn_backend)
+        .def_readwrite("prefill_attn_backend", &FMHAConfig::prefill_attn_backend)
+        .def_readwrite("decode_attn_backend", &FMHAConfig::decode_attn_backend)
+        .def_readwrite("disable_attn_backends", &FMHAConfig::disable_attn_backends)
         .def_readwrite("enable_fmha", &FMHAConfig::enable_fmha)
         .def_readwrite("enable_trt_fmha", &FMHAConfig::enable_trt_fmha)
         .def_readwrite("enable_paged_trt_fmha", &FMHAConfig::enable_paged_trt_fmha)
@@ -214,7 +218,11 @@ PYBIND11_MODULE(libth_transformer_config, m) {
         .def("to_string", &FMHAConfig::to_string)
         .def(py::pickle(
             [](const FMHAConfig& self) {
-                return py::make_tuple(self.enable_fmha,
+                return py::make_tuple(self.attn_backend,
+                                      self.prefill_attn_backend,
+                                      self.decode_attn_backend,
+                                      self.disable_attn_backends,
+                                      self.enable_fmha,
                                       self.enable_trt_fmha,
                                       self.enable_paged_trt_fmha,
                                       self.enable_open_source_fmha,
@@ -226,20 +234,24 @@ PYBIND11_MODULE(libth_transformer_config, m) {
                                       self.absorb_opt_len);
             },
             [](py::tuple t) {
-                if (t.size() != 10)
+                if (t.size() != 14)
                     throw std::runtime_error("Invalid state!");
                 FMHAConfig c;
                 try {
-                    c.enable_fmha                   = t[0].cast<bool>();
-                    c.enable_trt_fmha               = t[1].cast<bool>();
-                    c.enable_paged_trt_fmha         = t[2].cast<bool>();
-                    c.enable_open_source_fmha       = t[3].cast<bool>();
-                    c.disable_flash_infer           = t[4].cast<bool>();
-                    c.enable_xqa                    = t[5].cast<bool>();
-                    c.use_aiter_pa                  = t[6].cast<bool>();
-                    c.use_asm_pa                    = t[7].cast<bool>();
-                    c.use_triton_pa                 = t[8].cast<bool>();
-                    c.absorb_opt_len                = t[9].cast<int64_t>();
+                    c.attn_backend                  = t[0].cast<std::string>();
+                    c.prefill_attn_backend          = t[1].cast<std::string>();
+                    c.decode_attn_backend           = t[2].cast<std::string>();
+                    c.disable_attn_backends         = t[3].cast<std::string>();
+                    c.enable_fmha                   = t[4].cast<bool>();
+                    c.enable_trt_fmha               = t[5].cast<bool>();
+                    c.enable_paged_trt_fmha         = t[6].cast<bool>();
+                    c.enable_open_source_fmha       = t[7].cast<bool>();
+                    c.disable_flash_infer           = t[8].cast<bool>();
+                    c.enable_xqa                    = t[9].cast<bool>();
+                    c.use_aiter_pa                  = t[10].cast<bool>();
+                    c.use_asm_pa                    = t[11].cast<bool>();
+                    c.use_triton_pa                 = t[12].cast<bool>();
+                    c.absorb_opt_len                = t[13].cast<int64_t>();
                 } catch (const std::exception& e) {
                     throw std::runtime_error(std::string("FMHAConfig unpickle error: ") + e.what());
                 }

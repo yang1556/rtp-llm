@@ -56,6 +56,7 @@ class XQAParams:
 
 
 class XQAImpl(FMHAImplBase):
+    NAME = "xqa"
 
     def __init__(
         self,
@@ -108,7 +109,7 @@ class XQAImpl(FMHAImplBase):
 
 
 class XQADecodeImpl(FMHAImplBase):
-
+    NAME = "xqa"
 
     def __init__(
         self,

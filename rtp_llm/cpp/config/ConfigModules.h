@@ -96,6 +96,13 @@ struct ConcurrencyConfig {
 };
 
 struct FMHAConfig {
+    // String-based attention backend selection (new API)
+    std::string attn_backend              = "auto";  // "auto", "none", or a specific backend NAME
+    std::string prefill_attn_backend      = "";      // override for prefill stage (empty = use attn_backend)
+    std::string decode_attn_backend       = "";      // override for decode stage (empty = use attn_backend)
+    std::string disable_attn_backends     = "";      // comma-separated list of backend NAMEs to disable
+
+    // Legacy boolean flags (kept for backward compatibility, derived from above)
     bool        enable_fmha                   = true;
     bool        enable_trt_fmha               = true;
     bool        enable_paged_trt_fmha         = true;

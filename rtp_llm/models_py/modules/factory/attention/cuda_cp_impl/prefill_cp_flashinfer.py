@@ -30,6 +30,7 @@ impl_map = {
 
 
 class CPFlashInferImpl(FMHAImplBase):
+    NAME = "cp_flashinfer"
     """
     FlashInfer Ragged KV Cache Prefill Attention Operator for Context Parallel MHA.
 

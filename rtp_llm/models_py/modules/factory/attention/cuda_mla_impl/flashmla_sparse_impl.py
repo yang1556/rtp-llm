@@ -294,6 +294,7 @@ class SparseMlaImpl(MlaImplBase):
     Unified Sparse MLA implementation for both prefill and decode stages.
     Uses the same operator (SparseMlaOp) for both stages with triton-based index conversion.
     """
+    NAME = "sparse_mla"
 
     def __init__(
         self,
