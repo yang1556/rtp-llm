@@ -29,3 +29,12 @@ filegroup(
     name = "async_model_files",
     srcs = glob(["async_decoder_engine/**/*.py"]),
 )
+
+py_library(
+    name = "testlib",
+    data = [
+        "//rtp_llm/test/model_test/fake_test/testdata:testdata",
+        "//:th_transformer",
+        "//:rtp_compute_ops",
+    ],
+)
