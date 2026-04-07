@@ -1,12 +1,7 @@
-"""Multi-implementation FP8 MoE GEMM benchmark on SM100 (B200/GB200).
+"""Multi-implementation FP8 MoE single-FC GEMM benchmark on SM100.
 
-Compares:
-  - FlashInfer group_gemm_fp8_nt_groupwise (float32 blockwise scales)
-  - DeepGEMM m_grouped_fp8_gemm_nt_contiguous (UE8M0 scales, via executor)
-  - DeepGEMM m_grouped_fp8_gemm_nt_masked (UE8M0 scales, via executor)
-
-For fair comparison, benchmarks the full executor forward pass (FC1+act+FC2)
-since the scale formats differ between implementations.
+Compares FlashInfer group_gemm_fp8_nt_groupwise vs DeepGEMM
+m_grouped_fp8_gemm_nt_contiguous / m_grouped_fp8_gemm_nt_masked.
 """
 
 import time
@@ -26,7 +21,7 @@ BENCH_ITERS = 50
 
 
 def _per_block_quantize_fp8(tensor, block_size=128):
-    """Per-block FP8 quantization."""
+    """Per-block FP8 quantization for FlashInfer."""
     has_batch = tensor.dim() == 3
     if has_batch:
         E, N, K = tensor.shape
@@ -61,7 +56,6 @@ def _per_block_quantize_fp8(tensor, block_size=128):
 
 
 def _bench_time(fn, warmup=WARMUP_ITERS, iters=BENCH_ITERS):
-    """Warmup + benchmark, return avg ms."""
     for _ in range(warmup):
         fn()
     torch.cuda.synchronize()
@@ -74,40 +68,30 @@ def _bench_time(fn, warmup=WARMUP_ITERS, iters=BENCH_ITERS):
 
 
 def _compute_gemm_tflops(M, N, K, avg_ms):
-    """TFLOPS for single GEMM (2*M*N*K flops)."""
     return (2 * M * N * K / (avg_ms / 1000)) / 1e12
 
 
-def _compute_moe_tflops(total_tokens, N, K, avg_ms):
-    """TFLOPS for full MoE (FC1 + FC2)."""
-    flops = total_tokens * N * K * 2 + total_tokens * K * (N // 2) * 2
-    return (flops / (avg_ms / 1000)) / 1e12
+# ===== FlashInfer =====
 
-
-# ===== FlashInfer Raw GEMM Benchmark =====
-
-def _bench_flashinfer_raw_gemm(E, M_per_expert, N, K):
-    """Benchmark FlashInfer group_gemm_fp8_nt_groupwise — single FC GEMM only."""
+def _bench_flashinfer(E, M_per_expert, N, K):
     from flashinfer.gemm import group_gemm_fp8_nt_groupwise
+    from rtp_llm.models_py.kernels.cuda.fp8_kernel import sgl_per_token_group_quant_fp8
+    from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.flashinfer_fp8_groupwise_executor import _recompute_float32_scales
 
     device = "cuda"
     total_M = M_per_expert * E
 
-    # Create FP8 weights and input
     b_bf16 = (torch.randn(E, N, K, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
     b_fp8, _ = _per_block_quantize_fp8(b_bf16)
-    from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.flashinfer_fp8_groupwise_executor import _recompute_float32_scales
     b_scale = _recompute_float32_scales(b_fp8).permute(0, 2, 1).contiguous()
 
     a_bf16 = torch.randn(total_M, K, device=device, dtype=torch.bfloat16) * 0.1
-    from rtp_llm.models_py.kernels.cuda.fp8_kernel import sgl_per_token_group_quant_fp8
     a_fp8, a_scale = sgl_per_token_group_quant_fp8(
         a_bf16, group_size=BLOCK_SIZE,
         column_major_scales=True, scale_tma_aligned=False, scale_ue8m0=False,
     )
     a_scale_mn = a_scale.T.contiguous()
 
-    # Pad M_per_expert to multiple of 4
     M_padded = ((M_per_expert + 3) // 4) * 4
     m_indptr = torch.arange(0, E + 1, dtype=torch.int32, device=device) * M_padded
 
@@ -118,89 +102,94 @@ def _bench_flashinfer_raw_gemm(E, M_per_expert, N, K):
         )
 
     avg_ms = _bench_time(run)
-    tflops = _compute_gemm_tflops(total_M, N, K, avg_ms)
-    return avg_ms, tflops
+    return avg_ms, _compute_gemm_tflops(total_M, N, K, avg_ms)
 
 
-# ===== DeepGEMM Contiguous Raw GEMM Benchmark =====
+# ===== DeepGEMM Contiguous =====
 
-def _bench_deepgemm_contiguous_raw_gemm(E, M_per_expert, N, K):
-    """Benchmark DeepGEMM contiguous — single FC GEMM only."""
-    from deep_gemm import m_grouped_fp8_gemm_nt_contiguous
-    from rtp_llm.models_py.kernels.cuda.fp8_kernel import sgl_per_token_group_quant_fp8
+def _bench_deepgemm_contiguous(E, M_per_expert, N, K):
+    from rtp_llm.models_py.kernels.cuda.deepgemm_wrapper import m_grouped_fp8_gemm_nt_contiguous
+    from rtp_llm.test.utils.numeric_util import per_token_cast_to_fp8, per_block_cast_to_fp8
+    from rtp_llm.models_py.utils.math import align, ceil_div
 
     device = "cuda"
-    total_M = M_per_expert * E
+    mk_align = 128  # get_mk_alignment_for_contiguous_layout()
 
-    b_bf16 = (torch.randn(E, N, K, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    b_fp8, _ = _per_block_quantize_fp8(b_bf16)
+    # Each expert gets M_per_expert tokens, aligned
+    aligned_m = align(M_per_expert, mk_align)
+    total_M = aligned_m * E
 
     a_bf16 = torch.randn(total_M, K, device=device, dtype=torch.bfloat16) * 0.1
-    a_fp8, a_scale = sgl_per_token_group_quant_fp8(
-        a_bf16, group_size=BLOCK_SIZE,
-        column_major_scales=True, scale_tma_aligned=True,
-        scale_ue8m0=True,
-    )
+    b_bf16 = torch.randn(E, N, K, device=device, dtype=torch.bfloat16) * 0.1
 
-    m_indices = torch.arange(E, device=device, dtype=torch.int32).repeat_interleave(M_per_expert)
-    output = torch.empty((total_M, N), device=device, dtype=torch.bfloat16)
+    # Quantize using DeepGEMM's own functions (UE8M0)
+    a_fp8 = per_token_cast_to_fp8(a_bf16, use_ue8m0=True)  # returns (fp8, scale) tuple
+    b_fp8_data = torch.empty(E, N, K, device=device, dtype=torch.float8_e4m3fn)
+    b_fp8_scale = torch.empty(E, ceil_div(N, 128), ceil_div(K, 128), device=device, dtype=torch.float32)
+    for i in range(E):
+        b_fp8_data[i], b_fp8_scale[i] = per_block_cast_to_fp8(b_bf16[i], use_ue8m0=True)
+    b_fp8 = (b_fp8_data, b_fp8_scale)
+
+    # m_indices: expert id for each token row
+    m_indices = torch.empty(total_M, device=device, dtype=torch.int32)
+    for i in range(E):
+        start = i * aligned_m
+        m_indices[start:start + M_per_expert] = i
+        m_indices[start + M_per_expert:start + aligned_m] = -1  # padding
+
+    output = torch.empty(total_M, N, device=device, dtype=torch.bfloat16)
 
     def run():
-        m_grouped_fp8_gemm_nt_contiguous(
-            (a_fp8, a_scale), b_fp8, output, m_indices,
-        )
+        m_grouped_fp8_gemm_nt_contiguous(a_fp8, b_fp8, output, m_indices)
         return output
 
     try:
         avg_ms = _bench_time(run)
-        tflops = _compute_gemm_tflops(total_M, N, K, avg_ms)
-        return avg_ms, tflops, None
+        return avg_ms, _compute_gemm_tflops(E * M_per_expert, N, K, avg_ms), None
     except Exception as e:
-        return None, None, str(e)[:200]
+        return None, None, str(e)[:300]
 
 
-# ===== DeepGEMM Masked Raw GEMM Benchmark =====
+# ===== DeepGEMM Masked =====
 
-def _bench_deepgemm_masked_raw_gemm(E, M_per_expert, N, K):
-    """Benchmark DeepGEMM masked — single FC GEMM only."""
-    from deep_gemm import m_grouped_fp8_gemm_nt_masked
-    from rtp_llm.models_py.kernels.cuda.fp8_kernel import sgl_per_token_group_quant_fp8
-    from rtp_llm.models_py.utils.math import align
+def _bench_deepgemm_masked(E, M_per_expert, N, K):
+    from rtp_llm.models_py.kernels.cuda.deepgemm_wrapper import m_grouped_fp8_gemm_nt_masked
+    from rtp_llm.test.utils.numeric_util import per_token_cast_to_fp8, per_block_cast_to_fp8
+    from rtp_llm.models_py.utils.math import align, ceil_div
 
     device = "cuda"
-    alignment = align(M_per_expert, BLOCK_SIZE)
+    max_m = align(M_per_expert, BLOCK_SIZE)
 
-    b_bf16 = (torch.randn(E, N, K, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    b_fp8, _ = _per_block_quantize_fp8(b_bf16)
+    a_bf16 = torch.randn(E, max_m, K, device=device, dtype=torch.bfloat16) * 0.1
+    b_bf16 = torch.randn(E, N, K, device=device, dtype=torch.bfloat16) * 0.1
 
-    a_3d = torch.randn(E, alignment, K, device=device, dtype=torch.bfloat16) * 0.1
-    a_flat = a_3d.view(-1, K)
-    a_fp8, a_scale = sgl_per_token_group_quant_fp8(
-        a_flat, group_size=BLOCK_SIZE,
-        column_major_scales=True, scale_tma_aligned=True,
-        scale_ue8m0=True,
-    )
-    a_fp8_3d = a_fp8.view(E, alignment, K)
+    # Quantize per expert
+    a_fp8_data = torch.empty(E, max_m, K, device=device, dtype=torch.float8_e4m3fn)
+    a_fp8_scale = torch.empty(E, max_m, ceil_div(K, 128), device=device, dtype=torch.float32)
+    b_fp8_data = torch.empty(E, N, K, device=device, dtype=torch.float8_e4m3fn)
+    b_fp8_scale = torch.empty(E, ceil_div(N, 128), ceil_div(K, 128), device=device, dtype=torch.float32)
+    for i in range(E):
+        a_fp8_data[i], a_fp8_scale[i] = per_token_cast_to_fp8(a_bf16[i], use_ue8m0=True)
+        b_fp8_data[i], b_fp8_scale[i] = per_block_cast_to_fp8(b_bf16[i], use_ue8m0=True)
 
-    num_recv = torch.full((E,), M_per_expert, dtype=torch.int32, device=device)
-    output = torch.empty((E, alignment, N), device=device, dtype=torch.bfloat16)
+    a_fp8 = (a_fp8_data, a_fp8_scale)
+    b_fp8 = (b_fp8_data, b_fp8_scale)
+
+    masked_m = torch.full((E,), M_per_expert, device=device, dtype=torch.int32)
+    output = torch.empty(E, max_m, N, device=device, dtype=torch.bfloat16)
 
     def run():
-        m_grouped_fp8_gemm_nt_masked(
-            (a_fp8_3d, a_scale), b_fp8, output, num_recv, alignment,
-        )
+        m_grouped_fp8_gemm_nt_masked(a_fp8, b_fp8, output, masked_m, M_per_expert)
         return output
 
     try:
         avg_ms = _bench_time(run)
-        total_M = E * M_per_expert
-        tflops = _compute_gemm_tflops(total_M, N, K, avg_ms)
-        return avg_ms, tflops, None
+        return avg_ms, _compute_gemm_tflops(E * M_per_expert, N, K, avg_ms), None
     except Exception as e:
-        return None, None, str(e)[:200]
+        return None, None, str(e)[:300]
 
 
-# ===== Comparison =====
+# ===== Test =====
 
 SCENARIOS = [
     # (label, E, M_per_expert, N, K, type)
@@ -216,10 +205,9 @@ SCENARIOS = [
 
 
 class TestMoeFp8Benchmark(unittest.TestCase):
-    """Compare FlashInfer vs DeepGEMM raw GEMM on SM100."""
 
     def test_raw_gemm_comparison(self):
-        """Single FC GEMM comparison across implementations."""
+        """Single FC GEMM: FlashInfer vs DeepGEMM contiguous vs masked."""
         print("\n" + "=" * 120)
         print(f"  FP8 MoE Single-FC GEMM Benchmark — SM100")
         print(f"  N=4096 (moe_inter*2), K=7168 (hidden)")
@@ -234,52 +222,47 @@ class TestMoeFp8Benchmark(unittest.TestCase):
         print(header)
         print("-" * 120)
 
+        errors = []
         for label, E, M_per_exp, N, K, stype in SCENARIOS:
             total_M = E * M_per_exp
 
-            # FlashInfer
-            fi_ms, fi_tf = _bench_flashinfer_raw_gemm(E, M_per_exp, N, K)
+            fi_ms, fi_tf = _bench_flashinfer(E, M_per_exp, N, K)
 
-            # DeepGEMM Contiguous
-            dgc_ms, dgc_tf, dgc_err = _bench_deepgemm_contiguous_raw_gemm(E, M_per_exp, N, K)
+            dgc_ms, dgc_tf, dgc_err = _bench_deepgemm_contiguous(E, M_per_exp, N, K)
+            if dgc_err:
+                errors.append(f"[DGC] {label}: {dgc_err}")
 
-            # DeepGEMM Masked
-            dgm_ms, dgm_tf, dgm_err = _bench_deepgemm_masked_raw_gemm(E, M_per_exp, N, K)
+            dgm_ms, dgm_tf, dgm_err = _bench_deepgemm_masked(E, M_per_exp, N, K)
+            if dgm_err:
+                errors.append(f"[DGM] {label}: {dgm_err}")
 
-            # Format
-            fi_ms_s = f"{fi_ms:.3f}"
-            fi_tf_s = f"{fi_tf:.1f}"
+            fi_s = f"{fi_ms:.3f}"
+            fi_t = f"{fi_tf:.1f}"
+            dgc_s = f"{dgc_ms:.3f}" if dgc_ms else "ERR"
+            dgc_t = f"{dgc_tf:.1f}" if dgc_tf else "—"
+            dgm_s = f"{dgm_ms:.3f}" if dgm_ms else "ERR"
+            dgm_t = f"{dgm_tf:.1f}" if dgm_tf else "—"
 
-            dgc_ms_s = f"{dgc_ms:.3f}" if dgc_ms else "ERR"
-            dgc_tf_s = f"{dgc_tf:.1f}" if dgc_tf else "—"
-
-            dgm_ms_s = f"{dgm_ms:.3f}" if dgm_ms else "ERR"
-            dgm_tf_s = f"{dgm_tf:.1f}" if dgm_tf else "—"
-
-            # Best
             candidates = [("FI", fi_ms)]
             if dgc_ms:
                 candidates.append(("DGC", dgc_ms))
             if dgm_ms:
                 candidates.append(("DGM", dgm_ms))
             best_name, best_ms = min(candidates, key=lambda x: x[1])
-
-            if best_name == "FI":
-                best_s = "FI"
-            else:
-                best_s = f"{best_name} {fi_ms/best_ms:.2f}x"
+            best_s = best_name if best_name == "FI" else f"{best_name} {fi_ms/best_ms:.2f}x"
 
             print(f"{label:<22} {stype:<8} {E:>4} {M_per_exp:>5} {total_M:>7} | "
-                  f"{fi_ms_s:>7} {fi_tf_s:>7} | "
-                  f"{dgc_ms_s:>7} {dgc_tf_s:>7} | "
-                  f"{dgm_ms_s:>7} {dgm_tf_s:>7} | "
+                  f"{fi_s:>7} {fi_t:>7} | "
+                  f"{dgc_s:>7} {dgc_t:>7} | "
+                  f"{dgm_s:>7} {dgm_t:>7} | "
                   f"{best_s:>12}")
 
         print("=" * 120)
-        print("FI=FlashInfer groupwise (float32 scales)")
-        print("DGC=DeepGEMM contiguous (UE8M0 scales, prefill)")
-        print("DGM=DeepGEMM masked (UE8M0 scales, decode)")
-        print()
+        print("FI=FlashInfer groupwise, DGC=DeepGEMM contiguous, DGM=DeepGEMM masked")
+        if errors:
+            print()
+            for e in errors:
+                print(f"  {e}")
 
 
 if __name__ == "__main__":
