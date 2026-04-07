@@ -19,6 +19,12 @@ from rtp_llm.models_py.modules.factory.fused_moe.defs.strategy_base import MoeSt
 class RocmEpNormalStrategy(MoeStrategy):
     """ROCm EP normal mode strategy"""
 
+    def can_handle(self, config: MoEConfigAdapter) -> bool:
+        try:
+            return super().can_handle(config)
+        except (ImportError, ModuleNotFoundError):
+            return False
+
     def get_attributes(self) -> StrategyAttributes:
         from rtp_llm.models_py.modules.factory.fused_moe.impl.rocm.executors.deepep_normal_fused_moe_executor import (
             FusedMoeExecutor,
@@ -38,10 +44,8 @@ class RocmEpNormalStrategy(MoeStrategy):
 class RocmEpLowLatencyStrategy(MoeStrategy):
     """ROCm EP low latency strategy (not supported)"""
 
-    @classmethod
-    def check_conditions(cls, checker: Any, config: MoEConfigAdapter) -> None:
-        """ROCm EP low latency is not supported, always fail."""
-        checker.check(False)
+    def can_handle(self, config: MoEConfigAdapter) -> bool:
+        return False
 
     def create_router(self, config: MoEConfigAdapter) -> Any:
         raise ValueError("deepep_low_latency for rocm moe is not yet supported")
