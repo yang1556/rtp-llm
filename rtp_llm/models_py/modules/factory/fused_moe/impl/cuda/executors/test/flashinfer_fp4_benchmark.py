@@ -40,7 +40,7 @@ def _compute_moe_tflops(total_tokens, N, K, avg_ms):
 # ===== CuteDSL FP4 =====
 
 def _bench_cutedsl_fp4(E, M_per_expert, K, N):
-    from rtp_llm.models_py.kernels.cuda.fp4_kernel import flashinfer_cutedsl_moe_masked
+    from rtp_llm.models_py.kernels.cuda.fp4_kernel.flashinfer_cutedsl_moe import flashinfer_cutedsl_moe_masked
     from flashinfer import scaled_fp4_grouped_quantize
 
     device = "cuda"

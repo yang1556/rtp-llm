@@ -146,6 +146,7 @@ py_test (
         "//rtp_llm:config",
         "//rtp_llm:testlib",
         "//rtp_llm:flashinfer-python",
+        "//rtp_llm:nvidia-cutlass-dsl",
     ],
     env = {
         "GPU_COUNT": "1",

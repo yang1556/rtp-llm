@@ -83,7 +83,7 @@ class TestCutedslFp4Kernel(unittest.TestCase):
         if torch.cuda.get_device_capability() < (10, 0):
             self.skipTest("SM100+ required")
 
-        from rtp_llm.models_py.kernels.cuda.fp4_kernel import flashinfer_cutedsl_moe_masked
+        from rtp_llm.models_py.kernels.cuda.fp4_kernel.flashinfer_cutedsl_moe import flashinfer_cutedsl_moe_masked
         from flashinfer import scaled_fp4_grouped_quantize
 
         K = hidden_size
