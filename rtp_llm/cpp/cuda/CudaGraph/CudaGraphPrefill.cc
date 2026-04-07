@@ -60,7 +60,21 @@ void CudaGraphRunner::capturePrefill() {
 }
 
 std::vector<int> CudaGraphRunner::getPrefillSequenceLengthsToCapture() {
-    // prefill_capture_seq_lens_ must be provided from Python and cannot be empty
+    // Draft model prefill (num_tokens_per_bs_ != max_seq_len_): generate range 1 ~ max_bs_ * num_tokens_per_bs_
+    if (num_tokens_per_bs_ != max_seq_len_) {
+        int              max_seq = max_bs_ * num_tokens_per_bs_;
+        std::vector<int> result;
+        for (int i = 1; i <= max_seq; ++i) {
+            result.push_back(i);
+        }
+        RTP_LLM_LOG_INFO("Draft model prefill: capture seq_lens 1~%d (max_bs=%d, num_tokens_per_bs=%d)",
+                         max_seq,
+                         max_bs_,
+                         num_tokens_per_bs_);
+        return result;
+    }
+
+    // Embedding model prefill: use Python-provided capture seq_lens
     RTP_LLM_CHECK_WITH_INFO(!prefill_capture_seq_lens_.empty(),
                             "prefill_capture_seq_lens_ must be provided from Python and cannot be empty");
 

@@ -225,9 +225,6 @@ MtpExecutor::MtpExecutor(const EngineInitParams&                        params,
                 sp_prefill_draft_model_.reset(new PyWrappedModel(
                     model_params, params.py_sp_model, true, false, draft_cache_layer_layout.layer_to_groups));
             }
-        } else {
-            RTP_LLM_LOG_INFO("[speculative decoding] legacy c++ gpt model");
-            draft_model_.reset(new MTPModel(model_params));
         }
         break;  // NOTE: only support one mtp model now
     }
