@@ -1,6 +1,7 @@
 """FP4 vs FP8 MoE benchmark on SM100.
 
-Compares CuteDSL FP4, TRT-LLM FP4, and FlashInfer FP8 groupwise.
+Compares CuteDSL FP4 (via executor) vs FlashInfer FP8 groupwise
+and DeepGEMM FP8 masked/contiguous.
 """
 import time
 import unittest
@@ -11,6 +12,8 @@ try:
     pytestmark = [pytest.mark.gpu(type="SM100_ARM")]
 except ImportError:
     pytest = None
+
+from rtp_llm.utils.model_weight import W
 
 BLOCK_SIZE = 128
 WARMUP_ITERS = 5
@@ -32,9 +35,25 @@ def _bench_time(fn, warmup=WARMUP_ITERS, iters=BENCH_ITERS):
 
 
 def _compute_moe_tflops(total_tokens, N, K, avg_ms):
-    """FC1(2N*K) + FC2(K*N) FLOPS."""
     flops = total_tokens * (2 * N) * K * 2 + total_tokens * K * N * 2
     return (flops / (avg_ms / 1000)) / 1e12
+
+
+def _make_config(E, K, N, top_k, max_batch):
+    from rtp_llm.config.model_config import ModelConfig
+    from rtp_llm.ops import ParallelismConfig, MoeConfig
+    from rtp_llm.models_py.modules.factory.fused_moe.defs.config_adapter import MoEConfigAdapter
+
+    mc = ModelConfig()
+    mc.attn_config.head_num = 2; mc.attn_config.size_per_head = 128
+    mc.num_layers = 2; mc.max_seq_len = 2048; mc.vocab_size = 500000
+    mc.expert_num = E; mc.hidden_size = K; mc.moe_inter_size = N; mc.moe_k = top_k
+    pc = ParallelismConfig()
+    pc.world_size = 1; pc.dp_size = 1; pc.tp_size = 1; pc.ep_size = 1
+    pc.dp_rank = 0; pc.tp_rank = 0; pc.ep_rank = 0; pc.world_rank = 0
+    pc.local_rank = 0; pc.local_world_size = 1
+    moe_cfg = MoeConfig(); moe_cfg.ll_num_max_token = max_batch
+    return MoEConfigAdapter(model_config=mc, parallelism_config=pc, moe_config=moe_cfg)
 
 
 # ===== CuteDSL FP4 =====
@@ -60,33 +79,19 @@ def _bench_cutedsl_fp4(E, M_per_expert, K, N):
         w2_bf16, torch.full((E,), K, dtype=torch.int32, device=device), w2_gs)
 
     weights = {
-        W.moe_w1: w1_fp4.permute(2, 0, 1),
-        W.moe_w2: w2_fp4.permute(2, 0, 1),
+        W.moe_w1: w1_fp4.permute(2, 0, 1), W.moe_w2: w2_fp4.permute(2, 0, 1),
         W.moe_s1: w1_bs, W.moe_s2: w2_bs,
         W.moe_w1_s2: 1.0 / w1_gs, W.moe_w2_s2: 1.0 / w2_gs,
         W.moe_w1_i_s: torch.ones(E, dtype=torch.float32, device=device),
         W.moe_w2_i_s: torch.ones(E, dtype=torch.float32, device=device),
     }
 
-    from rtp_llm.config.model_config import ModelConfig
-    from rtp_llm.ops import ParallelismConfig, MoeConfig
-    mc = ModelConfig()
-    mc.attn_config.head_num = 2; mc.attn_config.size_per_head = 128
-    mc.num_layers = 2; mc.max_seq_len = 2048; mc.vocab_size = 500000
-    mc.expert_num = E; mc.hidden_size = K; mc.moe_inter_size = N; mc.moe_k = 8
-    pc = ParallelismConfig()
-    pc.world_size = 1; pc.dp_size = 1; pc.tp_size = 1; pc.ep_size = 1
-    pc.dp_rank = 0; pc.tp_rank = 0; pc.ep_rank = 0; pc.world_rank = 0; pc.local_rank = 0; pc.local_world_size = 1
-    moe_cfg = MoeConfig(); moe_cfg.ll_num_max_token = M_per_expert
-    from rtp_llm.models_py.modules.factory.fused_moe.defs.config_adapter import MoEConfigAdapter
-    config = MoEConfigAdapter(model_config=mc, parallelism_config=pc, moe_config=moe_cfg)
-
+    config = _make_config(E, K, N, 8, M_per_expert)
     executor = CutedslFp4Executor(config, FusedMoEQuantConfig(
         quant_dtype=torch.uint8, per_act_token_quant=False, per_out_ch_quant=False, block_shape=[16, 16]), weights)
 
     hidden = torch.randn(E, M_per_expert, K, device=device, dtype=torch.bfloat16) * 0.1
     masked_m = torch.full((E,), M_per_expert, dtype=torch.int32, device=device)
-
     payload = ExpertForwardPayload(
         expert_x=hidden, expert_x_origin_dtype=torch.bfloat16, expert_x_scale=None,
         expert_tokens_meta=ExpertTokensMetadata(expert_num_tokens=masked_m, expert_num_tokens_cpu=None))
@@ -96,119 +101,17 @@ def _bench_cutedsl_fp4(E, M_per_expert, K, N):
 
     try:
         avg_ms = _bench_time(run)
-        total_tokens = E * M_per_expert
-        return avg_ms, _compute_moe_tflops(total_tokens, N, K, avg_ms), None
+        return avg_ms, _compute_moe_tflops(E * M_per_expert, N, K, avg_ms), None
     except Exception as e:
         return None, None, str(e)[:200]
 
 
-# ===== TRT-LLM FP4 =====
-
-def _bench_trtllm_fp4(E, num_tokens, K, N, top_k):
-    from flashinfer import fp4_quantize, ActivationType
-    from flashinfer.fp4_quantization import block_scale_interleave
-    from flashinfer.fused_moe import trtllm_fp4_block_scale_routed_moe
-    from flashinfer.fused_moe.core import (
-        _maybe_get_cached_w3_w1_permute_indices,
-        get_w2_permute_indices_with_cache,
-    )
-    from flashinfer.utils import device_support_pdl
-
-    device = "cuda"
-    hidden = torch.randn(num_tokens, K, device=device, dtype=torch.bfloat16) * 0.1
-
-    # Routing
-    logits = torch.randn(num_tokens, E, device=device, dtype=torch.float32)
-    probs = torch.softmax(logits, dim=1)
-    topk_w, topk_ids = torch.topk(probs, top_k, dim=-1)
-    topk_w = topk_w / topk_w.sum(dim=-1, keepdim=True)
-
-    # Weights
-    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-
-    cache = {}
-    w1_gs = torch.empty(E, device=device, dtype=torch.float32)
-    w2_gs = torch.empty(E, device=device, dtype=torch.float32)
-    w1_all_fp4, w1_all_bs = [], []
-    w2_all_fp4, w2_all_bs = [], []
-    for i in range(E):
-        a1 = w1_bf16[i].abs().amax().float().clamp(min=1e-4)
-        w1_gs[i] = 448.0 * 6.0 / a1
-        fp4, bs = fp4_quantize(w1_bf16[i], w1_gs[i])
-        w1_all_fp4.append(fp4); w1_all_bs.append(bs)
-
-        a2 = w2_bf16[i].abs().amax().float().clamp(min=1e-4)
-        w2_gs[i] = 448.0 * 6.0 / a2
-        fp4, bs = fp4_quantize(w2_bf16[i], w2_gs[i])
-        w2_all_fp4.append(fp4); w2_all_bs.append(bs)
-
-    w1_fp4 = torch.stack(w1_all_fp4)
-    w1_bs_t = torch.stack(w1_all_bs)
-    w2_fp4 = torch.stack(w2_all_fp4)
-    w2_bs_t = torch.stack(w2_all_bs)
-
-    perm1 = _maybe_get_cached_w3_w1_permute_indices(N, K, cache)
-    w1_fp4 = w1_fp4[:, perm1, :]
-    w1_bs_t = block_scale_interleave(w1_bs_t[:, perm1, :], N * 2)
-
-    perm2 = get_w2_permute_indices_with_cache(K, N, cache)
-    w2_fp4 = w2_fp4[:, perm2, :]
-    w2_bs_t = block_scale_interleave(w2_bs_t[:, perm2, :], K)
-
-    # Input quantize
-    input_gs = torch.empty(E, device=device, dtype=torch.float32)
-    amax = hidden.abs().amax().float().clamp(min=1e-4)
-    for i in range(E):
-        input_gs[i] = 448.0 * 6.0 / amax
-    hidden_fp4, hidden_bs = fp4_quantize(hidden, input_gs[0])
-
-    g1_alphas = input_gs * (1.0 / w1_gs)
-    c_global_sf = torch.ones(E, device=device, dtype=torch.float32)
-    g1_scale_c = g1_alphas / c_global_sf
-    g2_alphas = c_global_sf * (1.0 / w2_gs)
-
-    topk_w_u16 = topk_w.to(torch.float16).view(torch.int16).to(torch.int32) & 0xFFFF
-    packed = (topk_ids.to(torch.int32) << 16) | topk_w_u16
-
-    def run():
-        return trtllm_fp4_block_scale_routed_moe(
-            topk_ids=packed, routing_bias=None,
-            hidden_states=hidden_fp4,
-            hidden_states_scale=hidden_bs.view(torch.float8_e4m3fn),
-            gemm1_weights=w1_fp4, gemm1_weights_scale=w1_bs_t.view(torch.float8_e4m3fn),
-            gemm1_bias=None, gemm1_alpha=None, gemm1_beta=None, gemm1_clamp_limit=None,
-            gemm2_weights=w2_fp4, gemm2_weights_scale=w2_bs_t.view(torch.float8_e4m3fn),
-            gemm2_bias=None,
-            output1_scale_scalar=g1_scale_c,
-            output1_scale_gate_scalar=g1_alphas,
-            output2_scale_scalar=g2_alphas,
-            num_experts=E, top_k=top_k,
-            n_group=None, topk_group=None,
-            intermediate_size=N,
-            local_expert_offset=0, local_num_experts=E,
-            routed_scaling_factor=None,
-            routing_method_type=1,
-            do_finalize=True,
-            enable_pdl=device_support_pdl(),
-            activation_type=ActivationType.Silu,
-            output=None,
-        )[0]
-
-    try:
-        avg_ms = _bench_time(run)
-        total_tokens = num_tokens * top_k
-        return avg_ms, _compute_moe_tflops(total_tokens, N, K, avg_ms), None
-    except Exception as e:
-        return None, None, str(e)[:200]
-
-
-# ===== FlashInfer FP8 =====
+# ===== FlashInfer FP8 Groupwise =====
 
 def _per_block_quantize_fp8(tensor, block_size=128):
     has_batch = tensor.dim() == 3
     if has_batch:
-        E, N_dim, K_dim = tensor.shape
+        E_dim, N_dim, K_dim = tensor.shape
         flat = tensor.reshape(-1, K_dim).float()
     else:
         N_dim, K_dim = tensor.shape
@@ -228,8 +131,8 @@ def _per_block_quantize_fp8(tensor, block_size=128):
     quantized = (viewed / scale_exp).reshape(N_pad, K_pad)
     fp8 = quantized[:N_total, :K_dim].to(torch.float8_e4m3fn)
     if has_batch:
-        fp8 = fp8.view(E, N_dim, K_dim)
-        scale = scale.view(E, N_dim // block_size if N_dim % block_size == 0 else n_blocks // E, k_blocks)
+        fp8 = fp8.view(E_dim, N_dim, K_dim)
+        scale = scale.view(E_dim, N_dim // block_size if N_dim % block_size == 0 else n_blocks // E_dim, k_blocks)
     return fp8, scale
 
 
@@ -278,88 +181,130 @@ def _bench_flashinfer_fp8(E, M_per_expert, K, N):
         return None, None, str(e)[:200]
 
 
+# ===== DeepGEMM FP8 Masked =====
+
+def _bench_deepgemm_masked(E, M_per_expert, K, N):
+    from rtp_llm.models_py.kernels.cuda.deepgemm_wrapper import m_grouped_fp8_gemm_nt_masked
+    from rtp_llm.test.utils.numeric_util import per_token_cast_to_fp8, per_block_cast_to_fp8
+    from rtp_llm.models_py.utils.math import align, ceil_div
+    from rtp_llm.models_py.triton_kernels.common.activation import silu_and_mul
+
+    device = "cuda"
+    max_m = align(M_per_expert, BLOCK_SIZE)
+
+    # FC1 weights [E, 2N, K]
+    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
+    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
+
+    w1_fp8_data = torch.empty(E, 2 * N, K, device=device, dtype=torch.float8_e4m3fn)
+    w1_fp8_scale = torch.empty(E, ceil_div(2 * N, 128), ceil_div(K, 128), device=device, dtype=torch.float32)
+    w2_fp8_data = torch.empty(E, K, N, device=device, dtype=torch.float8_e4m3fn)
+    w2_fp8_scale = torch.empty(E, ceil_div(K, 128), ceil_div(N, 128), device=device, dtype=torch.float32)
+    for i in range(E):
+        w1_fp8_data[i], w1_fp8_scale[i] = per_block_cast_to_fp8(w1_bf16[i], use_ue8m0=True)
+        w2_fp8_data[i], w2_fp8_scale[i] = per_block_cast_to_fp8(w2_bf16[i], use_ue8m0=True)
+    w1_fp8 = (w1_fp8_data, w1_fp8_scale)
+    w2_fp8 = (w2_fp8_data, w2_fp8_scale)
+
+    a_bf16 = torch.randn(E, max_m, K, device=device, dtype=torch.bfloat16) * 0.1
+    a_fp8_data = torch.empty(E, max_m, K, device=device, dtype=torch.float8_e4m3fn)
+    a_fp8_scale = torch.empty(E, max_m, ceil_div(K, 128), device=device, dtype=torch.float32)
+    for i in range(E):
+        a_fp8_data[i], a_fp8_scale[i] = per_token_cast_to_fp8(a_bf16[i], use_ue8m0=True)
+    a_fp8 = (a_fp8_data, a_fp8_scale)
+
+    masked_m = torch.full((E,), M_per_expert, device=device, dtype=torch.int32)
+    fc1_out = torch.empty(E, max_m, 2 * N, device=device, dtype=torch.bfloat16)
+    fc2_out = torch.empty(E, max_m, K, device=device, dtype=torch.bfloat16)
+
+    def run():
+        m_grouped_fp8_gemm_nt_masked(a_fp8, w1_fp8, fc1_out, masked_m, M_per_expert)
+        act = torch.empty(E, max_m, N, device=device, dtype=torch.bfloat16)
+        silu_and_mul(act.view(-1, N), fc1_out.view(-1, 2 * N))
+        # Requant for FC2
+        act_fp8_data = torch.empty(E, max_m, N, device=device, dtype=torch.float8_e4m3fn)
+        act_fp8_scale = torch.empty(E, max_m, ceil_div(N, 128), device=device, dtype=torch.float32)
+        for i in range(E):
+            act_fp8_data[i], act_fp8_scale[i] = per_token_cast_to_fp8(act[i], use_ue8m0=True)
+        m_grouped_fp8_gemm_nt_masked((act_fp8_data, act_fp8_scale), w2_fp8, fc2_out, masked_m, M_per_expert)
+        return fc2_out
+
+    try:
+        avg_ms = _bench_time(run)
+        return avg_ms, _compute_moe_tflops(E * M_per_expert, N, K, avg_ms), None
+    except Exception as e:
+        return None, None, str(e)[:200]
+
+
 # ===== Comparison =====
 
 SCENARIOS = [
-    # (label, E, M_per_expert, N, K, top_k, type)
-    ("Decode-2tok/exp",     8,    2, 2048, 7168, 2, "decode"),
-    ("Decode-8tok/exp",     8,    8, 2048, 7168, 2, "decode"),
-    ("Decode-16tok/exp",    8,   16, 2048, 7168, 2, "decode"),
-    ("Prefill-32tok/exp",   8,   32, 2048, 7168, 2, "prefill"),
-    ("Prefill-128tok/exp",  8,  128, 2048, 7168, 2, "prefill"),
-    ("Prefill-512tok/exp",  8,  512, 2048, 7168, 2, "prefill"),
-    ("ManyExp-8tok/exp",   64,    8, 2048, 7168, 2, "decode"),
-    ("DSv3-32tok/exp",    256,   32, 2048, 7168, 8, "prefill"),
+    # (label, E, M_per_expert, N, K, type)
+    ("Decode-2tok/exp",     8,    2, 2048, 7168, "decode"),
+    ("Decode-8tok/exp",     8,    8, 2048, 7168, "decode"),
+    ("Decode-16tok/exp",    8,   16, 2048, 7168, "decode"),
+    ("Prefill-32tok/exp",   8,   32, 2048, 7168, "prefill"),
+    ("Prefill-128tok/exp",  8,  128, 2048, 7168, "prefill"),
+    ("Prefill-512tok/exp",  8,  512, 2048, 7168, "prefill"),
+    ("ManyExp-8tok/exp",   64,    8, 2048, 7168, "decode"),
 ]
 
 
 class TestFp4Benchmark(unittest.TestCase):
 
     def test_fp4_vs_fp8_comparison(self):
-        """Compare FP4 (CuteDSL + TRT-LLM) vs FP8 (FlashInfer) on SM100."""
+        """Compare FP4 (CuteDSL) vs FP8 (FlashInfer + DeepGEMM) on SM100."""
         if torch.cuda.get_device_capability() < (10, 0):
             self.skipTest("SM100+ required")
 
-        print("\n" + "=" * 130)
+        print("\n" + "=" * 120)
         print(f"  FP4 vs FP8 MoE Benchmark — SM100 (Full MoE: FC1+SiLU+FC2)")
         print(f"  N=2048 (inter), K=7168 (hidden)")
         print(f"  Warmup={WARMUP_ITERS}, Iters={BENCH_ITERS}")
-        print("=" * 130)
+        print("=" * 120)
 
         header = (f"{'Scenario':<22} {'Type':<8} {'E':>4} {'M/E':>5} {'TotM':>7} | "
-                  f"{'CuteDSL ms':>10} {'TF':>7} | "
-                  f"{'TRT-LLM ms':>10} {'TF':>7} | "
-                  f"{'FI-FP8 ms':>10} {'TF':>7} | "
+                  f"{'FP4-CD ms':>10} {'TF':>7} | "
+                  f"{'FP8-FI ms':>10} {'TF':>7} | "
+                  f"{'FP8-DGM ms':>10} {'TF':>7} | "
                   f"{'Best':>12}")
         print(header)
-        print("-" * 130)
+        print("-" * 120)
 
         errors = []
-        for label, E, M_per_exp, N, K, top_k, stype in SCENARIOS:
+        for label, E, M_per_exp, N, K, stype in SCENARIOS:
             total_tokens = E * M_per_exp
 
-            # CuteDSL FP4
             cd_ms, cd_tf, cd_err = _bench_cutedsl_fp4(E, M_per_exp, K, N)
-            if cd_err:
-                errors.append(f"[CuteDSL] {label}: {cd_err}")
+            if cd_err: errors.append(f"[FP4-CD] {label}: {cd_err}")
 
-            # TRT-LLM FP4 (uses total tokens, not M/E — it does routing internally)
-            num_tokens_for_trtllm = total_tokens // top_k  # actual input tokens before topk expansion
-            tl_ms, tl_tf, tl_err = _bench_trtllm_fp4(E, num_tokens_for_trtllm, K, N, top_k)
-            if tl_err:
-                errors.append(f"[TRT-LLM] {label}: {tl_err}")
-
-            # FlashInfer FP8
             fi_ms, fi_tf, fi_err = _bench_flashinfer_fp8(E, M_per_exp, K, N)
-            if fi_err:
-                errors.append(f"[FI-FP8] {label}: {fi_err}")
+            if fi_err: errors.append(f"[FP8-FI] {label}: {fi_err}")
+
+            dg_ms, dg_tf, dg_err = _bench_deepgemm_masked(E, M_per_exp, K, N)
+            if dg_err: errors.append(f"[FP8-DGM] {label}: {dg_err}")
 
             cd_s = f"{cd_ms:.3f}" if cd_ms else "ERR"
             cd_t = f"{cd_tf:.1f}" if cd_tf else "—"
-            tl_s = f"{tl_ms:.3f}" if tl_ms else "ERR"
-            tl_t = f"{tl_tf:.1f}" if tl_tf else "—"
             fi_s = f"{fi_ms:.3f}" if fi_ms else "ERR"
             fi_t = f"{fi_tf:.1f}" if fi_tf else "—"
+            dg_s = f"{dg_ms:.3f}" if dg_ms else "ERR"
+            dg_t = f"{dg_tf:.1f}" if dg_tf else "—"
 
             candidates = []
-            if cd_ms: candidates.append(("CuteDSL", cd_ms))
-            if tl_ms: candidates.append(("TRT-LLM", tl_ms))
-            if fi_ms: candidates.append(("FI-FP8", fi_ms))
-
-            if candidates:
-                best_name, best_ms = min(candidates, key=lambda x: x[1])
-                best_s = best_name
-            else:
-                best_s = "N/A"
+            if cd_ms: candidates.append(("FP4-CD", cd_ms))
+            if fi_ms: candidates.append(("FP8-FI", fi_ms))
+            if dg_ms: candidates.append(("FP8-DGM", dg_ms))
+            best_s = min(candidates, key=lambda x: x[1])[0] if candidates else "N/A"
 
             print(f"{label:<22} {stype:<8} {E:>4} {M_per_exp:>5} {total_tokens:>7} | "
                   f"{cd_s:>10} {cd_t:>7} | "
-                  f"{tl_s:>10} {tl_t:>7} | "
                   f"{fi_s:>10} {fi_t:>7} | "
+                  f"{dg_s:>10} {dg_t:>7} | "
                   f"{best_s:>12}")
 
-        print("=" * 130)
-        print("CuteDSL=FlashInfer CuteDSL FP4 masked, TRT-LLM=TRT-LLM FP4 fused, FI-FP8=FlashInfer FP8 groupwise")
+        print("=" * 120)
+        print("FP4-CD=CuteDSL FP4, FP8-FI=FlashInfer FP8 groupwise, FP8-DGM=DeepGEMM FP8 masked")
 
         if errors:
             print()
