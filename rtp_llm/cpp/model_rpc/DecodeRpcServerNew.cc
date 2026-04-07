@@ -23,11 +23,9 @@ grpc::Status DecodeRpcServerNew::GenerateStreamCall(grpc::ServerContext*        
                                                     const GenerateInputPB*                 request,
                                                     grpc::ServerWriter<GenerateOutputsPB>* response_writer) {
     RTP_LLM_PROFILE_FUNCTION();
-    if (applyTimelineGate(std::to_string(request->request_id()),
+    bool enable_timeline = applyTimelineGate(std::to_string(request->request_id()),
                           request->generate_config().gen_timeline(),
-                          request->generate_config().profile_step())) {
-        const_cast<GenerateInputPB*>(request)->mutable_generate_config()->set_gen_timeline(true);
-    }
+                          request->generate_config().profile_step());
     DecodeGenerateContextNew decode_context(server_context, request, response_writer, metrics_reporter_, meta_);
 
     RTP_LLM_LOG_DEBUG("request [%s] start generate", decode_context.request_key.c_str());
@@ -38,6 +36,9 @@ grpc::Status DecodeRpcServerNew::GenerateStreamCall(grpc::ServerContext*        
                             decode_context.request_key.c_str(),
                             decode_context.error_info.ToString().c_str());
         return serializeErrorMsg(decode_context.request_key, decode_context.error_info);
+    }
+    if (enable_timeline) {
+        decode_context.generate_input->generate_config->gen_timeline = true;
     }
 
     decode_context.error_info = loadCacheFromPrefill(decode_context);
