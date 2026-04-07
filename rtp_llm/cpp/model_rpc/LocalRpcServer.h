@@ -57,6 +57,8 @@ public:
 
     grpc::Status StartProfile(grpc::ServerContext* context, const StartProfileRequestPB* request, EmptyPB* response);
 
+    grpc::Status SetNanCheck(grpc::ServerContext* context, const SetNanCheckRequestPB* request, EmptyPB* response);
+
     grpc::Status
     UpdateSchedulerInfo(grpc::ServerContext* context, const UpdateSchedulerInfoRequestPB* request, EmptyPB* response);
 

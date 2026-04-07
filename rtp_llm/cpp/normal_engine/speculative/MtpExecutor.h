@@ -52,6 +52,10 @@ public:
 
     absl::Status process(const std::list<GenerateStreamPtr>& streams) override;
     bool         updateEplbConfig(const EPLBConfig& config) override;
+    void         setNanCheckEnabled(bool enabled) override {
+        if (model_) model_->setNanCheckEnabled(enabled);
+        if (draft_model_) draft_model_->setNanCheckEnabled(enabled);
+    }
 
     void setTargetModel(std::unique_ptr<ModelBase> model) {
         model_ = std::move(model);

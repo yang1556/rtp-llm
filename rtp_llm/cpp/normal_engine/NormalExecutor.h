@@ -46,6 +46,9 @@ public:
     static ModelFactory test_model_factory;
 
     bool updateEplbConfig(const EPLBConfig& config) override;
+    void setNanCheckEnabled(bool enabled) override {
+        if (model_) model_->setNanCheckEnabled(enabled);
+    }
 
 private:
     std::unique_ptr<ModelBase>                                               model_;
