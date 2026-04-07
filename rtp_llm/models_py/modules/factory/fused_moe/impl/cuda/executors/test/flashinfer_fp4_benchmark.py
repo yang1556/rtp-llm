@@ -40,7 +40,9 @@ def _compute_moe_tflops(total_tokens, N, K, avg_ms):
 # ===== CuteDSL FP4 =====
 
 def _bench_cutedsl_fp4(E, M_per_expert, K, N):
-    from rtp_llm.models_py.kernels.cuda.fp4_kernel.flashinfer_cutedsl_moe import flashinfer_cutedsl_moe_masked
+    from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutedsl_fp4_executor import CutedslFp4Executor
+    from rtp_llm.models_py.modules.factory.fused_moe.defs.fused_moe import ExpertForwardPayload, ExpertTokensMetadata
+    from rtp_llm.models_py.modules.factory.fused_moe.defs.quant_config import FusedMoEQuantConfig
     from flashinfer import scaled_fp4_grouped_quantize
 
     device = "cuda"
@@ -57,26 +59,40 @@ def _bench_cutedsl_fp4(E, M_per_expert, K, N):
     w2_fp4, w2_bs = scaled_fp4_grouped_quantize(
         w2_bf16, torch.full((E,), K, dtype=torch.int32, device=device), w2_gs)
 
-    w1_perm = w1_fp4.permute(2, 0, 1)
-    w2_perm = w2_fp4.permute(2, 0, 1)
+    weights = {
+        W.moe_w1: w1_fp4.permute(2, 0, 1),
+        W.moe_w2: w2_fp4.permute(2, 0, 1),
+        W.moe_s1: w1_bs, W.moe_s2: w2_bs,
+        W.moe_w1_s2: 1.0 / w1_gs, W.moe_w2_s2: 1.0 / w2_gs,
+        W.moe_w1_i_s: torch.ones(E, dtype=torch.float32, device=device),
+        W.moe_w2_i_s: torch.ones(E, dtype=torch.float32, device=device),
+    }
+
+    from rtp_llm.config.model_config import ModelConfig
+    from rtp_llm.ops import ParallelismConfig, MoeConfig
+    mc = ModelConfig()
+    mc.attn_config.head_num = 2; mc.attn_config.size_per_head = 128
+    mc.num_layers = 2; mc.max_seq_len = 2048; mc.vocab_size = 500000
+    mc.expert_num = E; mc.hidden_size = K; mc.moe_inter_size = N; mc.moe_k = 8
+    pc = ParallelismConfig()
+    pc.world_size = 1; pc.dp_size = 1; pc.tp_size = 1; pc.ep_size = 1
+    pc.dp_rank = 0; pc.tp_rank = 0; pc.ep_rank = 0; pc.world_rank = 0; pc.local_rank = 0; pc.local_world_size = 1
+    moe_cfg = MoeConfig(); moe_cfg.ll_num_max_token = M_per_expert
+    from rtp_llm.models_py.modules.factory.fused_moe.defs.config_adapter import MoEConfigAdapter
+    config = MoEConfigAdapter(model_config=mc, parallelism_config=pc, moe_config=moe_cfg)
+
+    executor = CutedslFp4Executor(config, FusedMoEQuantConfig(
+        quant_dtype=torch.uint8, per_act_token_quant=False, per_out_ch_quant=False, block_shape=[16, 16]), weights)
 
     hidden = torch.randn(E, M_per_expert, K, device=device, dtype=torch.bfloat16) * 0.1
     masked_m = torch.full((E,), M_per_expert, dtype=torch.int32, device=device)
 
-    input_gs = torch.ones(E, dtype=torch.float32, device=device)
-    a2_gs = torch.ones(E, dtype=torch.float32, device=device)
-    w1_alpha = (input_gs * (1.0 / w1_gs)).to(torch.float32)
-    w2_alpha = (a2_gs * (1.0 / w2_gs)).to(torch.float32)
+    payload = ExpertForwardPayload(
+        expert_x=hidden, expert_x_origin_dtype=torch.bfloat16, expert_x_scale=None,
+        expert_tokens_meta=ExpertTokensMetadata(expert_num_tokens=masked_m, expert_num_tokens_cpu=None))
 
     def run():
-        return flashinfer_cutedsl_moe_masked(
-            hidden_states=(hidden, None),
-            input_global_scale=input_gs,
-            w1=w1_perm, w1_blockscale=w1_bs, w1_alpha=w1_alpha,
-            w2=w2_perm, a2_global_scale=a2_gs,
-            w2_blockscale=w2_bs, w2_alpha=w2_alpha,
-            masked_m=masked_m,
-        )
+        return executor.execute(payload, "silu", None, None, False, None)
 
     try:
         avg_ms = _bench_time(run)

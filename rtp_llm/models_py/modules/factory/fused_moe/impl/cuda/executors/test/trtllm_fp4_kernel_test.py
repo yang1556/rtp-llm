@@ -153,8 +153,8 @@ class TestTrtllmFp4Kernel(unittest.TestCase):
                 expert_num_tokens=masked_m,
                 expert_num_tokens_cpu=None,
             ),
-            topk_idx=topk_ids,
-            topk_weights=topk_weights,
+            expert_topk_ids=topk_ids,
+            expert_topk_weights=topk_weights,
         )
 
         result = executor.execute(payload, "silu", None, None, False, None)
