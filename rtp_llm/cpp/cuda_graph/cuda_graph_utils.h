@@ -9,51 +9,18 @@
 
 class CaptureMemoryHold {
 public:
-    void setHiddenStates(at::Tensor hidden_states) {
-        decoder_layer_hidden_states_ = hidden_states;
-    };
-
     CaptureMemoryHold() {}
 
-    CaptureMemoryHold(at::Tensor hidden_states, torch_ext::PyModelInputs& inputs, bool is_embedding):
-        decoder_layer_hidden_states_(hidden_states) {
-        py_model_inputs_.attention_inputs.input_lengths    = inputs.attention_inputs.input_lengths;
-        py_model_inputs_.attention_inputs.sequence_lengths = inputs.attention_inputs.sequence_lengths;
-        py_model_inputs_.attention_inputs.kv_cache_kernel_block_id_device =
-            inputs.attention_inputs.kv_cache_kernel_block_id_device;
-        py_model_inputs_.attention_inputs.kv_cache_kernel_block_id_host =
-            inputs.attention_inputs.kv_cache_kernel_block_id_host;
-        py_model_inputs_.attention_inputs.kv_cache_block_id_device = inputs.attention_inputs.kv_cache_block_id_device;
-        py_model_inputs_.attention_inputs.kv_cache_block_id_host   = inputs.attention_inputs.kv_cache_block_id_host;
-        py_model_inputs_.attention_inputs.kv_cache_kernel_block_id_device_by_group =
-            inputs.attention_inputs.kv_cache_kernel_block_id_device_by_group;
-        py_model_inputs_.attention_inputs.kv_cache_kernel_block_id_host_by_group =
-            inputs.attention_inputs.kv_cache_kernel_block_id_host_by_group;
-        py_model_inputs_.attention_inputs.kv_cache_layer_to_group = inputs.attention_inputs.kv_cache_layer_to_group;
-        py_model_inputs_.attention_inputs.prefix_lengths          = inputs.attention_inputs.prefix_lengths;
-        py_model_inputs_.input_ids                                = inputs.input_ids;
+    CaptureMemoryHold(at::Tensor hidden_states, const torch_ext::PyModelInputs& inputs):
+        all_layers_output_(std::move(hidden_states)), py_model_inputs_(inputs) {}
 
-        // for spec
-        py_model_inputs_.input_hiddens                            = inputs.input_hiddens;
-        py_model_inputs_.attention_inputs.cu_seqlens              = inputs.attention_inputs.cu_seqlens;
-        py_model_inputs_.attention_inputs.cu_kv_seqlens           = inputs.attention_inputs.cu_kv_seqlens;
-        py_model_inputs_.attention_inputs.padding_offset          = inputs.attention_inputs.padding_offset;
-        py_model_inputs_.attention_inputs.is_prefill              = inputs.attention_inputs.is_prefill;
-        py_model_inputs_.attention_inputs.is_target_verify        = inputs.attention_inputs.is_target_verify;
-        py_model_inputs_.attention_inputs.dtype                   = inputs.attention_inputs.dtype;
-        py_model_inputs_.attention_inputs.context_total_kv_length = inputs.attention_inputs.context_total_kv_length;
-
-        py_model_inputs_.attention_inputs.prefill_cuda_graph_copy_params =
-            inputs.attention_inputs.prefill_cuda_graph_copy_params;
-        py_model_inputs_.bert_embedding_inputs                      = inputs.bert_embedding_inputs;
-        py_model_inputs_.attention_inputs.is_s_padded               = inputs.attention_inputs.is_s_padded;
-        py_model_inputs_.attention_inputs.decode_cu_seqlens_d       = inputs.attention_inputs.decode_cu_seqlens_d;
-        py_model_inputs_.attention_inputs.sequence_lengths_plus_1_d = inputs.attention_inputs.sequence_lengths_plus_1_d;
+    void setHiddenStates(at::Tensor hidden_states) {
+        all_layers_output_ = std::move(hidden_states);
     }
 
 public:
     py::object               attn_pyobj_{py::none()};
-    at::Tensor               decoder_layer_hidden_states_;
+    at::Tensor               all_layers_output_;
     torch_ext::PyModelInputs py_model_inputs_;
 };
 
@@ -70,25 +37,26 @@ public:
     CaptureMemoryHold   mem_hold_;
 };
 
-class CudaGraphStreamLife {
+// RAII: temporarily set the device graph stream for capture, then restore the previous stream on scope exit.
+class CudaGraphStreamGuard {
 public:
-    explicit CudaGraphStreamLife(rtp_llm::cuda_graph::GraphStream capture_stream):
+    explicit CudaGraphStreamGuard(rtp_llm::cuda_graph::GraphStream capture_stream):
         origin_stream_(rtp_llm::cuda_graph::graphGetCurrentStream()) {
         rtp_llm::cuda_graph::graphSetCurrentStream(capture_stream);
         RTP_LLM_LOG_INFO("Set graph stream for capture. origin_stream=%p, capture_stream=%p",
                          reinterpret_cast<void*>(origin_stream_.stream()),
                          reinterpret_cast<void*>(capture_stream.stream()));
     }
-    ~CudaGraphStreamLife() {
+    ~CudaGraphStreamGuard() {
         rtp_llm::cuda_graph::graphSetCurrentStream(origin_stream_);
         RTP_LLM_LOG_INFO("Restore graph stream after capture. restored_stream=%p",
                          reinterpret_cast<void*>(origin_stream_.stream()));
     }
 
-    CudaGraphStreamLife(const CudaGraphStreamLife&)            = delete;
-    CudaGraphStreamLife& operator=(const CudaGraphStreamLife&) = delete;
-    CudaGraphStreamLife(CudaGraphStreamLife&&)                 = delete;
-    CudaGraphStreamLife& operator=(CudaGraphStreamLife&&)      = delete;
+    CudaGraphStreamGuard(const CudaGraphStreamGuard&)            = delete;
+    CudaGraphStreamGuard& operator=(const CudaGraphStreamGuard&) = delete;
+    CudaGraphStreamGuard(CudaGraphStreamGuard&&)                 = delete;
+    CudaGraphStreamGuard& operator=(CudaGraphStreamGuard&&)      = delete;
 
 private:
     rtp_llm::cuda_graph::GraphStream origin_stream_;

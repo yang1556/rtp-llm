@@ -62,15 +62,15 @@ public:
     }
 
     bool canRun(torch_ext::PyModelInputs& inputs) {
-        return runner_ != nullptr && runner_->canRun(inputs, state_);
+        return runner_ != nullptr && runner_->canRun(inputs, batch_descriptor_);
     }
 
     torch_ext::PyModelOutputs forward(torch_ext::PyModelInputs& inputs) {
-        return runner_->forward(inputs, state_);
+        return runner_->forward(inputs, batch_descriptor_);
     }
 
     int getCurrentRealGraphSize() {
-        return runner_ != nullptr ? runner_->getCurrentRealGraphBs(state_) : 0;
+        return runner_ != nullptr ? runner_->getCurrentRealGraphBs(batch_descriptor_) : 0;
     }
 
     ~CudaGraphTestRunner() {
@@ -86,7 +86,7 @@ private:
     }
 
     CudaGraphRunner* runner_ = nullptr;
-    CudaGraphState   state_{};
+    BatchDescriptor  batch_descriptor_{};
 };
 
 }  // namespace rtp_llm

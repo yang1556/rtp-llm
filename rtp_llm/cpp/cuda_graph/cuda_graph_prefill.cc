@@ -7,7 +7,7 @@ void CudaGraphRunner::capturePrefill() {
     RTP_LLM_LOG_INFO("Capture Prefill Start");
     // Pre-initialize all graph instances with keep_graph based on debug mode
     for (int seq_len : capture_range_) {
-        graph_instances_.try_emplace(seq_len, enable_cuda_graph_debug_mode_);
+        graph_instances_.try_emplace(seq_len, graph_params_.enable_cuda_graph_debug_mode);
     }
     int capture_range_size = capture_range_.size();
     for (int i = capture_range_size - 1; i >= 0; i--) {
@@ -31,11 +31,12 @@ void CudaGraphRunner::capturePrefill() {
             inputs.bert_embedding_inputs.combo_tokens_type_ids =
                 inputs.bert_embedding_inputs.combo_tokens_type_ids.slice(0, 0, seq_len);
         }
-        graph_instances_[seq_len].mem_hold_ = createCaptureMemoryHold(inputs, max_bs_ * num_tokens_per_bs_);
+        graph_instances_[seq_len].mem_hold_ =
+            createCaptureMemoryHold(inputs, max_bs_ * graph_params_.num_tokens_per_bs);
         graph_instances_[seq_len].mem_hold_.attn_pyobj_ =
             py_attn_pyobj_method_(graph_instances_[seq_len].mem_hold_.py_model_inputs_, true);
-        graph_instances_[seq_len].mem_hold_.decoder_layer_hidden_states_ =
-            graph_instances_[seq_len].mem_hold_.decoder_layer_hidden_states_.slice(0, 0, seq_len);
+        graph_instances_[seq_len].mem_hold_.all_layers_output_ =
+            graph_instances_[seq_len].mem_hold_.all_layers_output_.slice(0, 0, seq_len);
         capturePrefillOneSeqLen(seq_len);
         replayAndSyncCheck(seq_len, "seq len");
         RTP_LLM_LOG_INFO("capture success for seq_len: %d", seq_len);
@@ -44,15 +45,14 @@ void CudaGraphRunner::capturePrefill() {
 }
 
 std::vector<int> CudaGraphRunner::getPrefillSequenceLengthsToCapture() {
-    // prefill_capture_seq_lens_ must be provided from Python and cannot be empty
-    RTP_LLM_CHECK_WITH_INFO(!prefill_capture_seq_lens_.empty(),
-                            "prefill_capture_seq_lens_ must be provided from Python and cannot be empty");
+    RTP_LLM_CHECK_WITH_INFO(!graph_params_.prefill_capture_seq_lens.empty(),
+                            "prefill_capture_seq_lens must be provided from Python and cannot be empty");
 
     RTP_LLM_LOG_INFO("Using prefill capture sequence lengths from Python: %zu lengths",
-                     prefill_capture_seq_lens_.size());
+                     graph_params_.prefill_capture_seq_lens.size());
 
     // Sort and remove duplicates
-    std::vector<int> result = prefill_capture_seq_lens_;
+    std::vector<int> result = graph_params_.prefill_capture_seq_lens;
     std::sort(result.begin(), result.end());
     result.erase(std::unique(result.begin(), result.end()), result.end());
 

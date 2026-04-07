@@ -15,6 +15,7 @@ filegroup(
     name = "cuda_graph_srcs",
     srcs = [
         "cuda_graph_device_shims.cc",
+        "cuda_graph_py_model_inputs.cc",
         "cuda_graph_runner.cc",
         "cuda_graph_prefill.cc",
         "cuda_graph_decode.cc",
@@ -27,6 +28,7 @@ filegroup(
     srcs = [
         "cuda_graph_base.h",
         "cuda_graph_device_shims.h",
+        "cuda_graph_py_model_inputs.h",
         "cuda_graph_utils.h",
         "cuda_graph_runner.h",
     ],
@@ -38,6 +40,7 @@ cc_library(
     hdrs = [
         "cuda_graph_base.h",
         "cuda_graph_device_shims.h",
+        "cuda_graph_py_model_inputs.h",
         "cuda_graph_utils.h",
         "cuda_graph_runner.h",
     ],
@@ -52,11 +55,13 @@ cc_library(
     hdrs = [
         "cuda_graph_base.h",
         "cuda_graph_device_shims.h",
+        "cuda_graph_py_model_inputs.h",
         "cuda_graph_utils.h",
         "cuda_graph_runner.h",
     ],
     srcs = [
         "cuda_graph_device_shims.cc",
+        "cuda_graph_py_model_inputs.cc",
         "cuda_graph_runner.cc",
         "cuda_graph_prefill.cc",
         "cuda_graph_decode.cc",

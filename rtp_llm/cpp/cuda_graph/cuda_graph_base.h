@@ -10,8 +10,8 @@ namespace rtp_llm {
 
 using namespace torch_ext;
 
-// Current state of CUDA graph execution (used when calling canRun/forward with graph runner)
-struct CudaGraphState {
+// Resolved batch / graph-key dimensions for one forward (decode BS, prefill seq len, etc.).
+struct BatchDescriptor {
     int current_batch_size{1};
     int current_seq_len{1};
     int current_real_graph_bs{1};       // for decode
@@ -39,16 +39,16 @@ struct GraphParams {
     int32_t              kv_cache_group_num = 0;   // number of kv cache groups
 };
 
-class GraphBase {
+class CudaGraphRunnerBase {
 public:
-    GraphBase(py::object py_instance): py_instance_(std::move(py_instance)) {}
-    virtual ~GraphBase() {}
-    virtual void           initCapture()                                               = 0;
-    virtual PyModelOutputs forward(const PyModelInputs& inputs, CudaGraphState& state) = 0;
-    virtual void           setPositionEncoding(torch::Tensor position_encoding)        = 0;
-    virtual void           setTokenTypeEmbedding(torch::Tensor token_type_embedding)   = 0;
-    virtual void           setInputEmbeddingScalar(float input_embedding_scalar)       = 0;
-    virtual bool           canRun(const PyModelInputs& inputs, CudaGraphState& state)  = 0;
+    CudaGraphRunnerBase(py::object py_instance): py_instance_(std::move(py_instance)) {}
+    virtual ~CudaGraphRunnerBase() {}
+    virtual void           initCapture()                                                           = 0;
+    virtual PyModelOutputs forward(const PyModelInputs& inputs, BatchDescriptor& batch_descriptor) = 0;
+    virtual void           setPositionEncoding(torch::Tensor position_encoding)                    = 0;
+    virtual void           setTokenTypeEmbedding(torch::Tensor token_type_embedding)               = 0;
+    virtual void           setInputEmbeddingScalar(float input_embedding_scalar)                   = 0;
+    virtual bool           canRun(const PyModelInputs& inputs, BatchDescriptor& batch_descriptor)  = 0;
     py::object             py_instance_;
 };
 }  // namespace rtp_llm
