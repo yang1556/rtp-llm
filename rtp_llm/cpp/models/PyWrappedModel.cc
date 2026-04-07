@@ -59,6 +59,79 @@ PyWrappedModel::~PyWrappedModel() {
     }
 }
 
+py::object PyWrappedModel::initializeCudaGraphCapture(py::object                             py_instance,
+                                                      const torch_ext::PyModelInitResources& init_resources,
+                                                      const GptModelInitParams&              params,
+                                                      const std::vector<int>&                kv_cache_layer_to_group) {
+#if USING_CUDA || USING_ROCM
+    c10::ScalarType dtype = dataTypeToTorchType(description_.data_type);
+
+    // Create GraphParams from ExecInitParams
+    const auto& device_params = device_init_params_;
+    GraphParams graph_params;
+    graph_params.enable_cuda_graph            = device_params.hw_kernel_config.enable_cuda_graph;
+    graph_params.enable_cuda_graph_debug_mode = device_params.hw_kernel_config.enable_cuda_graph_debug_mode;
+    graph_params.is_prefill_cuda_graph_mode   = is_prefill_cuda_graph_mode_;
+    graph_params.max_seq_len                  = device_params.max_seq_len;
+    graph_params.tokens_per_block             = device_params.tokens_per_block;
+    graph_params.kernel_tokens_per_block      = device_params.kernel_tokens_per_block;
+    graph_params.hidden_size                  = device_params.hidden_size;
+    graph_params.model_data_type              = dtype;
+    graph_params.max_context_batch_size     = device_params.runtime_config.fifo_scheduler_config.max_context_batch_size;
+    graph_params.concurrency_limit          = device_params.concurrency_config.concurrency_limit;
+    graph_params.prefill_capture_seq_lens   = device_params.hw_kernel_config.prefill_capture_seq_lens;
+    graph_params.decode_capture_batch_sizes = device_params.hw_kernel_config.decode_capture_batch_sizes;
+    graph_params.kv_cache_group_num         = device_params.kv_cache_group_num;
+
+    if (kv_cache_layer_to_group.size() > 0) {
+        graph_params.kv_cache_layer_to_group = kv_cache_layer_to_group;
+    } else {
+        graph_params.kv_cache_layer_to_group = device_params.kv_cache_layer_to_group;
+    }
+
+    // Calculate num_tokens_per_bs
+    if (is_prefill_cuda_graph_mode_) {
+        // For embedding model (prefill-only), use max_seq_len
+        graph_params.num_tokens_per_bs = device_params.max_seq_len;
+    } else if (device_params.sp_config.gen_num_per_cycle > 1 && !params.model_id) {
+        // For speculative sampling
+        // -- model_id == 0: target model
+        // -- model_id == 1: draft model
+        graph_params.num_tokens_per_bs = device_params.sp_config.gen_num_per_cycle + 1;
+    } else {
+        graph_params.num_tokens_per_bs = 1;
+    }
+    graph_params.is_target_verify = use_spec_decoding_;
+    if (device_params.sp_config.type != SP_TYPE_NONE) {
+        graph_params.sp_steps = device_params.sp_config.gen_num_per_cycle;
+    }
+
+    graph_runner_ = new CudaGraphRunner(graph_params, py_instance);
+    RTP_LLM_CHECK_WITH_INFO(graph_runner_ != nullptr, "graph_runner_ can't be nullptr in PyWrapper");
+    {
+        void* nccl_comm = cuda_graph::getGraphCaptureTpNcclComm(nullptr);
+        cuda_graph::register_graph_capture_nccl_comm(
+            nccl_comm, static_cast<int>(device_params.tp_size), static_cast<int>(device_params.tp_rank));
+    }
+
+    if (weights_.position_encoding) {
+        graph_runner_->setPositionEncoding(weights_.position_encoding->kernel.cuda());
+    }
+    if (weights_.token_type_embedding) {
+        graph_runner_->setTokenTypeEmbedding(weights_.token_type_embedding->kernel.cuda());
+    }
+    graph_runner_->setInputEmbeddingScalar(description_.input_embedding_scalar);
+    RTP_LLM_CHECK_WITH_INFO(graph_runner_ != nullptr, "graph_runner_ can't be null");
+    auto       py_initialize_method = py_instance.attr("initialize");
+    py::object py_init_result       = py_initialize_method(init_resources);
+    graph_runner_->initCapture();
+    return py_init_result;
+#else
+    RTP_LLM_CHECK_WITH_INFO(false, "CUDA/HIP Graph is only supported on CUDA/ROCm platform");
+    return py::object();
+#endif
+}
+
 // Helper function to build PyAttentionInputs from GptModelInputs
 torch_ext::PyAttentionInputs PyWrappedModel::buildPyAttentionInputs(const GptModelInputs& inputs) {
     RTP_LLM_PROFILE_SCOPE("py_model.buildPyAttentionInputs");

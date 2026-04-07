@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cstring>
-#include "rtp_llm/cpp/cuda_graph/cuda_graph_device_shims.h"
+#include <string>
+
 #include "rtp_llm/cpp/utils/ProfilingScope.h"
+
 using namespace torch_ext;
 namespace rtp_llm {
 

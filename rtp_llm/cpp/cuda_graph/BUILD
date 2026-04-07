@@ -15,7 +15,6 @@ filegroup(
     name = "cuda_graph_srcs",
     srcs = [
         "cuda_graph_device_shims.cc",
-        "cuda_graph_utils.cc",
         "cuda_graph_runner.cc",
         "cuda_graph_prefill.cc",
         "cuda_graph_decode.cc",
@@ -58,7 +57,6 @@ cc_library(
     ],
     srcs = [
         "cuda_graph_device_shims.cc",
-        "cuda_graph_utils.cc",
         "cuda_graph_runner.cc",
         "cuda_graph_prefill.cc",
         "cuda_graph_decode.cc",

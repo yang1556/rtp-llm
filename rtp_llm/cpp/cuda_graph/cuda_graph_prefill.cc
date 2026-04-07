@@ -1,5 +1,6 @@
 #include "rtp_llm/cpp/cuda_graph/cuda_graph_runner.h"
-#include <optional>
+
+#include <algorithm>
 
 namespace rtp_llm {
 void CudaGraphRunner::capturePrefill() {

@@ -3,16 +3,18 @@
 #include <cstdint>
 #include <pybind11/pybind11.h>
 #include <torch/torch.h>
+
 #include "rtp_llm/cpp/utils/AssertUtils.h"
 #include "rtp_llm/cpp/utils/Logger.h"
 
 #if USING_ROCM
-#include <ATen/hip/HIPGraph.h>
 #include <ATen/hip/HIPContext.h>
+#include <ATen/hip/HIPGraph.h>
 #define GRAPH_DEVICE_TYPE c10::DeviceType::HIP
 #else
-#include <ATen/cuda/CUDAGraph.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/cuda/CUDAGraph.h>
+
 #include "rtp_llm/cpp/cuda/cuda_host_utils.h"
 #define GRAPH_DEVICE_TYPE c10::DeviceType::CUDA
 #endif

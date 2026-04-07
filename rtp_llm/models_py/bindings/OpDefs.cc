@@ -1,6 +1,108 @@
 #include "OpDefs.h"
+#include "rtp_llm/cpp/utils/TensorDebugUtils.h"
+#include <algorithm>
+#include <iostream>
 
 namespace torch_ext {
+
+void PyModelInputs::debugPrint() const {
+    std::cout << "========== PyModelInputs Debug Info ==========" << std::endl;
+
+    std::cout << "--- input_ids ---" << std::endl;
+    std::cout << "  defined: " << input_ids.defined() << std::endl;
+    if (input_ids.defined()) {
+        std::cout << "  shape: [";
+        for (int i = 0; i < input_ids.dim(); i++) {
+            std::cout << input_ids.size(i);
+            if (i < input_ids.dim() - 1)
+                std::cout << ", ";
+        }
+        std::cout << "]" << std::endl;
+        std::cout << "  dtype: " << input_ids.dtype() << std::endl;
+        std::cout << "  device: " << input_ids.device() << std::endl;
+        std::cout << "  is_cuda: " << input_ids.is_cuda() << std::endl;
+        std::cout << "  is_pinned: " << input_ids.is_pinned() << std::endl;
+        if (input_ids.numel() > 0) {
+            auto input_ids_cpu = input_ids.cpu();
+            int  print_size    = std::min(static_cast<int>(input_ids_cpu.numel()), 20);
+            std::cout << "  data (first " << print_size << " elements): [";
+            for (int i = 0; i < print_size; i++) {
+                std::cout << input_ids_cpu.data_ptr<int>()[i];
+                if (i < print_size - 1)
+                    std::cout << ", ";
+            }
+            std::cout << "]" << std::endl;
+        }
+    }
+
+    std::cout << "--- input_hiddens ---" << std::endl;
+    std::cout << "  defined: " << input_hiddens.defined() << std::endl;
+    if (input_hiddens.defined()) {
+        std::cout << "  shape: [";
+        for (int i = 0; i < input_hiddens.dim(); i++) {
+            std::cout << input_hiddens.size(i);
+            if (i < input_hiddens.dim() - 1)
+                std::cout << ", ";
+        }
+        std::cout << "]" << std::endl;
+        std::cout << "  dtype: " << input_hiddens.dtype() << std::endl;
+        std::cout << "  device: " << input_hiddens.device() << std::endl;
+        std::cout << "  is_cuda: " << input_hiddens.is_cuda() << std::endl;
+        std::cout << "  is_pinned: " << input_hiddens.is_pinned() << std::endl;
+    }
+
+    std::cout << "--- attention_inputs ---" << std::endl;
+    std::cout << "  is_prefill: " << attention_inputs.is_prefill << std::endl;
+
+    rtp_llm::printTensorInfo("prefix_lengths", attention_inputs.prefix_lengths);
+    rtp_llm::printTensorInfo("sequence_lengths", attention_inputs.sequence_lengths);
+    rtp_llm::printTensorInfo("input_lengths", attention_inputs.input_lengths);
+    rtp_llm::printTensorInfo("kv_cache_block_id_host", attention_inputs.kv_cache_block_id_host, 40);
+    rtp_llm::printTensorInfo("kv_cache_block_id_device", attention_inputs.kv_cache_block_id_device, 40);
+    rtp_llm::printTensorInfo("cu_seqlens", attention_inputs.cu_seqlens);
+    rtp_llm::printTensorInfo("cu_kv_seqlens", attention_inputs.cu_kv_seqlens);
+    rtp_llm::printTensorInfo("sequence_lengths_plus_1_d", attention_inputs.sequence_lengths_plus_1_d);
+    rtp_llm::printTensorInfo("decode_cu_seqlens_d", attention_inputs.decode_cu_seqlens_d);
+    rtp_llm::printTensorInfo("padding_offset", attention_inputs.padding_offset);
+
+    std::cout << "  context_total_kv_length: " << attention_inputs.context_total_kv_length << std::endl;
+    std::cout << "  total_tokens: " << attention_inputs.total_tokens << std::endl;
+
+    std::cout << "  prefill_cuda_graph_copy_params: ";
+    if (attention_inputs.prefill_cuda_graph_copy_params.has_value()) {
+        const auto& p = attention_inputs.prefill_cuda_graph_copy_params.value();
+        std::cout << "set" << std::endl;
+        std::cout << "    max_seq_len: " << p.max_seq_len << ", max_batch_size: " << p.max_batch_size << std::endl;
+        std::cout << "    cuda_graph_prefill_batch_size: defined=" << p.cuda_graph_prefill_batch_size.defined();
+        if (p.cuda_graph_prefill_batch_size.defined()) {
+            std::cout << ", shape=[";
+            for (int i = 0; i < p.cuda_graph_prefill_batch_size.dim(); i++) {
+                std::cout << p.cuda_graph_prefill_batch_size.size(i);
+                if (i < p.cuda_graph_prefill_batch_size.dim() - 1)
+                    std::cout << ", ";
+            }
+            std::cout << "]";
+            if (p.cuda_graph_prefill_batch_size.numel() > 0) {
+                auto cpu_t = p.cuda_graph_prefill_batch_size.cpu();
+                int  n     = std::min(static_cast<int>(cpu_t.numel()), 32);
+                std::cout << ", values(" << n << ")=[";
+                for (int i = 0; i < n; i++) {
+                    std::cout << cpu_t.data_ptr<int>()[i];
+                    if (i < n - 1)
+                        std::cout << ", ";
+                }
+                if (cpu_t.numel() > 32)
+                    std::cout << ", ...";
+                std::cout << "]";
+            }
+        }
+        std::cout << std::endl;
+    } else {
+        std::cout << "nullopt" << std::endl;
+    }
+
+    std::cout << "=============================================" << std::endl;
+}
 
 void registerPyOpDefs(pybind11::module& m) {
     pybind11::enum_<rtp_llm::CacheGroupType>(m, "CacheGroupType")
@@ -155,7 +257,8 @@ void registerPyOpDefs(pybind11::module& m) {
         .def_readwrite("input_hiddens", &PyModelInputs::input_hiddens, "Input hidden states tensor")
         .def_readwrite("attention_inputs", &PyModelInputs::attention_inputs, "Attention inputs structure")
         .def_readwrite(
-            "bert_embedding_inputs", &PyModelInputs::bert_embedding_inputs, "BERT embedding inputs structure");
+            "bert_embedding_inputs", &PyModelInputs::bert_embedding_inputs, "BERT embedding inputs structure")
+        .def("debug_print", &PyModelInputs::debugPrint, "Print debug dump of this PyModelInputs to stdout");
 
     pybind11::class_<PyModelOutputs>(m, "PyModelOutputs")
         .def(pybind11::init<>(), "Default constructor")

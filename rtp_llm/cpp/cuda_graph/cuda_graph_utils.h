@@ -1,20 +1,11 @@
 #pragma once
 
 #include "ATen/core/TensorBody.h"
+#include <torch/version.h>
+
 #include "rtp_llm/cpp/cuda_graph/cuda_graph_device_shims.h"
 #include "rtp_llm/cpp/utils/Logger.h"
 #include "rtp_llm/models_py/bindings/OpDefs.h"
-#include <torch/version.h>
-
-#include <string>
-
-namespace rtp_llm {
-
-// Debug utilities for printing tensor information
-void printTensorInfo(const std::string& name, const torch::Tensor& tensor, int max_print_size = 20);
-void debugPrintPyModelInputs(const torch_ext::PyModelInputs& inputs);
-
-}  // namespace rtp_llm
 
 class CaptureMemoryHold {
 public:

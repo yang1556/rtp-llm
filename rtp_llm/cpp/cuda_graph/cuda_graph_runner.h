@@ -1,16 +1,14 @@
 #pragma once
 
-#include <unordered_map>
-#include <vector>
 #include <pybind11/embed.h>
 #include <pybind11/pybind11.h>
 #include <torch/torch.h>
-#include "ATen/core/TensorBody.h"
-#include "c10/core/DeviceType.h"
-#include "c10/core/TensorOptions.h"
-#include "rtp_llm/cpp/utils/Logger.h"
-#include "rtp_llm/cpp/cuda_graph/cuda_graph_utils.h"
+#include <unordered_map>
+#include <vector>
+
 #include "rtp_llm/cpp/cuda_graph/cuda_graph_base.h"
+#include "rtp_llm/cpp/cuda_graph/cuda_graph_utils.h"
+#include "rtp_llm/cpp/utils/Logger.h"
 
 namespace py = pybind11;
 

@@ -1,8 +1,10 @@
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
+#include <iostream>
 #include <sstream>
 #include <string>
-#include <algorithm>
 #include <torch/extension.h>
 
 namespace rtp_llm {
@@ -43,6 +45,47 @@ std::string tensorDebugStringWithData(const torch::Tensor& t, size_t count = 0) 
             oss << base[i] << ", ";
     }
     return meta + ", Data(" + oss.str() + ")";
+}
+
+inline void printTensorInfo(const std::string& name, const torch::Tensor& tensor, int max_print_size = 20) {
+    std::cout << "  " << name << ": defined=" << tensor.defined();
+    if (tensor.defined()) {
+        std::cout << ", shape=[";
+        for (int i = 0; i < tensor.dim(); i++) {
+            std::cout << tensor.size(i);
+            if (i < tensor.dim() - 1)
+                std::cout << ", ";
+        }
+        std::cout << "], is_cuda=" << tensor.is_cuda();
+        if (!tensor.is_cuda()) {
+            std::cout << ", is_pinned=" << tensor.is_pinned();
+        }
+        if (tensor.numel() > 0) {
+            auto cpu_tensor = tensor.cpu();
+            int  print_size = std::min(static_cast<int>(cpu_tensor.numel()), max_print_size);
+            std::cout << ", data=[";
+            auto dtype = cpu_tensor.scalar_type();
+            for (int i = 0; i < print_size; i++) {
+                if (dtype == torch::kInt32 || dtype == torch::kInt) {
+                    std::cout << cpu_tensor.data_ptr<int>()[i];
+                } else if (dtype == torch::kInt64 || dtype == torch::kLong) {
+                    std::cout << cpu_tensor.data_ptr<int64_t>()[i];
+                } else if (dtype == torch::kFloat32 || dtype == torch::kFloat) {
+                    std::cout << cpu_tensor.data_ptr<float>()[i];
+                } else if (dtype == torch::kFloat16 || dtype == torch::kHalf) {
+                    std::cout << static_cast<float>(cpu_tensor.data_ptr<at::Half>()[i]);
+                } else {
+                    std::cout << "?";
+                }
+                if (i < print_size - 1)
+                    std::cout << ", ";
+            }
+            if (cpu_tensor.numel() > print_size)
+                std::cout << ", ...";
+            std::cout << "]";
+        }
+    }
+    std::cout << std::endl;
 }
 
 }  // namespace rtp_llm

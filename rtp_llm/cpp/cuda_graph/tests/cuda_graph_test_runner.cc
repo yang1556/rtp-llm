@@ -1,9 +1,7 @@
+#include "rtp_llm/cpp/cuda_graph/cuda_graph_runner.h"
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
-#include "rtp_llm/cpp/cuda_graph/cuda_graph_base.h"
-#include "rtp_llm/cpp/cuda_graph/cuda_graph_runner.h"
-#include "rtp_llm/models_py/bindings/OpDefs.h"
 
 namespace py = pybind11;
 namespace rtp_llm {

@@ -1,8 +1,10 @@
 #pragma once
-#include "rtp_llm/models_py/bindings/OpDefs.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#include "rtp_llm/models_py/bindings/OpDefs.h"
 
 namespace rtp_llm {
 

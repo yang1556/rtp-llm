@@ -223,6 +223,8 @@ struct PyModelInputs {
     torch::Tensor       input_hiddens;
     PyAttentionInputs   attention_inputs;
     BertEmbeddingInputs bert_embedding_inputs;
+
+    void debugPrint() const;
 };
 
 struct PyModelOutputs {
