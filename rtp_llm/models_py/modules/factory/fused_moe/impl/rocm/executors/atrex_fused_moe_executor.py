@@ -8,7 +8,6 @@ simple sum — avoiding AtomicAdd entirely.
 
 import logging
 import os
-import sys
 from typing import Any, Dict, Optional
 
 import torch
@@ -28,15 +27,6 @@ from rtp_llm.models_py.modules.factory.fused_moe.defs.type import ExecutorType
 from rtp_llm.utils.model_weight import W
 
 log = logging.getLogger(__name__)
-
-# Add ATREX to path
-_ATREX_PATHS = [
-    "/home/caihaowen.chw/workspace/atrex/python",
-    "/home/caihaowen.chw/workspace/atrex",
-]
-for _p in _ATREX_PATHS:
-    if _p not in sys.path and os.path.exists(_p):
-        sys.path.insert(0, _p)
 
 
 def _moe_sorting_python(
