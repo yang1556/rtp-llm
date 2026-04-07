@@ -137,3 +137,57 @@ py_test (
     exec_properties = {'gpu':'SM100_ARM', 'gpu_count':'1'},
     timeout = "long",
 )
+
+py_test (
+    name = "cutedsl_fp4_kernel_test",
+    srcs = ["cutedsl_fp4_kernel_test.py"],
+    deps = [
+        "//rtp_llm/models_py:modules",
+        "//rtp_llm:config",
+        "//rtp_llm:testlib",
+        "//rtp_llm:flashinfer-python",
+    ],
+    env = {
+        "GPU_COUNT": "1",
+        "FLASHINFER_DISABLE_VERSION_CHECK": "1",
+    },
+    tags = ["open_skip", "SM100_ARM"],
+    exec_properties = {'gpu':'SM100_ARM', 'gpu_count':'1'},
+)
+
+py_test (
+    name = "trtllm_fp4_kernel_test",
+    srcs = ["trtllm_fp4_kernel_test.py"],
+    deps = [
+        "//rtp_llm/models_py:modules",
+        "//rtp_llm:config",
+        "//rtp_llm:testlib",
+        "//rtp_llm:flashinfer-python",
+        "//rtp_llm:nvidia-cutlass-dsl",
+    ],
+    env = {
+        "GPU_COUNT": "1",
+        "FLASHINFER_DISABLE_VERSION_CHECK": "1",
+    },
+    tags = ["open_skip", "SM100_ARM"],
+    exec_properties = {'gpu':'SM100_ARM', 'gpu_count':'1'},
+)
+
+py_test (
+    name = "flashinfer_fp4_benchmark",
+    srcs = ["flashinfer_fp4_benchmark.py"],
+    deps = [
+        "//rtp_llm/models_py:modules",
+        "//rtp_llm:config",
+        "//rtp_llm:testlib",
+        "//rtp_llm:flashinfer-python",
+        "//rtp_llm:nvidia-cutlass-dsl",
+    ],
+    env = {
+        "GPU_COUNT": "1",
+        "FLASHINFER_DISABLE_VERSION_CHECK": "1",
+    },
+    tags = ["open_skip", "SM100_ARM"],
+    exec_properties = {'gpu':'SM100_ARM', 'gpu_count':'1'},
+    timeout = "long",
+)
