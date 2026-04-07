@@ -14,7 +14,7 @@ cc_library(
     name = "rocm_utils",
     hdrs = glob(["rocm_utils/*.h"]),
     copts = any_cuda_copts(),
-    include_prefix = "src",
+    includes = ["."],
     visibility = ["//visibility:public"],
 )
 
