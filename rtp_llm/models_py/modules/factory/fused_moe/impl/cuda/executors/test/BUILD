@@ -177,7 +177,7 @@ py_test (
 
 py_test (
     name = "unified_moe_benchmark",
-    srcs = ["unified_moe_benchmark.py"],
+    srcs = ["unified_moe_benchmark.py", "cutlass_fp4_standalone.py"],
     deps = [
         "//rtp_llm/models_py:modules",
         "//rtp_llm:config",

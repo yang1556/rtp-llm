@@ -4,10 +4,16 @@ All implementations run the SAME full MoE forward: FC1 + SiLU + FC2.
 Same N=2048 (intermediate), K=7168 (hidden) for all.
 
 Implementations compared:
-  FP4-CD:  CuteDSL FP4 (via CutedslFp4Executor)
-  FP8-FI:  FlashInfer FP8 groupwise (group_gemm_fp8_nt_groupwise)
-  FP8-DGM: DeepGEMM FP8 masked (m_grouped_fp8_gemm_nt_masked)
-  FP8-DGC: DeepGEMM FP8 contiguous (m_grouped_fp8_gemm_nt_contiguous)
+  FP4-CD:      CuteDSL FP4 (FlashInfer CuteDSL JIT, masked 3D)
+  FP4-TRT:     TRT-LLM FP4 fused MoE (FlashInfer/TRT-LLM, end-to-end fused)
+  FP4-CUTLASS: vLLM/SGLang CUTLASS FP4 (standalone CUTLASS GemmUniversal)
+  FP8-FI:      FlashInfer FP8 groupwise (float32 blockwise scale)
+  FP8-DGM:     DeepGEMM FP8 masked (UE8M0 scale, masked 3D)
+  FP8-DGC:     DeepGEMM FP8 contiguous (UE8M0 scale, contiguous)
+  FP8-CUTLASS: CUTLASS FP8 per-tensor (rtp_kernel)
+  FP8-TRT:     TRT-LLM FP8 fused MoE (FlashInfer/TRT-LLM, end-to-end fused)
+
+Scenarios include both uniform and non-uniform expert activation patterns.
 """
 import time
 import unittest
@@ -22,10 +28,11 @@ except ImportError:
 from rtp_llm.utils.model_weight import W
 
 BLOCK_SIZE = 128
-WARMUP_ITERS = 5
-BENCH_ITERS = 30
+WARMUP_ITERS = 10
+BENCH_ITERS = 50
 FLOAT4_E2M1_MAX = 6.0
 FLOAT8_E4M3_MAX = 448.0
+SEED = 42
 
 
 def _bench_time(fn, warmup=WARMUP_ITERS, iters=BENCH_ITERS):
@@ -46,23 +53,6 @@ def _compute_moe_tflops(total_tokens, N, K, avg_ms):
     return (flops / (avg_ms / 1000)) / 1e12
 
 
-def _make_config(E, K, N, top_k, max_batch):
-    from rtp_llm.config.model_config import ModelConfig
-    from rtp_llm.ops import ParallelismConfig, MoeConfig
-    from rtp_llm.models_py.modules.factory.fused_moe.defs.config_adapter import MoEConfigAdapter
-
-    mc = ModelConfig()
-    mc.attn_config.head_num = 2; mc.attn_config.size_per_head = 128
-    mc.num_layers = 2; mc.max_seq_len = 2048; mc.vocab_size = 500000
-    mc.expert_num = E; mc.hidden_size = K; mc.moe_inter_size = N; mc.moe_k = top_k
-    pc = ParallelismConfig()
-    pc.world_size = 1; pc.dp_size = 1; pc.tp_size = 1; pc.ep_size = 1
-    pc.dp_rank = 0; pc.tp_rank = 0; pc.ep_rank = 0; pc.world_rank = 0
-    pc.local_rank = 0; pc.local_world_size = 1
-    moe_cfg = MoeConfig(); moe_cfg.ll_num_max_token = max_batch
-    return MoEConfigAdapter(model_config=mc, parallelism_config=pc, moe_config=moe_cfg)
-
-
 def _safe_run(fn):
     try:
         return fn()
@@ -70,17 +60,25 @@ def _safe_run(fn):
         return None, None, str(e)[:200]
 
 
-# ===== 1. CuteDSL FP4 (Full MoE via Executor) =====
+# =========================================================================
+# 1. CuteDSL FP4 (Full MoE via Executor, masked 3D layout)
+# =========================================================================
 
-def _bench_cutedsl_fp4(E, M_per_expert, K, N):
+def _bench_cutedsl_fp4(E, tokens_per_expert, K, N):
+    """tokens_per_expert: list[int] of length E, or int for uniform."""
     from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutedsl_fp4_executor import CutedslFp4Executor
     from rtp_llm.models_py.modules.factory.fused_moe.defs.fused_moe import ExpertForwardPayload, ExpertTokensMetadata
     from rtp_llm.models_py.modules.factory.fused_moe.defs.quant_config import FusedMoEQuantConfig
     from flashinfer import scaled_fp4_grouped_quantize
 
     device = "cuda"
-    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
+    if isinstance(tokens_per_expert, int):
+        tokens_per_expert = [tokens_per_expert] * E
+    max_m = max(tokens_per_expert)
+    total_tokens = sum(tokens_per_expert)
+
+    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32, generator=torch.Generator(device).manual_seed(SEED)) * 0.1).to(torch.bfloat16)
+    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32, generator=torch.Generator(device).manual_seed(SEED + 1)) * 0.1).to(torch.bfloat16)
 
     w1_amax = w1_bf16.abs().amax(dim=(1, 2)).float()
     w2_amax = w2_bf16.abs().amax(dim=(1, 2)).float()
@@ -100,12 +98,13 @@ def _bench_cutedsl_fp4(E, M_per_expert, K, N):
         W.moe_w2_i_s: torch.ones(E, dtype=torch.float32, device=device),
     }
 
-    config = _make_config(E, K, N, 8, M_per_expert)
+    config = _make_config(E, K, N, 8, max_m)
     executor = CutedslFp4Executor(config, FusedMoEQuantConfig(
         quant_dtype=torch.uint8, per_act_token_quant=False, per_out_ch_quant=False, block_shape=[16, 16]), weights)
 
-    hidden = torch.randn(E, M_per_expert, K, device=device, dtype=torch.bfloat16) * 0.1
-    masked_m = torch.full((E,), M_per_expert, dtype=torch.int32, device=device)
+    hidden = torch.randn(E, max_m, K, device=device, dtype=torch.bfloat16,
+                          generator=torch.Generator(device).manual_seed(SEED + 2)) * 0.1
+    masked_m = torch.tensor(tokens_per_expert, dtype=torch.int32, device=device)
     payload = ExpertForwardPayload(
         expert_x=hidden, expert_x_origin_dtype=torch.bfloat16, expert_x_scale=None,
         expert_tokens_meta=ExpertTokensMetadata(expert_num_tokens=masked_m, expert_num_tokens_cpu=None))
@@ -114,10 +113,12 @@ def _bench_cutedsl_fp4(E, M_per_expert, K, N):
         return executor.execute(payload, "silu", None, None, False, None)
 
     avg_ms = _bench_time(run)
-    return avg_ms, _compute_moe_tflops(E * M_per_expert, N, K, avg_ms), None
+    return avg_ms, _compute_moe_tflops(total_tokens, N, K, avg_ms), None
 
 
-# ===== 2. FlashInfer FP8 Groupwise (Full MoE: quant+FC1+act+FC2) =====
+# =========================================================================
+# 2. FlashInfer FP8 Groupwise (Full MoE: quant+FC1+act+FC2)
+# =========================================================================
 
 def _per_block_quantize_fp8(tensor, block_size=128):
     has_batch = tensor.dim() == 3
@@ -147,25 +148,31 @@ def _per_block_quantize_fp8(tensor, block_size=128):
     return fp8, scale
 
 
-def _bench_flashinfer_fp8(E, M_per_expert, K, N):
+def _bench_flashinfer_fp8(E, tokens_per_expert, K, N):
     from flashinfer.gemm import group_gemm_fp8_nt_groupwise
     from rtp_llm.models_py.kernels.cuda.fp8_kernel import sgl_per_token_group_quant_fp8
     from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.flashinfer_fp8_groupwise_executor import _recompute_float32_scales
     from rtp_llm.models_py.triton_kernels.common.activation import silu_and_mul
 
     device = "cuda"
-    total_M = M_per_expert * E
+    if isinstance(tokens_per_expert, int):
+        tokens_per_expert = [tokens_per_expert] * E
+    M_padded = max(((m + 3) // 4) * 4 for m in tokens_per_expert)
+    total_M = M_padded * E
+    total_tokens = sum(tokens_per_expert)
 
-    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
+    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32, generator=torch.Generator(device).manual_seed(SEED)) * 0.1).to(torch.bfloat16)
+    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32, generator=torch.Generator(device).manual_seed(SEED + 1)) * 0.1).to(torch.bfloat16)
     w1_fp8, _ = _per_block_quantize_fp8(w1_bf16)
     w2_fp8, _ = _per_block_quantize_fp8(w2_bf16)
     w1_scale_mn = _recompute_float32_scales(w1_fp8).permute(0, 2, 1).contiguous()
     w2_scale_mn = _recompute_float32_scales(w2_fp8).permute(0, 2, 1).contiguous()
 
-    grouped_input = torch.randn(total_M, K, device=device, dtype=torch.bfloat16) * 0.1
-    M_padded = ((M_per_expert + 3) // 4) * 4
-    m_indptr = torch.arange(0, E + 1, dtype=torch.int32, device=device) * M_padded
+    grouped_input = torch.randn(total_M, K, device=device, dtype=torch.bfloat16,
+                                 generator=torch.Generator(device).manual_seed(SEED + 2)) * 0.1
+    m_indptr = torch.zeros(E + 1, dtype=torch.int32, device=device)
+    for i in range(E):
+        m_indptr[i + 1] = m_indptr[i] + M_padded
 
     def run():
         inp_fp8, inp_scale = sgl_per_token_group_quant_fp8(
@@ -186,22 +193,28 @@ def _bench_flashinfer_fp8(E, M_per_expert, K, N):
             m_indptr=m_indptr, scale_major_mode="MN", out_dtype=torch.bfloat16)
 
     avg_ms = _bench_time(run)
-    return avg_ms, _compute_moe_tflops(total_M, N, K, avg_ms), None
+    return avg_ms, _compute_moe_tflops(total_tokens, N, K, avg_ms), None
 
 
-# ===== 3. DeepGEMM FP8 Masked (Full MoE: quant+FC1+act+requant+FC2) =====
+# =========================================================================
+# 3. DeepGEMM FP8 Masked (Full MoE: quant+FC1+act+requant+FC2)
+# =========================================================================
 
-def _bench_deepgemm_masked(E, M_per_expert, K, N):
+def _bench_deepgemm_masked(E, tokens_per_expert, K, N):
     from rtp_llm.models_py.kernels.cuda.deepgemm_wrapper import m_grouped_fp8_gemm_nt_masked
     from rtp_llm.test.utils.numeric_util import per_token_cast_to_fp8, per_block_cast_to_fp8
     from rtp_llm.models_py.utils.math import align, ceil_div
     from rtp_llm.models_py.triton_kernels.common.activation import silu_and_mul
 
     device = "cuda"
-    max_m = align(M_per_expert, BLOCK_SIZE)
+    if isinstance(tokens_per_expert, int):
+        tokens_per_expert = [tokens_per_expert] * E
+    max_m_raw = max(tokens_per_expert)
+    max_m = align(max_m_raw, BLOCK_SIZE)
+    total_tokens = sum(tokens_per_expert)
 
-    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
+    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32, generator=torch.Generator(device).manual_seed(SEED)) * 0.1).to(torch.bfloat16)
+    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32, generator=torch.Generator(device).manual_seed(SEED + 1)) * 0.1).to(torch.bfloat16)
 
     w1_fp8_data = torch.empty(E, 2 * N, K, device=device, dtype=torch.float8_e4m3fn)
     w1_fp8_scale = torch.empty(E, ceil_div(2 * N, 128), ceil_div(K, 128), device=device, dtype=torch.float32)
@@ -213,35 +226,38 @@ def _bench_deepgemm_masked(E, M_per_expert, K, N):
     w1_fp8 = (w1_fp8_data, w1_fp8_scale)
     w2_fp8 = (w2_fp8_data, w2_fp8_scale)
 
-    a_bf16 = torch.randn(E, max_m, K, device=device, dtype=torch.bfloat16) * 0.1
+    a_bf16 = torch.randn(E, max_m, K, device=device, dtype=torch.bfloat16,
+                          generator=torch.Generator(device).manual_seed(SEED + 2)) * 0.1
     a_fp8_data = torch.empty(E, max_m, K, device=device, dtype=torch.float8_e4m3fn)
     a_fp8_scale = torch.empty(E, max_m, ceil_div(K, 128), device=device, dtype=torch.float32)
     for i in range(E):
         a_fp8_data[i], a_fp8_scale[i] = per_token_cast_to_fp8(a_bf16[i], use_ue8m0=True)
     a_fp8 = (a_fp8_data, a_fp8_scale)
 
-    masked_m = torch.full((E,), M_per_expert, device=device, dtype=torch.int32)
+    masked_m = torch.tensor(tokens_per_expert, device=device, dtype=torch.int32)
     fc1_out = torch.empty(E, max_m, 2 * N, device=device, dtype=torch.bfloat16)
     fc2_out = torch.empty(E, max_m, K, device=device, dtype=torch.bfloat16)
 
     def run():
-        m_grouped_fp8_gemm_nt_masked(a_fp8, w1_fp8, fc1_out, masked_m, M_per_expert)
+        m_grouped_fp8_gemm_nt_masked(a_fp8, w1_fp8, fc1_out, masked_m, max_m_raw)
         act = torch.empty(E, max_m, N, device=device, dtype=torch.bfloat16)
         silu_and_mul(act.view(-1, N), fc1_out.view(-1, 2 * N))
         act_fp8_data = torch.empty(E, max_m, N, device=device, dtype=torch.float8_e4m3fn)
         act_fp8_scale = torch.empty(E, max_m, ceil_div(N, 128), device=device, dtype=torch.float32)
         for i in range(E):
             act_fp8_data[i], act_fp8_scale[i] = per_token_cast_to_fp8(act[i], use_ue8m0=True)
-        m_grouped_fp8_gemm_nt_masked((act_fp8_data, act_fp8_scale), w2_fp8, fc2_out, masked_m, M_per_expert)
+        m_grouped_fp8_gemm_nt_masked((act_fp8_data, act_fp8_scale), w2_fp8, fc2_out, masked_m, max_m_raw)
         return fc2_out
 
     avg_ms = _bench_time(run)
-    return avg_ms, _compute_moe_tflops(E * M_per_expert, N, K, avg_ms), None
+    return avg_ms, _compute_moe_tflops(total_tokens, N, K, avg_ms), None
 
 
-# ===== 4. DeepGEMM FP8 Contiguous (Full MoE: quant+FC1+act+requant+FC2) =====
+# =========================================================================
+# 4. DeepGEMM FP8 Contiguous (Full MoE: quant+FC1+act+requant+FC2)
+# =========================================================================
 
-def _bench_deepgemm_contiguous(E, M_per_expert, K, N):
+def _bench_deepgemm_contiguous(E, tokens_per_expert, K, N):
     from rtp_llm.models_py.kernels.cuda.deepgemm_wrapper import m_grouped_fp8_gemm_nt_contiguous
     from rtp_llm.test.utils.numeric_util import per_token_cast_to_fp8, per_block_cast_to_fp8
     from rtp_llm.models_py.utils.math import align, ceil_div
@@ -249,12 +265,16 @@ def _bench_deepgemm_contiguous(E, M_per_expert, K, N):
 
     device = "cuda"
     mk_align = 128
-    aligned_m = align(M_per_expert, mk_align)
-    total_M = aligned_m * E
+    if isinstance(tokens_per_expert, int):
+        tokens_per_expert = [tokens_per_expert] * E
+    total_tokens = sum(tokens_per_expert)
 
-    # Weights [E, N, K]
-    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32) * 0.1).to(torch.bfloat16)
+    # Align each expert's token count
+    aligned_counts = [align(m, mk_align) for m in tokens_per_expert]
+    total_M = sum(aligned_counts)
+
+    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32, generator=torch.Generator(device).manual_seed(SEED)) * 0.1).to(torch.bfloat16)
+    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32, generator=torch.Generator(device).manual_seed(SEED + 1)) * 0.1).to(torch.bfloat16)
 
     w1_fp8_data = torch.empty(E, 2 * N, K, device=device, dtype=torch.float8_e4m3fn)
     w1_fp8_scale = torch.empty(E, ceil_div(2 * N, 128), ceil_div(K, 128), device=device, dtype=torch.float32)
@@ -266,16 +286,17 @@ def _bench_deepgemm_contiguous(E, M_per_expert, K, N):
     w1_fp8 = (w1_fp8_data, w1_fp8_scale)
     w2_fp8 = (w2_fp8_data, w2_fp8_scale)
 
-    # Input [total_M, K] contiguous
-    a_bf16 = torch.randn(total_M, K, device=device, dtype=torch.bfloat16) * 0.1
+    a_bf16 = torch.randn(total_M, K, device=device, dtype=torch.bfloat16,
+                          generator=torch.Generator(device).manual_seed(SEED + 2)) * 0.1
     a_fp8 = per_token_cast_to_fp8(a_bf16, use_ue8m0=True)
 
     # m_indices: expert id per row
     m_indices = torch.empty(total_M, device=device, dtype=torch.int32)
+    offset = 0
     for i in range(E):
-        start = i * aligned_m
-        m_indices[start:start + M_per_expert] = i
-        m_indices[start + M_per_expert:start + aligned_m] = -1
+        m_indices[offset:offset + tokens_per_expert[i]] = i
+        m_indices[offset + tokens_per_expert[i]:offset + aligned_counts[i]] = -1
+        offset += aligned_counts[i]
 
     fc1_out = torch.empty(total_M, 2 * N, device=device, dtype=torch.bfloat16)
     fc2_out = torch.empty(total_M, K, device=device, dtype=torch.bfloat16)
@@ -289,13 +310,281 @@ def _bench_deepgemm_contiguous(E, M_per_expert, K, N):
         return fc2_out
 
     avg_ms = _bench_time(run)
-    return avg_ms, _compute_moe_tflops(E * M_per_expert, N, K, avg_ms), None
+    return avg_ms, _compute_moe_tflops(total_tokens, N, K, avg_ms), None
 
 
-# ===== Scenarios & Test =====
+# =========================================================================
+# 5. TRT-LLM FP4 Fused MoE (via trtllm_fp4_block_scale_moe)
+# =========================================================================
 
-SCENARIOS = [
-    # (label, E, M_per_expert, N, K, type)
+def _bench_trtllm_fp4(E, tokens_per_expert, K, N):
+    from flashinfer.fused_moe import trtllm_fp4_block_scale_moe
+    from flashinfer.fp4_quantization import fp4_quantize, block_scale_interleave
+    from flashinfer.fused_moe.core import (
+        _maybe_get_cached_w3_w1_permute_indices,
+        get_w2_permute_indices_with_cache,
+    )
+
+    device = "cuda"
+    if isinstance(tokens_per_expert, int):
+        tokens_per_expert = [tokens_per_expert] * E
+    total_tokens = sum(tokens_per_expert)
+    top_k = min(8, E)
+
+    # Generate weights
+    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32,
+                            generator=torch.Generator(device).manual_seed(SEED)) * 0.1).to(torch.bfloat16)
+    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32,
+                            generator=torch.Generator(device).manual_seed(SEED + 1)) * 0.1).to(torch.bfloat16)
+
+    # Quantize weights to FP4
+    sf_vec_size = 16
+    w1_global_sf = (FLOAT8_E4M3_MAX * FLOAT4_E2M1_MAX) / w1_bf16.float().abs().amax(dim=(1, 2)).clamp(min=1e-4)
+    w2_global_sf = (FLOAT8_E4M3_MAX * FLOAT4_E2M1_MAX) / w2_bf16.float().abs().amax(dim=(1, 2)).clamp(min=1e-4)
+
+    w1_fp4_list, w1_sf_list = [], []
+    w2_fp4_list, w2_sf_list = [], []
+    permute_cache = {}
+    for i in range(E):
+        q, sf = fp4_quantize(w1_bf16[i], w1_global_sf[i], sf_vec_size=sf_vec_size,
+                             use_ue8m0=False, is_sf_swizzled_layout=False)
+        perm = _maybe_get_cached_w3_w1_permute_indices(permute_cache, q, epilogue_tile_m=128)
+        q = q[perm]
+        sf = block_scale_interleave(sf[perm])
+        w1_fp4_list.append(q)
+        w1_sf_list.append(sf)
+
+        q2, sf2 = fp4_quantize(w2_bf16[i], w2_global_sf[i], sf_vec_size=sf_vec_size,
+                                use_ue8m0=False, is_sf_swizzled_layout=False)
+        perm2 = get_w2_permute_indices_with_cache(permute_cache, q2, epilogue_tile_m=128)
+        q2 = q2[perm2]
+        sf2 = block_scale_interleave(sf2[perm2])
+        w2_fp4_list.append(q2)
+        w2_sf_list.append(sf2)
+
+    w1_fp4 = torch.stack(w1_fp4_list)
+    w1_sf = torch.stack(w1_sf_list)
+    w2_fp4 = torch.stack(w2_fp4_list)
+    w2_sf = torch.stack(w2_sf_list)
+
+    # Input
+    hidden = torch.randn(total_tokens, K, device=device, dtype=torch.bfloat16,
+                          generator=torch.Generator(device).manual_seed(SEED + 2)) * 0.1
+    hs_global_sf = (FLOAT8_E4M3_MAX * FLOAT4_E2M1_MAX) / hidden.float().abs().max().clamp(min=1e-4)
+    hs_fp4, hs_sf = fp4_quantize(hidden, hs_global_sf, sf_vec_size=sf_vec_size,
+                                  use_ue8m0=False, is_sf_swizzled_layout=False)
+
+    # Construct routing logits that produce desired token distribution
+    routing_logits = torch.full((total_tokens, E), -10.0, device=device, dtype=torch.bfloat16)
+    offset = 0
+    for expert_id in range(E):
+        for _ in range(tokens_per_expert[expert_id]):
+            if offset < total_tokens:
+                routing_logits[offset, expert_id] = 10.0
+                offset += 1
+
+    # Approximate output1 scales
+    inv_w1_gs = 1.0 / w1_global_sf
+    inv_hs_gs = 1.0 / hs_global_sf
+    c_global_sf_approx = torch.ones(E, device=device, dtype=torch.float32)
+    scale_c_fc1 = c_global_sf_approx * inv_w1_gs * inv_hs_gs
+    scale_gate_fc1 = inv_w1_gs * inv_hs_gs
+    scale_c_fc2 = (1.0 / c_global_sf_approx) * (1.0 / w2_global_sf)
+
+    def run():
+        return trtllm_fp4_block_scale_moe(
+            routing_logits=routing_logits,
+            routing_bias=None,
+            hidden_states=hs_fp4,
+            hidden_states_scale=hs_sf,
+            gemm1_weights=w1_fp4,
+            gemm1_weights_scale=w1_sf,
+            gemm1_bias=None, gemm1_alpha=None, gemm1_beta=None, gemm1_clamp_limit=None,
+            gemm2_weights=w2_fp4,
+            gemm2_weights_scale=w2_sf,
+            gemm2_bias=None,
+            output1_scale_scalar=scale_c_fc1,
+            output1_scale_gate_scalar=scale_gate_fc1,
+            output2_scale_scalar=scale_c_fc2,
+            num_experts=E, top_k=top_k,
+            n_group=None, topk_group=None,
+            intermediate_size=N,
+            local_expert_offset=0, local_num_experts=E,
+            routed_scaling_factor=None,
+            routing_method_type=0,
+            do_finalize=True,
+            tune_max_num_tokens=max(total_tokens, 4096),
+        )
+
+    avg_ms = _bench_time(run)
+    return avg_ms, _compute_moe_tflops(total_tokens, N, K, avg_ms), None
+
+
+# =========================================================================
+# 6. TRT-LLM FP8 Fused MoE (via trtllm_fp8_block_scale_moe)
+# =========================================================================
+
+def _bench_trtllm_fp8(E, tokens_per_expert, K, N):
+    from flashinfer.fused_moe import trtllm_fp8_block_scale_moe
+
+    device = "cuda"
+    if isinstance(tokens_per_expert, int):
+        tokens_per_expert = [tokens_per_expert] * E
+    total_tokens = sum(tokens_per_expert)
+    top_k = min(8, E)
+
+    w1_bf16 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32,
+                            generator=torch.Generator(device).manual_seed(SEED)) * 0.1).to(torch.bfloat16)
+    w2_bf16 = (torch.randn(E, K, N, device=device, dtype=torch.float32,
+                            generator=torch.Generator(device).manual_seed(SEED + 1)) * 0.1).to(torch.bfloat16)
+
+    # Per-block FP8 quantize for weights
+    w1_fp8, w1_scale = _per_block_quantize_fp8(w1_bf16)
+    w2_fp8, w2_scale = _per_block_quantize_fp8(w2_bf16)
+
+    # Input
+    hidden = torch.randn(total_tokens, K, device=device, dtype=torch.bfloat16,
+                          generator=torch.Generator(device).manual_seed(SEED + 2)) * 0.1
+
+    # Quantize input to FP8
+    hidden_fp8 = hidden.to(torch.float8_e4m3fn)
+    # Input scale: [K//128, total_tokens] — transposed block scale
+    k_blocks = (K + 127) // 128
+    hidden_scale = torch.ones(k_blocks, total_tokens, device=device, dtype=torch.float32)
+
+    # Routing logits for desired distribution
+    routing_logits = torch.full((total_tokens, E), -10.0, device=device, dtype=torch.float32)
+    offset = 0
+    for expert_id in range(E):
+        for _ in range(tokens_per_expert[expert_id]):
+            if offset < total_tokens:
+                routing_logits[offset, expert_id] = 10.0
+                offset += 1
+
+    def run():
+        return trtllm_fp8_block_scale_moe(
+            routing_logits=routing_logits,
+            routing_bias=None,
+            hidden_states=hidden_fp8,
+            hidden_states_scale=hidden_scale,
+            gemm1_weights=w1_fp8,
+            gemm1_weights_scale=w1_scale,
+            gemm2_weights=w2_fp8,
+            gemm2_weights_scale=w2_scale,
+            num_experts=E, top_k=top_k,
+            n_group=None, topk_group=None,
+            intermediate_size=N,
+            local_expert_offset=0, local_num_experts=E,
+            routed_scaling_factor=None,
+            routing_method_type=0,
+            do_finalize=True,
+            tune_max_num_tokens=max(total_tokens, 4096),
+        )
+
+    avg_ms = _bench_time(run)
+    return avg_ms, _compute_moe_tflops(total_tokens, N, K, avg_ms), None
+
+
+# =========================================================================
+# 7. CUTLASS FP8 Per-Tensor (via CutlassExpertsFp8)
+# =========================================================================
+
+def _bench_cutlass_fp8_per_tensor(E, tokens_per_expert, K, N):
+    from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.cutlass_moe import CutlassExpertsFp8
+    from rtp_llm.models_py.modules.factory.fused_moe.defs.fused_moe import ExpertForwardPayload
+    from rtp_llm.models_py.modules.factory.fused_moe.defs.quant_config import FusedMoEQuantConfig
+
+    device = "cuda"
+    if isinstance(tokens_per_expert, int):
+        tokens_per_expert = [tokens_per_expert] * E
+    total_tokens = sum(tokens_per_expert)
+    top_k = min(8, E)
+
+    w1 = (torch.randn(E, 2 * N, K, device=device, dtype=torch.float32,
+                       generator=torch.Generator(device).manual_seed(SEED)) * 0.1).to(torch.float8_e4m3fn)
+    w2 = (torch.randn(E, K, N, device=device, dtype=torch.float32,
+                       generator=torch.Generator(device).manual_seed(SEED + 1)) * 0.1).to(torch.float8_e4m3fn)
+    w1_scale = torch.ones(E, dtype=torch.float32, device=device)
+    w2_scale = torch.ones(E, dtype=torch.float32, device=device)
+
+    weights = {W.moe_w1: w1, W.moe_w2: w2, W.moe_s1: w1_scale, W.moe_s2: w2_scale}
+
+    config = _make_config(E, K, N, top_k, max(tokens_per_expert))
+    quant_config = FusedMoEQuantConfig(
+        quant_dtype=torch.float8_e4m3fn, per_act_token_quant=True, per_out_ch_quant=False, block_shape=None)
+    executor = CutlassExpertsFp8(config, quant_config, weights)
+
+    hidden = torch.randn(total_tokens, K, device=device, dtype=torch.bfloat16,
+                          generator=torch.Generator(device).manual_seed(SEED + 2)) * 0.1
+
+    # Construct topk_ids for desired distribution
+    topk_ids = torch.zeros(total_tokens, top_k, device=device, dtype=torch.int32)
+    topk_weights = torch.ones(total_tokens, top_k, device=device, dtype=torch.bfloat16) / top_k
+    offset = 0
+    for expert_id in range(E):
+        for _ in range(tokens_per_expert[expert_id]):
+            if offset < total_tokens:
+                topk_ids[offset, 0] = expert_id
+                offset += 1
+
+    payload = ExpertForwardPayload(
+        expert_x=hidden, expert_x_origin_dtype=torch.bfloat16,
+        expert_x_scale=None,
+        expert_topk_ids=topk_ids, expert_topk_weights=topk_weights)
+
+    def run():
+        return executor.execute(payload, "SiGLU", None, None, False, None)
+
+    avg_ms = _bench_time(run)
+    return avg_ms, _compute_moe_tflops(total_tokens, N, K, avg_ms), None
+
+
+# =========================================================================
+# 8. CUTLASS FP4 Standalone (vLLM/SGLang kernel) — placeholder
+# =========================================================================
+
+def _bench_cutlass_fp4_standalone(E, tokens_per_expert, K, N):
+    """Placeholder for vLLM/SGLang CUTLASS FP4 GemmUniversal.
+    Requires standalone compilation of nvfp4_blockwise_moe_kernel.cu.
+    See cutlass_fp4_standalone.py for the compilation wrapper.
+    """
+    try:
+        from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.executors.test.cutlass_fp4_standalone import bench_cutlass_fp4
+        return bench_cutlass_fp4(E, tokens_per_expert, K, N, SEED, WARMUP_ITERS, BENCH_ITERS)
+    except ImportError:
+        return None, None, "cutlass_fp4_standalone not available (requires JIT compilation)"
+    except Exception as e:
+        return None, None, str(e)[:200]
+
+
+# =========================================================================
+# Config helper
+# =========================================================================
+
+def _make_config(E, K, N, top_k, max_batch):
+    from rtp_llm.config.model_config import ModelConfig
+    from rtp_llm.ops import ParallelismConfig, MoeConfig
+    from rtp_llm.models_py.modules.factory.fused_moe.defs.config_adapter import MoEConfigAdapter
+
+    mc = ModelConfig()
+    mc.attn_config.head_num = 2; mc.attn_config.size_per_head = 128
+    mc.num_layers = 2; mc.max_seq_len = 2048; mc.vocab_size = 500000
+    mc.expert_num = E; mc.hidden_size = K; mc.moe_inter_size = N; mc.moe_k = top_k
+    pc = ParallelismConfig()
+    pc.world_size = 1; pc.dp_size = 1; pc.tp_size = 1; pc.ep_size = 1
+    pc.dp_rank = 0; pc.tp_rank = 0; pc.ep_rank = 0; pc.world_rank = 0
+    pc.local_rank = 0; pc.local_world_size = 1
+    moe_cfg = MoeConfig(); moe_cfg.ll_num_max_token = max_batch
+    return MoEConfigAdapter(model_config=mc, parallelism_config=pc, moe_config=moe_cfg)
+
+
+# =========================================================================
+# Scenarios
+# =========================================================================
+
+# (label, E, tokens_per_expert, N, K, stype)
+# tokens_per_expert: int for uniform, list[int] for non-uniform
+UNIFORM_SCENARIOS = [
     ("Decode-2tok/exp",     8,    2, 2048, 7168, "decode"),
     ("Decode-8tok/exp",     8,    8, 2048, 7168, "decode"),
     ("Decode-16tok/exp",    8,   16, 2048, 7168, "decode"),
@@ -305,75 +594,96 @@ SCENARIOS = [
     ("ManyExp-8tok/exp",   64,    8, 2048, 7168, "decode"),
 ]
 
+# Non-uniform activation patterns (fixed total_M=256, E=8)
+SKEWED_SCENARIOS = [
+    ("Skewed-A(longtail)", 8, [96, 64, 32, 24, 16, 12, 8, 4], 2048, 7168, "skewed"),
+    ("Skewed-B(extreme)",  8, [192, 32, 16, 8, 4, 2, 1, 1],  2048, 7168, "skewed"),
+]
+
+ALL_SCENARIOS = UNIFORM_SCENARIOS + SKEWED_SCENARIOS
+
+# Implementation registry: (short_name, bench_fn, is_fused_moe)
+IMPLEMENTATIONS = [
+    ("FP4-CD",      _bench_cutedsl_fp4,          False),
+    ("FP4-TRT",     _bench_trtllm_fp4,           True),
+    ("FP4-CUT",     _bench_cutlass_fp4_standalone, False),
+    ("FP8-FI",      _bench_flashinfer_fp8,       False),
+    ("FP8-DGM",     _bench_deepgemm_masked,      False),
+    ("FP8-DGC",     _bench_deepgemm_contiguous,  False),
+    ("FP8-CUT",     _bench_cutlass_fp8_per_tensor, True),
+    ("FP8-TRT",     _bench_trtllm_fp8,           True),
+]
+
 
 class TestUnifiedMoeBenchmark(unittest.TestCase):
 
     def test_all_implementations(self):
-        """Unified Full MoE benchmark: FP4-CD vs FP8-FI vs FP8-DGM vs FP8-DGC."""
+        """Unified Full MoE benchmark: 3 FP4 + 5 FP8 implementations."""
         if torch.cuda.get_device_capability() < (10, 0):
             self.skipTest("SM100+ required")
 
-        print("\n" + "=" * 140)
+        torch.manual_seed(SEED)
+        torch.cuda.manual_seed_all(SEED)
+
+        impl_names = [name for name, _, _ in IMPLEMENTATIONS]
+        col_width = 12
+
+        print("\n" + "=" * 160)
         print(f"  Unified MoE Benchmark — SM100 (Full MoE: FC1+SiLU+FC2)")
-        print(f"  N=2048 (inter), K=7168 (hidden), Warmup={WARMUP_ITERS}, Iters={BENCH_ITERS}")
-        print(f"  All implementations run identical workload for fair comparison")
-        print("=" * 140)
+        print(f"  N=2048 (inter), K=7168 (hidden), Warmup={WARMUP_ITERS}, Iters={BENCH_ITERS}, Seed={SEED}")
+        print(f"  Implementations: {', '.join(impl_names)}")
+        print(f"  * = fused end-to-end MoE (includes routing+gather overhead)")
+        print("=" * 160)
 
-        header = (f"{'Scenario':<22} {'Type':<8} {'E':>4} {'M/E':>5} {'TotM':>7} | "
-                  f"{'FP4-CD ms':>10} {'TF':>7} | "
-                  f"{'FP8-FI ms':>10} {'TF':>7} | "
-                  f"{'FP8-DGM ms':>10} {'TF':>7} | "
-                  f"{'FP8-DGC ms':>10} {'TF':>7} | "
-                  f"{'Best':>12}")
-        print(header)
-        print("-" * 140)
+        # Print header
+        hdr = f"{'Scenario':<22} {'Type':<8} {'E':>4} {'TotM':>7} | "
+        for name, _, is_fused in IMPLEMENTATIONS:
+            mark = "*" if is_fused else ""
+            hdr += f"{name + mark:>{col_width}} {'TF':>7} | "
+        hdr += f"{'Best':>12}"
+        print(hdr)
+        print("-" * 160)
 
-        errors = []
-        for label, E, M_per_exp, N, K, stype in SCENARIOS:
-            total_tokens = E * M_per_exp
+        all_errors = []
 
-            cd_ms, cd_tf, cd_err = _safe_run(lambda: _bench_cutedsl_fp4(E, M_per_exp, K, N))
-            if cd_err: errors.append(f"[FP4-CD] {label}: {cd_err}")
+        for label, E, tpe, N, K, stype in ALL_SCENARIOS:
+            if isinstance(tpe, int):
+                total_tokens = E * tpe
+            else:
+                total_tokens = sum(tpe)
 
-            fi_ms, fi_tf, fi_err = _safe_run(lambda: _bench_flashinfer_fp8(E, M_per_exp, K, N))
-            if fi_err: errors.append(f"[FP8-FI] {label}: {fi_err}")
+            results = {}
+            for name, bench_fn, _ in IMPLEMENTATIONS:
+                ms, tf, err = _safe_run(lambda fn=bench_fn: fn(E, tpe, K, N))
+                results[name] = (ms, tf, err)
+                if err:
+                    all_errors.append(f"[{name}] {label}: {err}")
 
-            dgm_ms, dgm_tf, dgm_err = _safe_run(lambda: _bench_deepgemm_masked(E, M_per_exp, K, N))
-            if dgm_err: errors.append(f"[FP8-DGM] {label}: {dgm_err}")
-
-            dgc_ms, dgc_tf, dgc_err = _safe_run(lambda: _bench_deepgemm_contiguous(E, M_per_exp, K, N))
-            if dgc_err: errors.append(f"[FP8-DGC] {label}: {dgc_err}")
-
-            def fmt(ms, tf):
-                return (f"{ms:.3f}" if ms else "ERR", f"{tf:.1f}" if tf else "-")
-
-            cd_s, cd_t = fmt(cd_ms, cd_tf)
-            fi_s, fi_t = fmt(fi_ms, fi_tf)
-            dgm_s, dgm_t = fmt(dgm_ms, dgm_tf)
-            dgc_s, dgc_t = fmt(dgc_ms, dgc_tf)
-
+            # Format output
+            row = f"{label:<22} {stype:<8} {E:>4} {total_tokens:>7} | "
             candidates = []
-            if cd_ms: candidates.append(("FP4-CD", cd_ms))
-            if fi_ms: candidates.append(("FP8-FI", fi_ms))
-            if dgm_ms: candidates.append(("FP8-DGM", dgm_ms))
-            if dgc_ms: candidates.append(("FP8-DGC", dgc_ms))
-            best_name = min(candidates, key=lambda x: x[1])[0] if candidates else "N/A"
+            for name, _, is_fused in IMPLEMENTATIONS:
+                ms, tf, _ = results[name]
+                ms_s = f"{ms:.3f}" if ms else "ERR"
+                tf_s = f"{tf:.1f}" if tf else "-"
+                row += f"{ms_s:>{col_width}} {tf_s:>7} | "
+                if ms:
+                    candidates.append((name, ms))
 
-            print(f"{label:<22} {stype:<8} {E:>4} {M_per_exp:>5} {total_tokens:>7} | "
-                  f"{cd_s:>10} {cd_t:>7} | "
-                  f"{fi_s:>10} {fi_t:>7} | "
-                  f"{dgm_s:>10} {dgm_t:>7} | "
-                  f"{dgc_s:>10} {dgc_t:>7} | "
-                  f"{best_name:>12}")
+            best = min(candidates, key=lambda x: x[1])[0] if candidates else "N/A"
+            row += f"{best:>12}"
+            print(row)
 
-        print("=" * 140)
-        print("FP4-CD=CuteDSL FP4, FP8-FI=FlashInfer FP8 groupwise, "
-              "FP8-DGM=DeepGEMM masked, FP8-DGC=DeepGEMM contiguous")
-        print(f"Workload: Full MoE (FC1[M,K]x[2N,K]^T + SiLU + FC2[M,N]x[K,N]^T)")
+        print("=" * 160)
+        print("Legend: FP4-CD=CuteDSL, FP4-TRT=TRT-LLM FP4, FP4-CUT=CUTLASS FP4 (vLLM/SGLang),")
+        print("        FP8-FI=FlashInfer groupwise, FP8-DGM=DeepGEMM masked, FP8-DGC=DeepGEMM contiguous,")
+        print("        FP8-CUT=CUTLASS per-tensor, FP8-TRT=TRT-LLM FP8")
+        print("  * = fused end-to-end MoE (includes routing + gather overhead)")
+        print(f"  Workload: Full MoE (FC1[M,K]x[2N,K]^T + SiLU + FC2[M,N]x[K,N]^T)")
 
-        if errors:
-            print("\nErrors:")
-            for e in errors:
+        if all_errors:
+            print(f"\nErrors ({len(all_errors)}):")
+            for e in all_errors:
                 print(f"  {e}")
 
 
