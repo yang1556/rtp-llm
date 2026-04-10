@@ -203,6 +203,7 @@ def test_chunk_varlen(
 
     assert_close("o", ref, tri, 0.005)
     assert_close("ht", ref_ht, tri_ht, 0.005)
+    print("  PASSED")
 
 
 if __name__ == "__main__":
@@ -211,5 +212,6 @@ if __name__ == "__main__":
         (4, 64, 0, [0, 256, 500, 1000], torch.bfloat16),
     ]
     for test in test_params:
-        logging.info(f"Testing test_chunk_varlen with params: {test}")
+        print(f"Testing test_chunk_varlen with params: {test}")
         test_chunk_varlen(*test)
+    print("All tests passed!")
