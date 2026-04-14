@@ -8,7 +8,12 @@ from torch import nn
 import rtp_llm.ops.compute_ops as compute_ops
 from rtp_llm.config.model_config import ModelConfig
 from rtp_llm.model_loader.model_weight_info import ModelWeights
-from rtp_llm.models_py.distributed.collective_torch import Group, all_gather, all_reduce
+from rtp_llm.models_py.distributed.collective_torch import (
+    Group,
+    _get_group,
+    all_gather,
+    all_reduce,
+)
 from rtp_llm.models_py.model_desc.block_map import select_block_map_for_layer
 from rtp_llm.models_py.model_desc.generic_moe import GenericMoeLayer
 from rtp_llm.models_py.model_desc.module_base import GptModelBase
@@ -33,6 +38,9 @@ from rtp_llm.models_py.triton_kernels.fla.block import (
     store_ssm_state_to_block_map,
 )
 from rtp_llm.models_py.triton_kernels.fla.chunk import chunk_gated_delta_rule
+from rtp_llm.models_py.triton_kernels.fla.chunk_cp_scan import (
+    chunk_gated_delta_rule_fwd_cp_scan,
+)
 from rtp_llm.models_py.triton_kernels.fla.fused_recurrent import (
     fused_recurrent_gated_delta_rule,
 )
@@ -645,24 +653,97 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         key = key.view(1, -1, gdn.local_num_k_heads, gdn.head_k_dim)
         value = value.view(1, -1, gdn.local_num_v_heads, gdn.head_v_dim)
 
-        attn_out, h, final_state = chunk_gated_delta_rule(
-            query,
-            key,
-            value,
-            g,
-            beta,
+        cp_size = self.parallelism_config.tp_size
+        cp_rank = self.parallelism_config.tp_rank
+        cp_group = _get_group(Group.TP)
+        scale = gdn.head_k_dim**-0.5
+
+        # Per-sequence contiguous split
+        full_lengths = full_cu[1:] - full_cu[:-1]  # [batch]
+        assert (
+            full_lengths % cp_size == 0
+        ).all(), f"All sequence lengths must be divisible by cp_size={cp_size}, got {full_lengths.tolist()}"
+        local_lengths = full_lengths // cp_size
+
+        # Extract this rank's contiguous slice from each sequence and pack
+        local_slices = []
+        for seq_b in range(context_batch_size):
+            seq_start = full_cu[seq_b].item()
+            local_len = local_lengths[seq_b].item()
+            local_start = seq_start + cp_rank * local_len
+            local_end = local_start + local_len
+            local_slices.append(slice(local_start, local_end))
+
+        local_q = torch.cat([query[:, s] for s in local_slices], dim=1).contiguous()
+        local_k = torch.cat([key[:, s] for s in local_slices], dim=1).contiguous()
+        local_v = torch.cat([value[:, s] for s in local_slices], dim=1).contiguous()
+        local_g = torch.cat([g[:, s] for s in local_slices], dim=1).contiguous()
+        local_beta = torch.cat([beta[:, s] for s in local_slices], dim=1).contiguous()
+
+        # Build local cu_seqlens
+        local_cu = torch.zeros(
+            context_batch_size + 1, dtype=torch.long, device=query.device
+        )
+        local_cu[1:] = local_lengths.cumsum(0)
+
+        # Single call with cu_seqlens
+        o, h, final_state = chunk_gated_delta_rule_fwd_cp_scan(
+            q=local_q,
+            k=local_k,
+            v=local_v,
+            g=local_g,
+            beta=local_beta,
+            scale=scale,
             initial_state=initial_states,
-            output_final_state=True,
-            cu_seqlens=full_cu,
+            output_final_state=(ssm_states is not None),
+            cp_group=cp_group,
             use_qk_l2norm_in_kernel=True,
+            cu_seqlens=local_cu,
         )
 
+        # local output
+        local_attn_out = o.squeeze(0)  # [local_total, H, V]
+        out_shape_tail = local_attn_out.shape[1:]  # (H, V)
+        local_total = local_attn_out.shape[0]
+
+        # All-gather output back to full sequence
+        local_flat = local_attn_out.reshape(local_total, -1)  # [local_total, H*V]
+        full_flat = all_gather(
+            local_flat, group=Group.TP
+        )  # [cp_size * local_total, H*V]
+
+        # Reorder from [rank0_all_seqs, rank1_all_seqs, ...] to [seq0_full, seq1_full, ...]
+        total_tokens = full_flat.shape[0]
+        reordered = torch.empty(
+            total_tokens,
+            full_flat.shape[1],
+            device=full_flat.device,
+            dtype=full_flat.dtype,
+        )
+        local_cu_cpu = local_cu.cpu()
+        for seq_b in range(context_batch_size):
+            ll = local_lengths[seq_b].item()
+            dst = full_cu[seq_b].item()
+            src_base = local_cu_cpu[seq_b].item()
+            for r in range(cp_size):
+                src = r * local_total + src_base
+                reordered[dst + r * ll : dst + (r + 1) * ll] = full_flat[src : src + ll]
+
+        full_attn_out = reordered.view(-1, *out_shape_tail)  # [total_tokens, H, V]
+
+        # SSM state storage: each rank stores its local h states to the correct blocks.
+        # Adjust prefix_lengths so block positions account for rank offset in the full sequence.
         if ssm_states is not None:
+            # Each rank's tokens start at original_prefix + cp_rank * local_len in the full sequence
+            adjusted_prefix = (
+                attention_inputs.prefix_lengths_d + cp_rank * local_lengths
+            )
+
             store_ssm_state_to_block_map(
                 h,
                 final_state,
-                attention_inputs.prefix_lengths_d,
-                full_cu,
+                adjusted_prefix,
+                local_cu,
                 attention_inputs.kv_cache_kernel_block_id_device,
                 ssm_states,
                 seq_size_per_block,
@@ -671,8 +752,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
 
         if kv_cache is not None and attn_meta.cp_write_cache_store_impl is not None:
             attn_meta.cp_write_cache_store_impl(kv_cache)
-
-        full_attn_out = attn_out.squeeze_(0)
 
         n_local = z.shape[0]
         local_attn_out = torch.zeros(
