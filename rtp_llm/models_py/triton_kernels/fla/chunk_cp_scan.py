@@ -526,7 +526,7 @@ def chunk_gated_delta_rule_fwd_cp_scan(
 
     # ---- Phase 3: compute h0_true locally + shift ----
     h0_global = (
-        initial_state
+        initial_state.float()
         if initial_state is not None
         else torch.zeros(N, H, K, V, dtype=torch.float32, device=k.device)
     )
