@@ -750,6 +750,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
                 ssm_states,
                 seq_size_per_block,
                 chunk_size=64,
+                skip_first_chunk=False,
             )
 
         if kv_cache is not None and attn_meta.cp_write_cache_store_impl is not None:
@@ -1009,6 +1010,8 @@ class Qwen3NextModel(GptModelBase):
         )
 
     def forward(self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
+        from torch.profiler import ProfilerActivity, profile
+
         input_ids: torch.Tensor = inputs.input_ids
         inputs_embeds = self.embed_tokens(input_ids)
         hidden_states = inputs_embeds
@@ -1069,16 +1072,26 @@ class Qwen3NextModel(GptModelBase):
         if fmha_impl is None:
             fmha_impl = self.prepare_fmha_impl(inputs)
 
-        for i, decoder_layer in enumerate(self.layers):
-            # Switch to correct block_map for this layer in hybrid attention mode
-            select_block_map_for_layer(attention_inputs, i)
-            hidden_states = decoder_layer(
-                hidden_states,
-                fmha_impl,
-                kv_cache=self.kv_cache.get_layer_cache(i) if self.kv_cache else None,
-                attention_inputs=attention_inputs,
-                attn_meta=attn_meta,
-            )
+        with profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            record_shapes=True,
+            with_stack=True,
+        ) as prof:
+
+            for i, decoder_layer in enumerate(self.layers):
+                # Switch to correct block_map for this layer in hybrid attention mode
+                select_block_map_for_layer(attention_inputs, i)
+                hidden_states = decoder_layer(
+                    hidden_states,
+                    fmha_impl,
+                    kv_cache=(
+                        self.kv_cache.get_layer_cache(i) if self.kv_cache else None
+                    ),
+                    attention_inputs=attention_inputs,
+                    attn_meta=attn_meta,
+                )
+
+        prof.export_chrome_trace("/root/hzy/qwen3_moe_cp.json")
 
         hidden_states = self.norm(hidden_states)
         return PyModelOutputs(hidden_states, fmha_impl.fmha_params)
