@@ -111,6 +111,7 @@ def store_ssm_state_to_block_map_kernel(
     SEQ_SIZE_PER_BLOCK: tl.constexpr,
     CHUNK_SIZE: tl.constexpr,
     CONV_STRIDE_TOKEN: tl.constexpr,
+    SKIP_FIRST_CHUNK: tl.constexpr,
 ):
     i_c, i_h, i_v = tl.program_id(0), tl.program_id(1), tl.program_id(2)
 
@@ -135,7 +136,9 @@ def store_ssm_state_to_block_map_kernel(
         source_ptr = final_states + batch * SSM_PER_BATCH + i_h * SSM_PER_HEAD
         dest_block_pos = (prefix + input_len - 1) // SEQ_SIZE_PER_BLOCK
         should_write = True
-    elif chunk > 0 and (chunk + 1) * CHUNK_SIZE % SEQ_SIZE_PER_BLOCK == 0:
+    elif (not SKIP_FIRST_CHUNK or chunk > 0) and (
+        chunk + 1
+    ) * CHUNK_SIZE % SEQ_SIZE_PER_BLOCK == 0:
         dest_block_pos = (
             prefix + chunk * CHUNK_SIZE + CHUNK_SIZE - 1
         ) // SEQ_SIZE_PER_BLOCK
@@ -188,6 +191,7 @@ def store_ssm_state_to_block_map(
     seq_size_per_block: int,
     chunk_size: int,
     block_v: int = 64,
+    skip_first_chunk: bool = True,
 ):
     # fp32 required: the Triton kernel accumulates SSM state directly at the
     # loaded dtype; lower precision causes numerical drift across chunks.
@@ -216,4 +220,5 @@ def store_ssm_state_to_block_map(
         SEQ_SIZE_PER_BLOCK=seq_size_per_block,
         CONV_STRIDE_TOKEN=token_stride_ssm_state,
         CHUNK_SIZE=chunk_size,
+        SKIP_FIRST_CHUNK=skip_first_chunk,
     )
