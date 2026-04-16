@@ -731,24 +731,56 @@ class Qwen3NextGatedDeltaNet(nn.Module):
 
         full_attn_out = reordered.view(-1, *out_shape_tail)  # [total_tokens, H, V]
 
-        # SSM state storage: each rank stores its local h states to the correct blocks.
-        # Adjust prefix_lengths so block positions account for rank offset in the full sequence.
         if ssm_states is not None:
-            # Each rank's tokens start at original_prefix + cp_rank * local_len in the full sequence
-            adjusted_prefix = (
-                attention_inputs.prefix_lengths_d + cp_rank * local_lengths
+            # h shape: [1, local_NT, H, K, V]
+            # final_state shape: [N, H, K, V]
+            # all_gather along dim 0 → gathered_h: [cp_size, local_NT, H, K, V]
+            gathered_h = all_gather(h.contiguous(), group=Group.TP)
+            # The last rank holds the true global final state.
+            # all_final = all_gather(final_state.contiguous(), group=Group.TP)
+            # global_final = all_final[
+            #     (cp_size - 1) * context_batch_size : cp_size * context_batch_size
+            # ]
+            from rtp_llm.models_py.distributed.collective_torch import broadcast
+
+            global_final = final_state.contiguous()
+            broadcast(global_final, src=cp_size - 1, group=Group.TP)
+
+            # Reorder gathered_h from [cp_size, local_NT, H, K, V]
+            # to [1, full_NT, H, K, V] in global chunk order.
+            # gathered_h[r, :, ...] contains rank r's chunks for all sequences,
+            # laid out as [seq0_c0..cn, seq1_c0..cn, ...].
+            local_NT = h.shape[1]
+            chunk_tail = h.shape[2:]  # (H, K, V)
+            chunk_size = 64
+            local_chunks_per_seq = local_lengths // chunk_size
+            local_chunk_offsets = torch.zeros(
+                context_batch_size + 1, dtype=torch.long, device=h.device
             )
+            local_chunk_offsets[1:] = local_chunks_per_seq.cumsum(0)
+
+            full_NT = local_NT * cp_size
+            full_h = torch.empty(
+                1, full_NT, *chunk_tail, device=h.device, dtype=h.dtype
+            )
+            for seq_b in range(context_batch_size):
+                lc = local_chunks_per_seq[seq_b].item()
+                dst_base = local_chunk_offsets[seq_b].item() * cp_size
+                src_base = local_chunk_offsets[seq_b].item()
+                for r in range(cp_size):
+                    full_h[0, dst_base + r * lc : dst_base + (r + 1) * lc] = gathered_h[
+                        r, src_base : src_base + lc
+                    ]
 
             store_ssm_state_to_block_map(
-                h,
-                final_state,
-                adjusted_prefix,
-                local_cu,
+                full_h,
+                global_final,
+                attention_inputs.prefix_lengths_d,
+                full_cu,
                 attention_inputs.kv_cache_kernel_block_id_device,
                 ssm_states,
                 seq_size_per_block,
-                chunk_size=64,
-                skip_first_chunk=False,
+                chunk_size=chunk_size,
             )
 
         if kv_cache is not None and attn_meta.cp_write_cache_store_impl is not None:
@@ -1007,7 +1039,6 @@ class Qwen3NextModel(GptModelBase):
         )
 
     def forward(self, inputs: PyModelInputs, fmha_impl: Any = None) -> PyModelOutputs:
-        from torch.profiler import ProfilerActivity, profile
 
         input_ids: torch.Tensor = inputs.input_ids
         inputs_embeds = self.embed_tokens(input_ids)
@@ -1069,26 +1100,16 @@ class Qwen3NextModel(GptModelBase):
         if fmha_impl is None:
             fmha_impl = self.prepare_fmha_impl(inputs)
 
-        with profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            record_shapes=True,
-            with_stack=True,
-        ) as prof:
-
-            for i, decoder_layer in enumerate(self.layers):
-                # Switch to correct block_map for this layer in hybrid attention mode
-                select_block_map_for_layer(attention_inputs, i)
-                hidden_states = decoder_layer(
-                    hidden_states,
-                    fmha_impl,
-                    kv_cache=(
-                        self.kv_cache.get_layer_cache(i) if self.kv_cache else None
-                    ),
-                    attention_inputs=attention_inputs,
-                    attn_meta=attn_meta,
-                )
-
-        prof.export_chrome_trace("/root/hzy/qwen3_moe_cp.json")
+        for i, decoder_layer in enumerate(self.layers):
+            # Switch to correct block_map for this layer in hybrid attention mode
+            select_block_map_for_layer(attention_inputs, i)
+            hidden_states = decoder_layer(
+                hidden_states,
+                fmha_impl,
+                kv_cache=(self.kv_cache.get_layer_cache(i) if self.kv_cache else None),
+                attention_inputs=attention_inputs,
+                attn_meta=attn_meta,
+            )
 
         hidden_states = self.norm(hidden_states)
         return PyModelOutputs(hidden_states, fmha_impl.fmha_params)

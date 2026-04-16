@@ -19,6 +19,9 @@ from unittest.mock import patch
 import torch
 
 from rtp_llm.models_py.modules.factory.attention.cuda_cp_impl.test.cp_test_utils import (
+    build_cp_attn_inputs,
+    build_padding_mask,
+    build_restore_indices,
     compute_rank_positions,
 )
 from rtp_llm.models_py.triton_kernels.causal_conv1d import (
@@ -27,105 +30,6 @@ from rtp_llm.models_py.triton_kernels.causal_conv1d import (
 from rtp_llm.test.utils.port_util import PortManager
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-
-# ---------------------------------------------------------------------------
-# Zigzag utilities (local copies, matching original test)
-# ---------------------------------------------------------------------------
-
-
-def zigzag_positions_for_rank(full_len: int, cp_size: int, rank: int) -> List[int]:
-    chunk_len = full_len // cp_size
-    half = chunk_len // 2
-    first = list(range(rank * half, (rank + 1) * half))
-    second = list(range(full_len - (rank + 1) * half, full_len - rank * half))
-    return first + second
-
-
-def build_restore_indices(cp_chunk_lengths: List[int], cp_size: int) -> torch.Tensor:
-    batch_size = len(cp_chunk_lengths)
-    ag_positions = []
-    for rank in range(cp_size):
-        for b in range(batch_size):
-            chunk_len = cp_chunk_lengths[b]
-            full_len = chunk_len * cp_size
-            positions = zigzag_positions_for_rank(full_len, cp_size, rank)
-            seq_offset = sum(cp_chunk_lengths[:b]) * cp_size
-            ag_positions.extend([p + seq_offset for p in positions])
-    total = len(ag_positions)
-    restore = [0] * total
-    for ag_idx, orig_pos in enumerate(ag_positions):
-        restore[orig_pos] = ag_idx
-    return torch.tensor(restore, dtype=torch.int32)
-
-
-def build_padding_mask(cp_chunk_lengths: List[int], cp_size: int) -> torch.Tensor:
-    return torch.ones(sum(cp_chunk_lengths) * cp_size, dtype=torch.int32)
-
-
-def build_cp_attn_inputs(
-    sequence_lengths: List[int],
-    cp_chunk_lengths: List[int],
-    cp_size: int,
-    tokens_per_block: int,
-    prefix_lengths: Optional[List[int]] = None,
-    device: torch.device = torch.device("cuda"),
-):
-    from rtp_llm.ops.compute_ops import (
-        PyAttentionInputs,
-        PyContextParallelParams,
-        get_typemeta,
-    )
-
-    batch_size = len(cp_chunk_lengths)
-    if prefix_lengths is None:
-        prefix_lengths = [0] * batch_size
-
-    inp = PyAttentionInputs()
-    inp.is_prefill = True
-    inp.input_lengths = torch.tensor(
-        cp_chunk_lengths, dtype=torch.int32, device="cpu"
-    ).pin_memory()
-    inp.sequence_lengths = torch.tensor(
-        sequence_lengths, dtype=torch.int32, device="cpu"
-    ).pin_memory()
-    inp.prefix_lengths = torch.tensor(prefix_lengths, dtype=torch.int32, device="cpu")
-
-    cu = [0]
-    for cl in cp_chunk_lengths:
-        cu.append(cu[-1] + cl)
-    inp.cu_seqlens = torch.tensor(cu, dtype=torch.int32, device=device)
-
-    max_blocks = max(math.ceil(sl / tokens_per_block) for sl in sequence_lengths)
-    block_ids = torch.zeros(batch_size, max_blocks, dtype=torch.int32)
-    offset = 0
-    for i, sl in enumerate(sequence_lengths):
-        nb = math.ceil(sl / tokens_per_block)
-        block_ids[i, :nb] = torch.arange(offset, offset + nb, dtype=torch.int32)
-        offset += nb
-    inp.kv_cache_block_id_host = block_ids
-    inp.kv_cache_kernel_block_id_host = block_ids
-    inp.kv_cache_block_id_device = block_ids.to(device)
-    inp.kv_cache_kernel_block_id_device = block_ids.to(device)
-    inp.dtype = get_typemeta(torch.zeros(1, dtype=torch.bfloat16))
-    inp.cache_store_inputs = None
-
-    new_lengths = [sl - pl for sl, pl in zip(sequence_lengths, prefix_lengths)]
-    cp_info = PyContextParallelParams()
-    cp_info.prefill_cp_chunk_lengths = torch.tensor(cp_chunk_lengths, dtype=torch.int32)
-    cp_info.prefill_cp_padding_lengths = torch.zeros(batch_size, dtype=torch.int32)
-    cp_info.prefill_qkv_padding_mask = build_padding_mask(cp_chunk_lengths, cp_size).to(
-        device
-    )
-    cp_info.prefill_qkv_restore_indice = build_restore_indices(
-        cp_chunk_lengths, cp_size
-    ).to(device)
-    cp_info.prefill_actual_input_lengths_cpu = torch.tensor(
-        new_lengths, dtype=torch.int32
-    )
-    cp_info.prefill_shuffle_indices = torch.tensor([], dtype=torch.int32)
-    inp.context_parallel_info = cp_info
-    return inp
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +91,6 @@ def allocate_kv_cache(
     dtype: torch.dtype,
     device: torch.device,
 ) -> torch.Tensor:
-    """Allocate flat kv_cache tensor for SSM + conv states."""
     total_blocks = sum(math.ceil(sl / tokens_per_block) for sl in sequence_lengths)
     item_size = {torch.bfloat16: 2, torch.float16: 2, torch.float32: 4}[dtype]
     ssm_bytes = num_v_heads * head_v_dim * head_k_dim * item_size
@@ -210,7 +113,6 @@ def _build_layer_weights(
 
     qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads
     z_dim = head_v_dim * num_v_heads
-    # Scale weights by 1/sqrt(fan_in) to keep output values in a reasonable range
     qkvz_scale = hidden_size**-0.5
     ba_scale = hidden_size**-0.5
     out_scale = (num_v_heads * head_v_dim) ** -0.5
@@ -345,10 +247,10 @@ def _worker(
         Qwen3NextGatedDeltaNet,
         Qwen3NextMetadata,
     )
+    from rtp_llm.models_py.triton_kernels.fla.block import store_ssm_state_to_block_map
     from rtp_llm.ops import DataType, LinearAttentionConfig, ParallelismConfig
 
     try:
-        # --- Distributed setup (simple, same as original torchrun test) ---
         os.environ["MASTER_ADDR"] = "127.0.0.1"
         os.environ["MASTER_PORT"] = str(nccl_port)
         dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -383,7 +285,6 @@ def _worker(
         linear_cfg.ssm_state_dtype = DataType.TYPE_BF16
         linear_cfg.conv_state_dtype = DataType.TYPE_BF16
 
-        # Build layers — same seed on all ranks so weights are identical
         torch.manual_seed(123)
         layers_cp = []
         layers_nocp = []
@@ -406,17 +307,15 @@ def _worker(
             layers_cp.append(m_cp)
             layers_nocp.append(m_nocp)
 
-        # Set CP config on CP modules
         for m in layers_cp:
             m.parallelism_config.tp_size = cp_size
             m.parallelism_config.tp_rank = rank
 
-        # Same input on all ranks
         torch.manual_seed(42)
         full_hidden = torch.randn(total_tokens, hidden_size, device=device, dtype=dtype)
 
         # ==============================================================
-        # 1. Non-CP reference (chain through all layers)
+        # 1. Non-CP reference
         # ==============================================================
         nocp_inputs = _build_nocp_attn_inputs(
             sequence_lengths, tokens_per_block, device
@@ -449,7 +348,7 @@ def _worker(
         ref_output = ref_h
 
         # ==============================================================
-        # 2. CP path (chain through all layers, real NCCL)
+        # 2. CP path (real NCCL)
         # ==============================================================
         all_rank_pos = compute_rank_positions(sequence_lengths, cp_size)
         rank_positions = all_rank_pos[rank]
@@ -462,6 +361,10 @@ def _worker(
             cp_size,
             tokens_per_block,
             device=device,
+        )
+        # cp_test_utils doesn't set kv_cache_kernel_block_id_device
+        cp_attn_inputs.kv_cache_kernel_block_id_device = (
+            cp_attn_inputs.kv_cache_block_id_device
         )
         cp_attn_inputs = _add_device_tensors(cp_attn_inputs, device)
 
@@ -495,50 +398,117 @@ def _worker(
         cp_output = cp_h
 
         # ==============================================================
-        # 3. Compare
+        # 3. Compare output
         # ==============================================================
         ref_local = ref_output[rank_idx]
+        output_ok = torch.allclose(
+            cp_output.float(), ref_local.float(), rtol=1e-2, atol=1e-2
+        )
         diff = (cp_output.float() - ref_local.float()).abs()
         max_diff = diff.max().item()
         mean_diff = diff.mean().item()
-        passed = torch.allclose(
-            cp_output.float(), ref_local.float(), rtol=1e-2, atol=1e-2
+
+        # ==============================================================
+        # 4. Verify full_h and global_final (patch to capture args)
+        # ==============================================================
+        from unittest.mock import patch as mock_patch
+
+        captured_nocp = []
+        captured_cp = []
+
+        original_store = store_ssm_state_to_block_map
+
+        def _capture_nocp(h, final_states, *args, **kwargs):
+            captured_nocp.append((h.clone(), final_states.clone()))
+            return original_store(h, final_states, *args, **kwargs)
+
+        def _capture_cp(h, final_states, *args, **kwargs):
+            captured_cp.append((h.clone(), final_states.clone()))
+            return original_store(h, final_states, *args, **kwargs)
+
+        STORE_PATH = (
+            "rtp_llm.models_py.model_desc.qwen3_next.store_ssm_state_to_block_map"
         )
 
-        # Debug prints
-        logging.info(
-            f"  rank {rank}: cp_output shape={cp_output.shape} "
-            f"ref_local shape={ref_local.shape}"
-        )
-        logging.info(
-            f"  rank {rank}: cp_output norm={cp_output.float().norm().item():.4f} "
-            f"ref_local norm={ref_local.float().norm().item():.4f}"
-        )
-        logging.info(f"  rank {rank}: cp_output[:5,0]={cp_output[:5,0].tolist()}")
-        logging.info(f"  rank {rank}: ref_local[:5,0]={ref_local[:5,0].tolist()}")
-        # Find worst token
-        per_token_diff = diff.mean(dim=-1)
-        worst_token = per_token_diff.argmax().item()
-        logging.info(
-            f"  rank {rank}: worst token idx={worst_token} "
-            f"diff={per_token_diff[worst_token].item():.6f} "
-            f"cp={cp_output[worst_token,:4].tolist()} "
-            f"ref={ref_local[worst_token,:4].tolist()}"
-        )
+        with torch.no_grad(), _noop_write_cache_store():
+            ref_h2 = full_hidden
+            for layer in layers_nocp:
+                kv = MockLayerKVCache(
+                    allocate_kv_cache(
+                        sequence_lengths,
+                        tokens_per_block,
+                        num_v_heads,
+                        head_v_dim,
+                        head_k_dim,
+                        conv_kernel_dim,
+                        qkv_dim,
+                        dtype,
+                        device,
+                    ),
+                    tokens_per_block,
+                )
+                with mock_patch(STORE_PATH, side_effect=_capture_nocp):
+                    ref_h2 = layer(ref_h2, None, kv, nocp_inputs, nocp_meta)
+
+        with torch.no_grad(), _noop_write_cache_store():
+            cp_h2 = local_hidden
+            for layer in layers_cp:
+                kv = MockLayerKVCache(
+                    allocate_kv_cache(
+                        sequence_lengths,
+                        tokens_per_block,
+                        num_v_heads,
+                        head_v_dim,
+                        head_k_dim,
+                        conv_kernel_dim,
+                        qkv_dim,
+                        dtype,
+                        device,
+                    ),
+                    tokens_per_block,
+                )
+                with mock_patch(STORE_PATH, side_effect=_capture_cp):
+                    cp_h2 = layer(cp_h2, None, kv, cp_attn_inputs, cp_meta)
+
+        ssm_ok = True
+        ssm_max_diff = 0.0
+        for layer_idx in range(num_layers):
+            nocp_h, nocp_fs = captured_nocp[layer_idx]
+            cp_full_h, cp_global_fs = captured_cp[layer_idx]
+
+            h_diff_val = (cp_full_h.float() - nocp_h.float()).abs().max().item()
+            fs_diff_val = (cp_global_fs.float() - nocp_fs.float()).abs().max().item()
+            ssm_max_diff = max(ssm_max_diff, h_diff_val, fs_diff_val)
+
+            logging.info(
+                f"  rank {rank} layer {layer_idx}: "
+                f"full_h cp={cp_full_h.shape} nocp={nocp_h.shape} "
+                f"h_diff={h_diff_val:.6f} fs_diff={fs_diff_val:.6f}"
+            )
+
+            if not (
+                torch.allclose(cp_full_h.float(), nocp_h.float(), rtol=1e-2, atol=1e-2)
+                and torch.allclose(
+                    cp_global_fs.float(), nocp_fs.float(), rtol=1e-2, atol=1e-2
+                )
+            ):
+                ssm_ok = False
+
+        passed = output_ok and ssm_ok
 
         dist.barrier()
         logging.info(
             f"  rank {rank}: max_diff={max_diff:.6f} mean_diff={mean_diff:.6f} "
-            f"{'PASS' if passed else 'FAIL'}"
+            f"ssm_max={ssm_max_diff:.6f} {'PASS' if passed else 'FAIL'}"
         )
-
         dist.barrier()
         torch.cuda.synchronize()
         dist.destroy_process_group()
 
-        assert (
-            passed
-        ), f"rank {rank} failed: max_diff={max_diff:.6f} mean_diff={mean_diff:.6f}"
+        assert passed, (
+            f"rank {rank} failed: max_diff={max_diff:.6f} mean_diff={mean_diff:.6f} "
+            f"ssm_max={ssm_max_diff:.6f}"
+        )
 
     except Exception as e:
         print(f"Rank {rank} error: {e}")
@@ -640,7 +610,7 @@ class TestGDNCPPrefillOutput(unittest.TestCase):
     def test_multi_layer_multi_batch(self):
         self._run_test(cp_size=GPU_COUNT, sequence_lengths=[256, 512], num_layers=4)
 
-    # --- Larger sequence (matches original test) ---
+    # --- Larger sequence ---
 
     def test_single_layer_64k(self):
         self._run_test(cp_size=GPU_COUNT, sequence_lengths=[64 * 1024], num_layers=1)
