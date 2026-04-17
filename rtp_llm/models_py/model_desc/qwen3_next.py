@@ -660,12 +660,92 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         cp_group = _get_group(Group.TP)
         scale = gdn.head_k_dim**-0.5
 
-        # Per-sequence contiguous split
-        full_lengths = full_cu[1:] - full_cu[:-1]  # [batch]
-        assert (
-            full_lengths % cp_size == 0
-        ).all(), f"All sequence lengths must be divisible by cp_size={cp_size}, got {full_lengths.tolist()}"
-        local_lengths = full_lengths // cp_size
+        # Pad to cp_size * chunk_size multiples so each rank gets chunk-aligned tokens.
+        # This avoids internal padding in CP scan producing garbage h chunks.
+        chunk_size = 64
+        align = cp_size * chunk_size
+        orig_full_lengths = full_cu[1:] - full_cu[:-1]  # [batch]
+        orig_full_cu = full_cu
+        padded_lengths = ((orig_full_lengths + align - 1) // align) * align
+        pad_amounts = padded_lengths - orig_full_lengths
+
+        # Pad q/k/v with zeros, g with 0, beta with 0 (neutral: exp(0)=1, beta=0 → h unchanged)
+        if pad_amounts.any():
+            pad_pieces_q = []
+            pad_pieces_k = []
+            pad_pieces_v = []
+            pad_pieces_g = []
+            pad_pieces_beta = []
+            for seq_b in range(context_batch_size):
+                seq_start = full_cu[seq_b].item()
+                seq_end = full_cu[seq_b + 1].item()
+                pad_pieces_q.append(query[:, seq_start:seq_end])
+                pad_pieces_k.append(key[:, seq_start:seq_end])
+                pad_pieces_v.append(value[:, seq_start:seq_end])
+                pad_pieces_g.append(g[:, seq_start:seq_end])
+                pad_pieces_beta.append(beta[:, seq_start:seq_end])
+                p = pad_amounts[seq_b].item()
+                if p > 0:
+                    pad_pieces_q.append(
+                        torch.zeros(
+                            1,
+                            p,
+                            query.shape[2],
+                            query.shape[3],
+                            device=query.device,
+                            dtype=query.dtype,
+                        )
+                    )
+                    pad_pieces_k.append(
+                        torch.zeros(
+                            1,
+                            p,
+                            key.shape[2],
+                            key.shape[3],
+                            device=key.device,
+                            dtype=key.dtype,
+                        )
+                    )
+                    pad_pieces_v.append(
+                        torch.zeros(
+                            1,
+                            p,
+                            value.shape[2],
+                            value.shape[3],
+                            device=value.device,
+                            dtype=value.dtype,
+                        )
+                    )
+                    pad_pieces_g.append(
+                        torch.zeros(
+                            1,
+                            p,
+                            g.shape[2],
+                            device=g.device,
+                            dtype=g.dtype,
+                        )
+                    )
+                    pad_pieces_beta.append(
+                        torch.zeros(
+                            1,
+                            p,
+                            beta.shape[2],
+                            device=beta.device,
+                            dtype=beta.dtype,
+                        )
+                    )
+            query = torch.cat(pad_pieces_q, dim=1).contiguous()
+            key = torch.cat(pad_pieces_k, dim=1).contiguous()
+            value = torch.cat(pad_pieces_v, dim=1).contiguous()
+            g = torch.cat(pad_pieces_g, dim=1).contiguous()
+            beta = torch.cat(pad_pieces_beta, dim=1).contiguous()
+
+            full_cu = torch.zeros(
+                context_batch_size + 1, dtype=full_cu.dtype, device=full_cu.device
+            )
+            full_cu[1:] = padded_lengths.cumsum(0)
+
+        local_lengths = padded_lengths // cp_size
 
         # Extract this rank's contiguous slice from each sequence and pack
         local_slices = []
@@ -689,6 +769,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         local_cu[1:] = local_lengths.cumsum(0)
 
         # Single call with cu_seqlens
+        # print(f"local_g shape: {local_g.shape}, local_cu: {local_cu}, dtype: {local_g.dtype}")
         o, h, final_state = chunk_gated_delta_rule_fwd_cp_scan(
             q=local_q,
             k=local_k,
@@ -731,7 +812,20 @@ class Qwen3NextGatedDeltaNet(nn.Module):
                 src = r * local_total + src_base
                 reordered[dst + r * ll : dst + (r + 1) * ll] = full_flat[src : src + ll]
 
-        full_attn_out = reordered.view(-1, *out_shape_tail)  # [total_tokens, H, V]
+        full_attn_out = reordered.view(
+            -1, *out_shape_tail
+        )  # [total_padded_tokens, H, V]
+
+        # Strip padding tokens to restore original sequence lengths
+        if pad_amounts.any():
+            real_pieces = []
+            for seq_b in range(context_batch_size):
+                padded_start = full_cu[seq_b].item()
+                orig_len = orig_full_lengths[seq_b].item()
+                real_pieces.append(
+                    full_attn_out[padded_start : padded_start + orig_len]
+                )
+            full_attn_out = torch.cat(real_pieces, dim=0)
 
         if ssm_states is not None:
             # h shape: [1, local_NT, H, K, V]
@@ -739,14 +833,10 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             # all_gather along dim 0 → gathered_h: [cp_size, local_NT, H, K, V]
             gathered_h = all_gather(h.contiguous(), group=Group.TP)
             # The last rank holds the true global final state.
-            # all_final = all_gather(final_state.contiguous(), group=Group.TP)
-            # global_final = all_final[
-            #     (cp_size - 1) * context_batch_size : cp_size * context_batch_size
-            # ]
-            from rtp_llm.models_py.distributed.collective_torch import broadcast
-
-            global_final = final_state.contiguous()
-            broadcast(global_final, src=cp_size - 1, group=Group.TP)
+            all_final = all_gather(final_state.contiguous(), group=Group.TP)
+            global_final = all_final[
+                (cp_size - 1) * context_batch_size : cp_size * context_batch_size
+            ]
 
             # Reorder gathered_h from [cp_size, local_NT, H, K, V]
             # to [1, full_NT, H, K, V] in global chunk order.
@@ -754,7 +844,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             # laid out as [seq0_c0..cn, seq1_c0..cn, ...].
             local_NT = h.shape[1]
             chunk_tail = h.shape[2:]  # (H, K, V)
-            chunk_size = 64
             local_chunks_per_seq = local_lengths // chunk_size
             local_chunk_offsets = torch.zeros(
                 context_batch_size + 1, dtype=torch.long, device=h.device
@@ -774,11 +863,26 @@ class Qwen3NextGatedDeltaNet(nn.Module):
                         r, src_base : src_base + lc
                     ]
 
+            # Strip padding chunks from full_h if sequences were padded
+            if pad_amounts.any():
+                orig_chunks_per_seq = (orig_full_lengths + chunk_size - 1) // chunk_size
+                padded_chunks_per_seq = padded_lengths // chunk_size
+                real_h_pieces = []
+                padded_chunk_offset = 0
+                for seq_b in range(context_batch_size):
+                    oc = orig_chunks_per_seq[seq_b].item()
+                    pc = padded_chunks_per_seq[seq_b].item()
+                    real_h_pieces.append(
+                        full_h[0, padded_chunk_offset : padded_chunk_offset + oc]
+                    )
+                    padded_chunk_offset += pc
+                full_h = torch.cat(real_h_pieces, dim=0).unsqueeze(0)
+
             store_ssm_state_to_block_map(
                 full_h,
                 global_final,
                 attention_inputs.prefix_lengths_d,
-                full_cu,
+                orig_full_cu,
                 attention_inputs.kv_cache_kernel_block_id_device,
                 ssm_states,
                 seq_size_per_block,

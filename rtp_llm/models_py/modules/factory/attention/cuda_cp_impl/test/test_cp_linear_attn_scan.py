@@ -5,7 +5,7 @@ Verifies that CP prefill output matches single-GPU non-CP reference (per-token).
 Uses real NCCL communication via multiprocessing.Process.
 
 Run with:
-  bazel test //rtp_llm/models_py/modules/factory/attention/cuda_cp_impl/test:test_cp_linear_attn_scan
+  bazelisk test //rtp_llm/models_py/modules/factory/attention/cuda_cp_impl/test:test_cp_linear_attn_scan
 """
 
 import logging
@@ -614,6 +614,12 @@ class TestGDNCPPrefillOutput(unittest.TestCase):
 
     def test_single_layer_64k(self):
         self._run_test(cp_size=GPU_COUNT, sequence_lengths=[64 * 1024], num_layers=1)
+
+    def test_single_layer_unaligned(self):
+        self._run_test(cp_size=2, sequence_lengths=[200], num_layers=1)
+
+    def test_single_layer_unaligned_multi_batch(self):
+        self._run_test(cp_size=2, sequence_lengths=[200, 392], num_layers=1)
 
 
 if __name__ == "__main__":
