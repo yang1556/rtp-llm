@@ -472,10 +472,10 @@ def chunk_gated_delta_rule_fwd_cp_scan(
     v: torch.Tensor,
     g: torch.Tensor,
     beta: torch.Tensor,
-    scale: float,
     initial_state: Optional[torch.Tensor],
     output_final_state: bool,
     cp_group: dist.ProcessGroup,
+    scale: Optional[float] = None,
     use_qk_l2norm_in_kernel: bool = False,
     cu_seqlens: Optional[torch.LongTensor] = None,
 ):
@@ -493,6 +493,9 @@ def chunk_gated_delta_rule_fwd_cp_scan(
     if use_qk_l2norm_in_kernel:
         q = l2norm_fwd(q)
         k = l2norm_fwd(k)
+
+    if scale is None:
+        scale = k.shape[-1] ** -0.5
 
     # ---- Step 1-4 (all parallel) ----
     g = chunk_local_cumsum(g, chunk_size=64, cu_seqlens=cu_seqlens)
