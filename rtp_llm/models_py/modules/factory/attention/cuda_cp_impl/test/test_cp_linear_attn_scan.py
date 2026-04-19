@@ -184,7 +184,10 @@ def _build_cp_metadata(
     cp_attn_inputs,
     device: torch.device,
 ):
-    from rtp_llm.models_py.model_desc.qwen3_next import Qwen3NextMetadata
+    from rtp_llm.models_py.model_desc.qwen3_next import (
+        CpChunkAlignInfo,
+        Qwen3NextMetadata,
+    )
 
     batch_size = len(sequence_lengths)
     cp_info = cp_attn_inputs.context_parallel_info
@@ -211,12 +214,20 @@ def _build_cp_metadata(
         query_start_loc=full_cu, device=device
     )
 
+    chunk_align_info = CpChunkAlignInfo.build(
+        full_cu=full_cu,
+        cp_size=cp_size,
+        cp_rank=cp_rank,
+        device=device,
+    )
+
     return Qwen3NextMetadata(
         full_prefill_conv1d_meta=full_conv_meta,
         full_prefill_cu_seqlens=full_cu,
         cp_restore_indices=restore_indices,
         cp_local_extract_indices=cp_local_extract_idx,
         cp_local_valid_mask=cp_local_valid_mask,
+        cp_chunk_align_info=chunk_align_info,
     )
 
 
