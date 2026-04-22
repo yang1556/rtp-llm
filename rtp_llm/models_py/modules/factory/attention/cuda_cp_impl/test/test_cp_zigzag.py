@@ -63,6 +63,7 @@ def compute_rank_positions(
 
 
 def build_restore_indices(cp_chunk_lengths: List[int], cp_size: int) -> torch.Tensor:
+    """Restore indices to map all-gathered (padded) zigzag layout back to padded sequential."""
     batch_size = len(cp_chunk_lengths)
     ag_positions = []
     for rank in range(cp_size):
@@ -79,8 +80,42 @@ def build_restore_indices(cp_chunk_lengths: List[int], cp_size: int) -> torch.Te
     return torch.tensor(restore, dtype=torch.int32)
 
 
-def build_padding_mask(cp_chunk_lengths: List[int], cp_size: int) -> torch.Tensor:
-    return torch.ones(sum(cp_chunk_lengths) * cp_size, dtype=torch.int32)
+def build_padding_mask(
+    orig_seq_lengths: List[int], cp_chunk_lengths: List[int], cp_size: int
+) -> torch.Tensor:
+    """Mark padding tokens as 0 in the padded sequential layout (concat of all sequences)."""
+    parts = []
+    for orig_sl, chunk_len in zip(orig_seq_lengths, cp_chunk_lengths):
+        padded_sl = chunk_len * cp_size
+        seq_mask = torch.zeros(padded_sl, dtype=torch.int32)
+        seq_mask[:orig_sl] = 1
+        parts.append(seq_mask)
+    return torch.cat(parts)
+
+
+def compute_real_local_info(
+    orig_seq_lengths: List[int], cp_chunk_lengths: List[int], cp_size: int, rank: int
+):
+    """For one rank, return (real_local_indices, ref_orig_positions):
+    real_local_indices[i] = local index in this rank's cp_output that is a real token
+    ref_orig_positions[i] = corresponding position in the original concatenated sequence
+    """
+    real_local = []
+    ref_pos = []
+    local_offset = 0
+    orig_offset = 0
+    for orig_sl, chunk_len in zip(orig_seq_lengths, cp_chunk_lengths):
+        padded_sl = chunk_len * cp_size
+        padded_positions = zigzag_positions_for_rank(padded_sl, cp_size, rank)
+        for li, ppos in enumerate(padded_positions):
+            if ppos < orig_sl:
+                real_local.append(local_offset + li)
+                ref_pos.append(orig_offset + ppos)
+        local_offset += chunk_len
+        orig_offset += orig_sl
+    return torch.tensor(real_local, dtype=torch.long), torch.tensor(
+        ref_pos, dtype=torch.long
+    )
 
 
 class _AttnInputsWrapper:
@@ -129,6 +164,8 @@ def build_cp_attn_inputs(
     prefix_lengths=None,
     device=torch.device("cuda"),
 ):
+    """sequence_lengths: ORIGINAL un-padded lengths.
+    cp_chunk_lengths: PADDED chunk lengths per rank (== padded_seq_len // cp_size)."""
     batch_size = len(cp_chunk_lengths)
     if prefix_lengths is None:
         prefix_lengths = [0] * batch_size
@@ -162,13 +199,20 @@ def build_cp_attn_inputs(
     inp.dtype = get_typemeta(torch.zeros(1, dtype=torch.bfloat16))
     inp.cache_store_inputs = None
 
+    # padding_lengths[b] = padded - orig
+    padding_lengths = [
+        chunk_len * cp_size - sl
+        for sl, chunk_len in zip(sequence_lengths, cp_chunk_lengths)
+    ]
     new_lengths = [sl - pl for sl, pl in zip(sequence_lengths, prefix_lengths)]
     cp_info = PyContextParallelParams()
     cp_info.prefill_cp_chunk_lengths = torch.tensor(cp_chunk_lengths, dtype=torch.int32)
-    cp_info.prefill_cp_padding_lengths = torch.zeros(batch_size, dtype=torch.int32)
-    cp_info.prefill_qkv_padding_mask = build_padding_mask(cp_chunk_lengths, cp_size).to(
-        device
+    cp_info.prefill_cp_padding_lengths = torch.tensor(
+        padding_lengths, dtype=torch.int32
     )
+    cp_info.prefill_qkv_padding_mask = build_padding_mask(
+        sequence_lengths, cp_chunk_lengths, cp_size
+    ).to(device)
     cp_info.prefill_qkv_restore_indice = build_restore_indices(
         cp_chunk_lengths, cp_size
     ).to(device)
@@ -267,20 +311,25 @@ def run_test():
     from rtp_llm.utils.model_weight import W
 
     cp_size = world_size
-    num_k_heads = 16
-    num_v_heads = 32
-    head_k_dim = 128
-    head_v_dim = 128
+    num_k_heads = 4
+    num_v_heads = 4
+    head_k_dim = 64
+    head_v_dim = 64
     hidden_size = num_v_heads * head_v_dim
     conv_kernel_dim = 4
-    tokens_per_block = 16
+    tokens_per_block = 128
     num_layers = 2
     dtype = torch.bfloat16
 
     test_cases = [
-        # ([512], "single_512"),
-        # ([1024], "single_1024"),
-        ([64 * 1024], "batch_64k"),
+        ([512], "single_512"),
+        ([1024], "single_1024"),
+        ([512, 1024], "batch_512_1024"),
+        ([260], "single_260_not_chunk_aligned"),
+        ([260, 520], "batch_260_520"),
+        # Plan A coverage: very short input padded heavily (12 → 256 per seq).
+        ([12], "single_12_heavy_pad"),
+        ([12, 260], "batch_12_260_mixed_pad"),
     ]
 
     torch.manual_seed(123)
@@ -362,15 +411,36 @@ def run_test():
 
     for seq_lengths, tag in test_cases:
         torch.manual_seed(42)
+        # Plan A: pad each sequence to (cp_size * 2 * chunk_size) so each rank's
+        # half-segment is a chunk_size multiple. The original input only needs
+        # to be a multiple of (cp_size * 2) so zigzag pairing works on the input
+        # length itself (the linear-attn-aware pad happens here).
         assert all(
-            sl % (cp_size * 2 * 64) == 0 for sl in seq_lengths
-        ), f"Seq lengths must be divisible by {cp_size * 2 * 64}"
+            sl % (cp_size * 2) == 0 for sl in seq_lengths
+        ), f"Seq lengths must be divisible by {cp_size * 2}"
+
+        chunk_size = 64
+        align = cp_size * 2 * chunk_size
+        padded_seq_lengths = [((sl + align - 1) // align) * align for sl in seq_lengths]
 
         batch_size = len(seq_lengths)
         total_tokens = sum(seq_lengths)
-        cp_chunk_lengths = [sl // cp_size for sl in seq_lengths]
+        total_padded_tokens = sum(padded_seq_lengths)
+        cp_chunk_lengths = [psl // cp_size for psl in padded_seq_lengths]
 
         full_hidden = torch.randn(total_tokens, hidden_size, device=device, dtype=dtype)
+        # Build padded full hidden for the CP path (zeros at pad positions).
+        padded_full_hidden = torch.zeros(
+            total_padded_tokens, hidden_size, device=device, dtype=dtype
+        )
+        src_off = 0
+        dst_off = 0
+        for sl, psl in zip(seq_lengths, padded_seq_lengths):
+            padded_full_hidden[dst_off : dst_off + sl] = full_hidden[
+                src_off : src_off + sl
+            ]
+            src_off += sl
+            dst_off += psl
 
         # ---- Non-CP reference ----
         nocp_inputs = build_nocp_attn_inputs(seq_lengths, tokens_per_block, device)
@@ -485,10 +555,19 @@ def run_test():
         ref_output = ref_hidden
 
         # ---- CP zigzag path ----
-        all_rank_pos = compute_rank_positions(seq_lengths, cp_size)
+        # Plan A: zigzag is over PADDED layout, extract from padded_full_hidden.
+        all_rank_pos = compute_rank_positions(padded_seq_lengths, cp_size)
         rank_positions = all_rank_pos[rank]
         rank_idx = torch.tensor(rank_positions, device=device)
-        local_hidden = full_hidden[rank_idx].contiguous()
+        local_hidden = padded_full_hidden[rank_idx].contiguous()
+
+        # Indices for comparing CP output (per-rank padded local) with reference
+        # (orig length, full sequence). Only check positions that are real tokens.
+        real_local_idx, ref_orig_pos = compute_real_local_info(
+            seq_lengths, cp_chunk_lengths, cp_size, rank
+        )
+        real_local_idx = real_local_idx.to(device)
+        ref_orig_pos = ref_orig_pos.to(device)
 
         cp_attn_inputs = build_cp_attn_inputs(
             seq_lengths,
@@ -637,10 +716,14 @@ def run_test():
             )
 
         # ---- Verify output ----
-        ref_local = ref_output[rank_idx]
-        out_diff = (cp_output.float() - ref_local.float()).abs()
-        out_max_diff = out_diff.max().item()
-        out_mean_diff = out_diff.mean().item()
+        # Only compare real tokens: cp_output is per-rank padded local, ref_output
+        # is full orig sequence. real_local_idx selects the real-token rows from
+        # cp_output, ref_orig_pos picks the matching positions in ref_output.
+        cp_real = cp_output[real_local_idx]
+        ref_real = ref_output[ref_orig_pos]
+        out_diff = (cp_real.float() - ref_real.float()).abs()
+        out_max_diff = out_diff.max().item() if out_diff.numel() > 0 else 0.0
+        out_mean_diff = out_diff.mean().item() if out_diff.numel() > 0 else 0.0
         output_ok = out_max_diff < 1e-1
 
         # ---- Verify SSM states ----
@@ -648,7 +731,6 @@ def run_test():
         ssm_max_diff = 0.0
         ssm_blocks_checked = 0
         block_ids_host = nocp_inputs.kv_cache_kernel_block_id_host
-        chunk_size = 64
 
         for layer_idx in range(num_layers):
             ref_kv_flat = nocp_kv_list[layer_idx].kv_cache_base.reshape(

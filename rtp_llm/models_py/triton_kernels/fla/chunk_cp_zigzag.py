@@ -60,21 +60,23 @@ def exchange_conv_context(
     dim = local_qkv.shape[0]
     device = local_qkv.device
 
-    seg0_tail = torch.empty(
+    seg0_tail = torch.zeros(
         dim, ctx_len * batch_size, device=device, dtype=local_qkv.dtype
     )
-    seg1_tail = torch.empty(
+    seg1_tail = torch.zeros(
         dim, ctx_len * batch_size, device=device, dtype=local_qkv.dtype
     )
     for b in range(batch_size):
         s = cu_seqlens_cpu[b]
         h = half_lengths_cpu[b]
-        seg0_tail[:, b * ctx_len : (b + 1) * ctx_len] = local_qkv[
-            :, s + h - ctx_len : s + h
-        ]
-        seg1_tail[:, b * ctx_len : (b + 1) * ctx_len] = local_qkv[
-            :, s + 2 * h - ctx_len : s + 2 * h
-        ]
+        n = min(h, ctx_len)
+        if n > 0:
+            seg0_tail[:, b * ctx_len + ctx_len - n : (b + 1) * ctx_len] = local_qkv[
+                :, s + h - n : s + h
+            ]
+            seg1_tail[:, b * ctx_len + ctx_len - n : (b + 1) * ctx_len] = local_qkv[
+                :, s + 2 * h - n : s + 2 * h
+            ]
 
     assert cp_size == 2, "Only cp_size=2 supported for now"
 
