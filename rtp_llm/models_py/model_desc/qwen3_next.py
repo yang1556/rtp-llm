@@ -37,6 +37,7 @@ from rtp_llm.models_py.triton_kernels.causal_conv1d import (
 from rtp_llm.models_py.triton_kernels.common.layernorm_gated import RmsNormGated
 from rtp_llm.models_py.triton_kernels.fla.block import (
     load_initial_state_from_block_map,
+    store_conv_state_to_block_map,
     store_ssm_state_to_block_map,
 )
 from rtp_llm.models_py.triton_kernels.fla.chunk import chunk_gated_delta_rule
@@ -72,7 +73,14 @@ from rtp_llm.utils.util import to_torch_dtype
 
 
 class CpChunkAlignInfo(object):
-    """Precomputed indices for chunk-aligned padding/reorder in CP linear attention."""
+    """Precomputed indices for chunk-aligned padding/reorder in CP linear attention.
+
+    Plan A: align padded sequence to (cp_size * 2 * chunk_size) so that each rank's
+    half-segment is a chunk_size multiple — segment-internal chunk boundaries then
+    coincide with full-sequence chunk boundaries, making h states reusable for
+    SSM cache writes. Padding tokens must be made identity-preserving in the
+    GDN recurrence (see _forward_cp_prefill mask application).
+    """
 
     def __init__(
         self,
@@ -89,6 +97,10 @@ class CpChunkAlignInfo(object):
         causal_order: Optional[torch.Tensor] = None,
         local_cu_cpu: Optional[list] = None,
         half_lengths_cpu: Optional[list] = None,
+        orig_full_cu_cpu: Optional[list] = None,
+        padded_full_lengths_cpu: Optional[list] = None,
+        orig_full_lengths_cpu: Optional[list] = None,
+        local_padding_mask: Optional[torch.Tensor] = None,
     ):
         self.need_pad = need_pad
         self.orig_full_cu = orig_full_cu
@@ -103,6 +115,12 @@ class CpChunkAlignInfo(object):
         self.causal_order = causal_order
         self.local_cu_cpu = local_cu_cpu
         self.half_lengths_cpu = half_lengths_cpu
+        self.orig_full_cu_cpu = orig_full_cu_cpu
+        self.padded_full_lengths_cpu = padded_full_lengths_cpu
+        self.orig_full_lengths_cpu = orig_full_lengths_cpu
+        # local_padding_mask: [local_total] int/bool tensor, 1 = real token, 0 = pad.
+        # None when need_pad is False.
+        self.local_padding_mask = local_padding_mask
 
     @classmethod
     def build(
@@ -118,7 +136,10 @@ class CpChunkAlignInfo(object):
         )
 
         batch_size = full_cu.shape[0] - 1
-        align = cp_size * chunk_size
+        # Align to cp_size * 2 * chunk_size so per-rank halves are chunk_size
+        # multiples; this lets segment-internal h states land on full-sequence
+        # chunk boundaries (required for SSM cache writes via store_ssm_state_to_block_map).
+        align = cp_size * 2 * chunk_size
         orig_full_lengths = full_cu[1:] - full_cu[:-1]
         orig_full_cu = full_cu.clone()
         padded_lengths = ((orig_full_lengths + align - 1) // align) * align
@@ -184,6 +205,29 @@ class CpChunkAlignInfo(object):
 
         local_cu_cpu = local_cu.tolist()
         half_lengths_cpu = (local_lengths // 2).tolist()
+        orig_full_cu_cpu = orig_full_cu.tolist()
+        padded_full_lengths_cpu = padded_lengths.tolist()
+        orig_full_lengths_cpu = orig_full_lengths.tolist()
+
+        # Build per-rank local padding mask. For each sequence b:
+        #   seg0 occupies padded positions [cp_rank * half, (cp_rank+1) * half)
+        #   seg1 occupies padded positions [padded_len - (cp_rank+1)*half,
+        #                                   padded_len - cp_rank * half)
+        # A padded position p is a real token iff p < orig_seq_len[b].
+        local_padding_mask = None
+        if need_pad:
+            mask_chunks = []
+            for b in range(batch_size):
+                orig_sl = orig_full_lengths_cpu[b]
+                padded_sl = padded_full_lengths_cpu[b]
+                half = half_lengths_cpu[b]
+                seg0_start = cp_rank * half
+                seg1_start = padded_sl - (cp_rank + 1) * half
+                seg0_pos = torch.arange(seg0_start, seg0_start + half, device=device)
+                seg1_pos = torch.arange(seg1_start, seg1_start + half, device=device)
+                mask_chunks.append((seg0_pos < orig_sl).to(torch.int32))
+                mask_chunks.append((seg1_pos < orig_sl).to(torch.int32))
+            local_padding_mask = torch.cat(mask_chunks).contiguous()
 
         return cls(
             need_pad=need_pad,
@@ -199,6 +243,10 @@ class CpChunkAlignInfo(object):
             causal_order=causal_order_t,
             local_cu_cpu=local_cu_cpu,
             half_lengths_cpu=half_lengths_cpu,
+            orig_full_cu_cpu=orig_full_cu_cpu,
+            padded_full_lengths_cpu=padded_full_lengths_cpu,
+            orig_full_lengths_cpu=orig_full_lengths_cpu,
+            local_padding_mask=local_padding_mask,
         )
 
 
@@ -744,6 +792,8 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             cp_group,
             ctx_len=ctx_len,
         )
+        # seg0_ctx is None for rank 0 — kernel reads from block cache via prefix_lengths
+
         padded_qkv, padded_seg_cu, padded_seg_cu_cpu = prepend_conv_context(
             mixed_qkv.transpose(0, 1),
             local_cu_cpu,
@@ -758,17 +808,52 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             attn_meta._cp_conv1d_meta = prepare_causal_conv1d_metadata(
                 query_start_loc=padded_seg_cu.int(), device=mixed_qkv.device
             )
+            attn_meta._cp_padded_seg_cu = padded_seg_cu
+            attn_meta._cp_padded_seg_cu_cpu = padded_seg_cu_cpu
+            attn_meta._cp_padded_batch = padded_batch
+
+            # Build 2*batch prefix_lengths and block_map for conv1d kernel
+            # Only rank 0's seg0 (even indices) needs prefix reading from block cache
+            padded_prefix = torch.zeros(
+                padded_batch, dtype=torch.int32, device=mixed_qkv.device
+            )
+            max_blocks = (
+                attention_inputs.kv_cache_kernel_block_id_device.shape[1]
+                if kv_cache_tensor is not None
+                else 0
+            )
+            padded_block_map = torch.zeros(
+                padded_batch,
+                max(max_blocks, 1),
+                dtype=torch.int32,
+                device=mixed_qkv.device,
+            )
+            if cp_rank == 0 and kv_cache_tensor is not None:
+                padded_prefix[0::2] = attention_inputs.prefix_lengths_d
+                padded_block_map[0::2] = (
+                    attention_inputs.kv_cache_kernel_block_id_device
+                )
+            attn_meta._cp_padded_prefix = padded_prefix
+            attn_meta._cp_padded_block_map = padded_block_map
+        else:
+            padded_seg_cu = attn_meta._cp_padded_seg_cu
+            padded_seg_cu_cpu = attn_meta._cp_padded_seg_cu_cpu
+            padded_batch = attn_meta._cp_padded_batch
+
+        conv_states = (
+            gdn._get_conv_states(kv_cache_tensor).transpose(1, 2)
+            if kv_cache_tensor is not None
+            else None
+        )
         conv_out = causal_conv1d_fn(
             x=padded_qkv,
             weight=gdn.conv_weights,
             bias=None,
-            conv_states=None,
+            conv_states=conv_states,
             query_start_loc=padded_seg_cu.int(),
-            block_map=None,
+            block_map=attn_meta._cp_padded_block_map,
             seq_size_per_block=seq_size_per_block,
-            prefix_lengths=torch.zeros(
-                padded_batch, dtype=torch.int32, device=mixed_qkv.device
-            ),
+            prefix_lengths=attn_meta._cp_padded_prefix,
             metadata=attn_meta._cp_conv1d_meta,
         )
         local_mixed_qkv = strip_conv_context(
@@ -776,15 +861,27 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             local_cu_cpu,
             half_lengths_cpu,
             padded_seg_cu_cpu,
-            seg0_has_ctx=(cp_rank != 0),
+            seg0_has_ctx=(seg0_ctx is not None),
             local_total=chunk_align.local_total,
             ctx_len=ctx_len,
         ).transpose(
             0, 1
         )  # [tokens, dim]
 
+        # Plan A: zero out padded positions so q/k/v don't drive the recurrence.
+        # Conv1d on bias-driven input produces non-zero values at pad positions
+        # even when the upstream embedding/linear bias yields nonzero before conv.
+        local_padding_mask = chunk_align.local_padding_mask
+        if local_padding_mask is not None:
+            local_mixed_qkv = local_mixed_qkv * local_padding_mask.unsqueeze(-1)
+
         # ---- Gating ----
         g, beta = fused_gdn_gating(gdn.alog, a, b, gdn.dt_bias)
+        if local_padding_mask is not None:
+            # g=0 → exp(g)=1 (state preserved); beta=0 → no update contribution.
+            mask_f = local_padding_mask.to(g.dtype)
+            g = g * mask_f.unsqueeze(-1)
+            beta = beta * mask_f.unsqueeze(-1)
 
         # ---- Split q/k/v ----
         query, key, value = torch.split(
@@ -876,6 +973,104 @@ class Qwen3NextGatedDeltaNet(nn.Module):
                 ssm_states,
                 seq_size_per_block,
                 chunk_size=chunk_size,
+            )
+
+        # ---- Conv state writing: write block-boundary QKV to cache ----
+        if kv_cache_tensor is not None:
+            conv_states_cache = gdn._get_conv_states(kv_cache_tensor).transpose(1, 2)
+
+            if not hasattr(attn_meta, "_cp_conv_write_entries"):
+                prefix_lengths_cpu = attention_inputs.prefix_lengths.tolist()
+                block_map_cpu = attention_inputs.kv_cache_kernel_block_id_host.tolist()
+                orig_full_lengths_cpu = (
+                    chunk_align.orig_full_lengths_cpu
+                    if chunk_align.orig_full_lengths_cpu is not None
+                    else [
+                        chunk_align.orig_full_cu_cpu[b + 1]
+                        - chunk_align.orig_full_cu_cpu[b]
+                        for b in range(context_batch_size)
+                    ]
+                )
+                padded_full_lengths_cpu = (
+                    chunk_align.padded_full_lengths_cpu
+                    if chunk_align.padded_full_lengths_cpu is not None
+                    else orig_full_lengths_cpu
+                )
+
+                entries = []
+                for b in range(context_batch_size):
+                    orig_seq_len = orig_full_lengths_cpu[b]
+                    padded_seq_len = padded_full_lengths_cpu[b]
+                    prefix = prefix_lengths_cpu[b]
+                    half = half_lengths_cpu[b]
+                    local_start = local_cu_cpu[b]
+
+                    # Layout uses PADDED sequence length (zigzag mapping is over padded).
+                    seg0_global_start = cp_rank * half
+                    seg1_global_start = padded_seq_len - (cp_rank + 1) * half
+
+                    # "Real" check uses ORIG sequence length: only positions < orig_seq_len
+                    # are real tokens whose conv state is meaningful to cache.
+                    seq_end_global = orig_seq_len - 1
+
+                    for global_start, local_seg_start in [
+                        (seg0_global_start, local_start),
+                        (seg1_global_start, local_start + half),
+                    ]:
+                        global_end = global_start + half - 1
+                        # Restrict the segment range to real tokens only.
+                        real_global_end = min(global_end, seq_end_global)
+                        if global_start > seq_end_global:
+                            # entire segment is padding, no conv state to write
+                            continue
+
+                        first_actual = prefix + global_start
+                        last_actual_real = prefix + real_global_end
+                        first_block_end = (
+                            (first_actual // seq_size_per_block) + 1
+                        ) * seq_size_per_block - 1
+                        for actual_pos in range(
+                            first_block_end, last_actual_real + 1, seq_size_per_block
+                        ):
+                            if actual_pos > last_actual_real:
+                                break
+                            global_pos = actual_pos - prefix
+                            local_pos = local_seg_start + (global_pos - global_start)
+                            block_idx = actual_pos // seq_size_per_block
+                            block_id = block_map_cpu[b][block_idx]
+                            if block_id > 0:
+                                src_start = max(
+                                    local_seg_start, local_pos - ctx_len + 1
+                                )
+                                entries.append([block_id, src_start])
+
+                        if global_start <= seq_end_global <= global_end:
+                            actual_pos = prefix + seq_end_global
+                            local_pos = local_seg_start + (
+                                seq_end_global - global_start
+                            )
+                            block_idx = actual_pos // seq_size_per_block
+                            block_id = block_map_cpu[b][block_idx]
+                            if block_id > 0:
+                                src_start = max(
+                                    local_seg_start, local_pos - ctx_len + 1
+                                )
+                                entries.append([block_id, src_start])
+
+                if entries:
+                    attn_meta._cp_conv_write_entries = torch.tensor(
+                        entries, dtype=torch.int32, device=mixed_qkv.device
+                    )
+                else:
+                    attn_meta._cp_conv_write_entries = torch.empty(
+                        0, 2, dtype=torch.int32, device=mixed_qkv.device
+                    )
+
+            local_qkv_t = mixed_qkv.transpose(0, 1)  # [dim, local_total]
+            store_conv_state_to_block_map(
+                attn_meta._cp_conv_write_entries,
+                local_qkv_t,
+                conv_states_cache,
             )
 
         if kv_cache is not None and attn_meta.cp_write_cache_store_impl is not None:

@@ -217,3 +217,90 @@ def store_ssm_state_to_block_map(
         CONV_STRIDE_TOKEN=token_stride_ssm_state,
         CHUNK_SIZE=chunk_size,
     )
+
+
+@triton.jit
+def store_conv_state_kernel(
+    write_entries,
+    local_qkv,
+    conv_states,
+    num_entries: tl.int32,
+    DIM: tl.constexpr,
+    stride_qkv_dim: tl.constexpr,
+    stride_qkv_token: tl.constexpr,
+    stride_cs_block: tl.constexpr,
+    stride_cs_dim: tl.constexpr,
+    stride_cs_ctx: tl.constexpr,
+    CTX_LEN: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    """Write conv states to block cache for CP zigzag.
+
+    write_entries: [num_entries, 2] — (block_id, source_start_pos)
+    local_qkv: [dim, local_total] channel-first
+    conv_states: [num_blocks, dim, ctx_len] (transposed view)
+    """
+    i_entry = tl.program_id(0)
+    i_d = tl.program_id(1)
+
+    if i_entry >= num_entries:
+        return
+
+    block_id = tl.load(write_entries + i_entry * 2).to(tl.int64)
+    src_start = tl.load(write_entries + i_entry * 2 + 1).to(tl.int64)
+
+    if block_id <= 0:
+        return
+
+    d_offset = i_d * BLOCK_D + tl.arange(0, BLOCK_D)
+    d_mask = d_offset < DIM
+
+    for c in tl.static_range(CTX_LEN):
+        src_ptr = (
+            local_qkv + d_offset * stride_qkv_dim + (src_start + c) * stride_qkv_token
+        )
+        dst_ptr = (
+            conv_states
+            + block_id * stride_cs_block
+            + d_offset * stride_cs_dim
+            + c * stride_cs_ctx
+        )
+        val = tl.load(src_ptr, mask=d_mask, other=0.0)
+        tl.store(dst_ptr, val, mask=d_mask)
+
+
+def store_conv_state_to_block_map(
+    write_entries: torch.Tensor,
+    local_qkv: torch.Tensor,
+    conv_states: torch.Tensor,
+    block_d: int = 128,
+):
+    """Write conv states to block cache using Triton kernel.
+
+    Args:
+        write_entries: [num_entries, 2] int32 tensor — (block_id, source_start_pos)
+        local_qkv: [dim, local_total] channel-first, the original QKV before conv1d
+        conv_states: [num_blocks, dim, ctx_len] the block cache conv state tensor (transposed view)
+    """
+    if write_entries.shape[0] == 0:
+        return
+
+    num_entries = write_entries.shape[0]
+    dim = local_qkv.shape[0]
+    ctx_len = conv_states.shape[2]
+
+    grid = (num_entries, triton.cdiv(dim, block_d))
+    store_conv_state_kernel[grid](
+        write_entries,
+        local_qkv,
+        conv_states,
+        num_entries,
+        DIM=dim,
+        stride_qkv_dim=local_qkv.stride(0),
+        stride_qkv_token=local_qkv.stride(1),
+        stride_cs_block=conv_states.stride(0),
+        stride_cs_dim=conv_states.stride(1),
+        stride_cs_ctx=conv_states.stride(2),
+        CTX_LEN=ctx_len,
+        BLOCK_D=block_d,
+    )
