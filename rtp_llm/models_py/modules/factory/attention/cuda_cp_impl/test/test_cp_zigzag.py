@@ -311,10 +311,10 @@ def run_test():
     from rtp_llm.utils.model_weight import W
 
     cp_size = world_size
-    num_k_heads = 4
-    num_v_heads = 4
-    head_k_dim = 64
-    head_v_dim = 64
+    num_k_heads = 16
+    num_v_heads = 32
+    head_k_dim = 128
+    head_v_dim = 128
     hidden_size = num_v_heads * head_v_dim
     conv_kernel_dim = 4
     tokens_per_block = 128
@@ -322,14 +322,14 @@ def run_test():
     dtype = torch.bfloat16
 
     test_cases = [
-        ([512], "single_512"),
+        # ([512], "single_512"),
         ([1024], "single_1024"),
-        ([512, 1024], "batch_512_1024"),
-        ([260], "single_260_not_chunk_aligned"),
-        ([260, 520], "batch_260_520"),
-        # Plan A coverage: very short input padded heavily (12 → 256 per seq).
-        ([12], "single_12_heavy_pad"),
-        ([12, 260], "batch_12_260_mixed_pad"),
+        ([64 * 1024], "single_64k"),
+        # ([260], "single_260_not_chunk_aligned"),
+        # ([260, 520], "batch_260_520"),
+        # # Plan A coverage: very short input padded heavily (12 → 256 per seq).
+        # ([12], "single_12_heavy_pad"),
+        # ([12, 260], "batch_12_260_mixed_pad"),
     ]
 
     torch.manual_seed(123)

@@ -15,8 +15,9 @@ from typing import Optional, Tuple
 
 import torch
 import torch.distributed as dist
+import triton
+import triton.language as tl
 
-from rtp_llm.models_py.triton_kernels.fla.chunk_cp_ag import cp_merge
 from rtp_llm.models_py.triton_kernels.fla.chunk_cp_scan import (
     compute_br,
     compute_M_total,
@@ -240,6 +241,85 @@ def build_segment_cu_seqlens(cu_seqlens: torch.Tensor) -> torch.Tensor:
         seg_cu[2 * b + 1] = seg_cu[2 * b] + half_lengths[b]
         seg_cu[2 * b + 2] = seg_cu[2 * b + 1] + half_lengths[b]
     return seg_cu
+
+
+@triton.jit(do_not_specialize=["num_ranks"])
+def cp_merge_kernel(
+    h_out,
+    ag_hm,
+    h0,
+    num_ranks,
+    N: tl.constexpr,
+    H: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BV: tl.constexpr,
+    BK: tl.constexpr,
+    HAS_H0: tl.constexpr,
+):
+    i_v, i_nh = tl.program_id(0), tl.program_id(1)
+    i_n = i_nh // H
+    i_h = i_nh % H
+
+    stride_rank = N * H * K * (V + K)
+    ag_base = (i_n * H + i_h) * K * (V + K)
+
+    if HAS_H0:
+        p_h0 = tl.make_block_ptr(
+            h0 + (i_n * H + i_h) * K * V,
+            (K, V),
+            (V, 1),
+            (0, i_v * BV),
+            (BK, BV),
+            (1, 0),
+        )
+        b_h = tl.load(p_h0, boundary_check=(0, 1)).to(tl.float32)
+    else:
+        b_h = tl.zeros([BK, BV], dtype=tl.float32)
+
+    for r in range(num_ranks):
+        base = r * stride_rank + ag_base
+        p_b = tl.make_block_ptr(
+            ag_hm + base, (K, V), (V + K, 1), (0, i_v * BV), (BK, BV), (1, 0)
+        )
+        p_m = tl.make_block_ptr(
+            ag_hm + base + V, (K, K), (V + K, 1), (0, 0), (BK, BK), (1, 0)
+        )
+        b_b = tl.load(p_b, boundary_check=(0, 1)).to(tl.float32)
+        b_m = tl.load(p_m, boundary_check=(0, 1)).to(tl.float32)
+        b_h = tl.dot(b_m, b_h) + b_b
+
+    p_out = tl.make_block_ptr(
+        h_out + (i_n * H + i_h) * K * V, (K, V), (V, 1), (0, i_v * BV), (BK, BV), (1, 0)
+    )
+    tl.store(p_out, b_h.to(p_out.dtype.element_ty), boundary_check=(0, 1))
+
+
+def cp_merge(ag_hm, h0, num_ranks, N, H, K, V):
+    """Triton kernel merge: iterate num_ranks affine transforms on h0."""
+    BK = triton.next_power_of_2(K)
+    BV = 32
+    h_out = torch.empty(N, H, K, V, dtype=torch.float32, device=ag_hm.device)
+
+    def grid(meta):
+        return (triton.cdiv(V, meta["BV"]), N * H)
+
+    cp_merge_kernel[grid](
+        h_out=h_out,
+        ag_hm=ag_hm,
+        h0=h0,
+        num_ranks=num_ranks,
+        N=N,
+        H=H,
+        K=K,
+        V=V,
+        BV=BV,
+        BK=BK,
+        HAS_H0=h0 is not None,
+        num_warps=4,
+        num_stages=2,
+    )
+    return h_out
 
 
 def _compute_both_segments(k, v, beta, g, cu_seqlens, seg_cu=None):
