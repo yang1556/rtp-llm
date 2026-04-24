@@ -10,8 +10,6 @@ Layout: each rank holds two halves (seg0 + seg1) per sequence:
   - seg1 sits at causal position = 2*cp_size-1-rank
          (physical [seq_len-(rank+1)*half, seq_len-rank*half))
 
-Run with:
-  bazel test //rtp_llm/models_py/triton_kernels/fla/test:test_chunk_cp_zigzag_ut
 """
 
 import logging

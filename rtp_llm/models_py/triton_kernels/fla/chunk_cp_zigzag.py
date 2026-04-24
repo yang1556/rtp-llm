@@ -246,9 +246,10 @@ def build_segment_cu_seqlens(cu_seqlens: torch.Tensor) -> torch.Tensor:
 @triton.jit(do_not_specialize=["num_ranks"])
 def cp_merge_kernel(
     h_out,
-    ag_hm,
+    ag_hm,  # all-gather raw layout (NCCL order, NOT reordered)
     h0,
-    num_ranks,
+    causal_order_ptr,  # [2*cp_size] int tensor: causal_pos -> ag_hm row
+    num_ranks,  # number of affines to apply (causal positions 0..num_ranks-1)
     N: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
@@ -278,7 +279,10 @@ def cp_merge_kernel(
         b_h = tl.zeros([BK, BV], dtype=tl.float32)
 
     for r in range(num_ranks):
-        base = r * stride_rank + ag_base
+        # Look up actual ag_hm row for causal position r — avoids materializing
+        # a reordered copy of the gathered buffer (which is huge for large N).
+        r_actual = tl.load(causal_order_ptr + r).to(tl.int64)
+        base = r_actual * stride_rank + ag_base
         p_b = tl.make_block_ptr(
             ag_hm + base, (K, V), (V + K, 1), (0, i_v * BV), (BK, BV), (1, 0)
         )
@@ -295,8 +299,15 @@ def cp_merge_kernel(
     tl.store(p_out, b_h.to(p_out.dtype.element_ty), boundary_check=(0, 1))
 
 
-def cp_merge(ag_hm, h0, num_ranks, N, H, K, V):
-    """Triton kernel merge: iterate num_ranks affine transforms on h0."""
+def cp_merge(ag_hm, h0, num_ranks, N, H, K, V, causal_order):
+    """Triton kernel merge: iterate `num_ranks` affine transforms on h0,
+    reading affines from `ag_hm` in causal order via `causal_order` lookup.
+
+    Args:
+        ag_hm: all-gather raw layout, shape [2*cp_size, N, H, K, V+K].
+        causal_order: [2*cp_size] int tensor; position r in causal chain
+            corresponds to row `causal_order[r]` of `ag_hm`.
+    """
     BK = triton.next_power_of_2(K)
     BV = 32
     h_out = torch.empty(N, H, K, V, dtype=torch.float32, device=ag_hm.device)
@@ -308,6 +319,7 @@ def cp_merge(ag_hm, h0, num_ranks, N, H, K, V):
         h_out=h_out,
         ag_hm=ag_hm,
         h0=h0,
+        causal_order_ptr=causal_order,
         num_ranks=num_ranks,
         N=N,
         H=H,
@@ -322,16 +334,15 @@ def cp_merge(ag_hm, h0, num_ranks, N, H, K, V):
     return h_out
 
 
-def _compute_both_segments(k, v, beta, g, cu_seqlens, seg_cu=None):
-    """Run Step1-4 on both segments in one pass.
+def _compute_both_segments(k, v, beta, g, seg_cu):
+    """Run Step1-4 on both segments (seg0 + seg1 across all batches) in one pass.
 
-    Constructs seg_cu_seqlens to treat seg0/seg1 as 2*batch sequences.
-    Returns (w, u, g_cumsum, seg_cu, b0, M0, b1, M1) where b0/M0 are for seg0, b1/M1 for seg1.
+    `seg_cu` treats seg0/seg1 as 2*batch independent sequences (built by
+    `build_segment_cu_seqlens`). `g` is replaced by its in-segment cumsum and
+    must be returned (caller's local var is shadowed).
+
+    Returns (w, u, g_cumsum, b0, M0, b1, M1).
     """
-    if seg_cu is None:
-        seg_cu = build_segment_cu_seqlens(cu_seqlens)
-    batch_size = cu_seqlens.shape[0] - 1
-
     g = chunk_local_cumsum(g, chunk_size=64, cu_seqlens=seg_cu)
     A = chunk_scaled_dot_kkt_fwd(
         k=k, beta=beta, g_cumsum=g, cu_seqlens=seg_cu, output_dtype=torch.float32
@@ -346,7 +357,7 @@ def _compute_both_segments(k, v, beta, g, cu_seqlens, seg_cu=None):
     M0 = M[0::2].contiguous()  # [batch, H, K, K]
     M1 = M[1::2].contiguous()
 
-    return w, u, g, seg_cu, b0, M0, b1, M1
+    return w, u, g, b0, M0, b1, M1
 
 
 def chunk_gated_delta_rule_fwd_cp_zigzag(
@@ -387,12 +398,9 @@ def chunk_gated_delta_rule_fwd_cp_zigzag(
     # ---- Phase 1: compute (b, M) for both segments in one pass ----
     if seg_cu is None:
         seg_cu = build_segment_cu_seqlens(cu_seqlens)
-    w, u, g, seg_cu, b0, M0, b1, M1 = _compute_both_segments(
-        k, v, beta, g, cu_seqlens, seg_cu
-    )
+    w, u, g, b0, M0, b1, M1 = _compute_both_segments(k, v, beta, g, seg_cu)
 
-    batch_size = cu_seqlens.shape[0] - 1
-    N = batch_size
+    N = cu_seqlens.shape[0] - 1
     H = w.shape[2]
     K = k.shape[3]
     V = v.shape[-1]
@@ -415,19 +423,20 @@ def chunk_gated_delta_rule_fwd_cp_zigzag(
         group=cp_group,
     )
 
-    # Reorder to causal order
+    # No physical reorder of `gathered` — cp_merge_kernel reads ag_hm rows
+    # via `causal_order` lookup. Saves a 537MB+ transient buffer per layer
+    # at high N (and avoids the PyTorch advanced-indexing grid-limit bug).
     if causal_order is None:
         causal_order = torch.tensor(
             zigzag_causal_order(cp_size), dtype=torch.long, device=packed.device
         )
-    gathered_causal = gathered[causal_order].contiguous()
 
     # ---- Phase 3: cp_merge to get h0 for each segment ----
     h0_global = initial_state.float() if initial_state is not None else None
     seg0_pos, seg1_pos = causal_positions(rank, cp_size)
 
-    h0_seg0 = cp_merge(gathered_causal, h0_global, seg0_pos, N, H, K, V)
-    h0_seg1 = cp_merge(gathered_causal, h0_global, seg1_pos, N, H, K, V)
+    h0_seg0 = cp_merge(gathered, h0_global, seg0_pos, N, H, K, V, causal_order)
+    h0_seg1 = cp_merge(gathered, h0_global, seg1_pos, N, H, K, V, causal_order)
 
     # ---- Phase 4: rerun Step5 + Step6 with correct h0 (single pass) ----
     # Interleave h0_seg0 and h0_seg1 to match seg_cu layout:
@@ -455,13 +464,11 @@ def chunk_gated_delta_rule_fwd_cp_zigzag(
         cu_seqlens=seg_cu,
     )
 
-    # Split h into seg0 and seg1 chunks for output
-    # h_all has NT_total chunks; split by segment
-    h = h_all
+    # final_state: result of applying every rank's affine in causal order to h0
+    final_state = (
+        cp_merge(gathered, h0_global, num_segs, N, H, K, V, causal_order)
+        if output_final_state
+        else None
+    )
 
-    # final_state: pass through all segments
-    final_state = None
-    if output_final_state:
-        final_state = cp_merge(gathered_causal, h0_global, num_segs, N, H, K, V)
-
-    return o, h, final_state
+    return o, h_all, final_state
