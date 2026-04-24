@@ -74,7 +74,7 @@ py_test(
         "@//:cuda_pre_12_9": flashinfer_deps,
         "//conditions:default": []
     }),
-    tags = ["manual"],
+    timeout = 'moderate',
     env = {"GPU_COUNT": "2"},
     tags = ["H20"],
     exec_properties = {'gpu': 'H20', 'gpu_count': '2'},
