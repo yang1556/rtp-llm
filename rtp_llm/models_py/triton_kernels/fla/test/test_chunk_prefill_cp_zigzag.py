@@ -65,7 +65,7 @@ def _worker_fixed_batch(rank, world_size, nccl_port, B, T, H, K, V):
     import torch.distributed as dist
 
     from rtp_llm.models_py.triton_kernels.fla.chunk import chunk_gated_delta_rule_fwd
-    from rtp_llm.models_py.triton_kernels.fla.chunk_cp_zigzag import (
+    from rtp_llm.models_py.triton_kernels.fla.cp.chunk_cp_zigzag import (
         build_segment_cu_seqlens,
         chunk_gated_delta_rule_fwd_cp_zigzag,
         zigzag_causal_order,
@@ -216,7 +216,7 @@ def _worker_varlen(rank, world_size, nccl_port, seq_lengths, H, K, V):
     import torch.distributed as dist
 
     from rtp_llm.models_py.triton_kernels.fla.chunk import chunk_gated_delta_rule_fwd
-    from rtp_llm.models_py.triton_kernels.fla.chunk_cp_zigzag import (
+    from rtp_llm.models_py.triton_kernels.fla.cp.chunk_cp_zigzag import (
         build_segment_cu_seqlens,
         chunk_gated_delta_rule_fwd_cp_zigzag,
         zigzag_causal_order,

@@ -11,7 +11,7 @@ and the new ``CpChunkAlignInfo.build`` signature
 (``orig_lengths_cpu`` + ``padded_full_cu``).
 
 Run with:
-  bazelisk test //rtp_llm/models_py/modules/factory/attention/cuda_cp_impl/test:test_cp_linear_attn_zigzag
+  bazel test //rtp_llm/models_py/modules/factory/attention/cuda_cp_impl/test:test_cp_linear_attn_zigzag
 """
 
 import logging
@@ -345,33 +345,29 @@ def _build_cp_metadata(
         cp_info.prefill_cp_chunk_lengths
     )  # CPU/GPU; .to(device) below
 
-    full_cu = torch.zeros(batch_size + 1, dtype=torch.int32, device=device)
-    full_cu[1:] = full_new_lengths.cumsum(0).to(device)
     padded_full_cu = torch.zeros(batch_size + 1, dtype=torch.int32, device=device)
     padded_full_cu[1:] = (padded_chunk_lengths.to(device).long() * cp_size).cumsum(0)
-
-    full_conv_meta = prepare_causal_conv1d_metadata(
-        query_start_loc=full_cu, device=device
-    )
 
     restore_indices = cp_info.prefill_qkv_restore_indice
     padding_mask = cp_info.prefill_qkv_padding_mask
     unpad_restore = restore_indices[padding_mask == 1]
 
+    # local_padding_mask (only when C++ padded any seq): compute via inv-restore so
+    # we know which local-rank slots correspond to real (vs pad) tokens.
     total_ag = padding_mask.shape[0]
-    local_chunk_total = total_ag // cp_size
-    local_start = cp_rank * local_chunk_total
-
-    inv_restore = torch.full((total_ag,), -1, dtype=torch.long, device=device)
-    inv_restore[unpad_restore.long()] = torch.arange(
-        unpad_restore.shape[0], device=device
-    )
-    local_inv = inv_restore[local_start : local_start + local_chunk_total]
-    cp_local_valid_mask = local_inv >= 0
-    cp_local_extract_idx = local_inv[cp_local_valid_mask]
-
-    # CPU-only: did C++ pad anything?
     need_pad = int(full_new_lengths.sum().item()) != total_ag
+
+    local_padding_mask = None
+    if need_pad:
+        local_chunk_total = total_ag // cp_size
+        local_start = cp_rank * local_chunk_total
+        inv_restore = torch.full((total_ag,), -1, dtype=torch.long, device=device)
+        inv_restore[unpad_restore.long()] = torch.arange(
+            unpad_restore.shape[0], device=device
+        )
+        local_padding_mask = (
+            inv_restore[local_start : local_start + local_chunk_total] >= 0
+        )
 
     chunk_align = CpChunkAlignInfo.build(
         cp_size=cp_size,
@@ -379,15 +375,11 @@ def _build_cp_metadata(
         device=device,
         orig_lengths_cpu=full_new_lengths.tolist(),
         padded_full_cu=padded_full_cu,
-        local_padding_mask=cp_local_valid_mask if need_pad else None,
+        local_padding_mask=local_padding_mask,
     )
 
     return Qwen3NextMetadata(
-        full_prefill_conv1d_meta=full_conv_meta,
-        full_prefill_cu_seqlens=full_cu,
         cp_restore_indices=restore_indices,
-        cp_local_extract_indices=cp_local_extract_idx,
-        cp_local_valid_mask=cp_local_valid_mask,
         cp_chunk_align_info=chunk_align,
     )
 
