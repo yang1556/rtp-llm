@@ -268,32 +268,28 @@ def store_conv_state_kernel(
     block_id = tl.load(block_map_ptr + i_batch * max_blocks + block_idx_in_seq).to(
         tl.int64
     )
-    if block_id <= 0:
+    # Match single-card causal_conv1d's `write_page_idx >= 0` — block_id=0 is a
+    # valid cache slot in that kernel.
+    if block_id < 0:
         return
 
     seq_padded_off = tl.load(padded_cu_ptr + i_batch).to(tl.int32)
-    # When abs_pos - P < CTX_LEN - 1 (very early write in a fresh seq with no
-    # prefix, e.g. N < CTX_LEN), src_start can fall below seq_padded_off and
-    # would otherwise read into the previous sequence's tokens.
     src_start = seq_padded_off + (abs_pos - P) - CTX_LEN + 1
 
     d_offset = i_d * BLOCK_D + tl.arange(0, BLOCK_D)
     d_mask = d_offset < DIM
 
     for c in tl.static_range(CTX_LEN):
-        src_pos = src_start + c
-        in_seq = src_pos >= seq_padded_off
-        # Clamp to a safe in-range pointer; the load is masked off when
-        # in_seq=False so the value used is `other=0.0`.
-        safe_src_pos = tl.where(in_seq, src_pos, seq_padded_off)
-        src_ptr = full_qkv + d_offset * stride_qkv_dim + safe_src_pos * stride_qkv_token
+        src_ptr = (
+            full_qkv + d_offset * stride_qkv_dim + (src_start + c) * stride_qkv_token
+        )
         dst_ptr = (
             conv_states
             + block_id * stride_cs_block
             + d_offset * stride_cs_dim
             + c * stride_cs_ctx
         )
-        val = tl.load(src_ptr, mask=d_mask & in_seq, other=0.0)
+        val = tl.load(src_ptr, mask=d_mask, other=0.0)
         tl.store(dst_ptr, val, mask=d_mask)
 
 

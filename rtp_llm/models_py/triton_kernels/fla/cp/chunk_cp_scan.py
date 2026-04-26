@@ -26,7 +26,7 @@ from rtp_llm.models_py.triton_kernels.fla.chunk_scaled_dot_kkt import (
 )
 from rtp_llm.models_py.triton_kernels.fla.cumsum import chunk_local_cumsum
 from rtp_llm.models_py.triton_kernels.fla.l2norm import l2norm_fwd
-from rtp_llm.models_py.triton_kernels.fla.op import exp, safe_exp
+from rtp_llm.models_py.triton_kernels.fla.op import exp
 from rtp_llm.models_py.triton_kernels.fla.solve_tril import solve_tril
 from rtp_llm.models_py.triton_kernels.fla.wy_fast import recompute_w_u_fwd
 
@@ -119,12 +119,17 @@ def chunk_cp_compute_br_kernel(
 
         last_idx = min((i_t + 1) * BT, T) - 1
         if USE_G:
+            # Mask positions >= T inside this chunk: boundary-checked g loads
+            # return 0, but multiplying b_v by exp(b_g_last - 0) instead of 0
+            # leaks fp32 garbage into the b_h accumulator (fails on short
+            # sequences where T < BT).
+            m_t = (i_t * BT + tl.arange(0, BT)) < T
             b_g_last = tl.load(g + bos * H + last_idx * H + i_h)
             p_g = tl.make_block_ptr(
                 g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,)
             )
             b_g = tl.load(p_g, boundary_check=(0,))
-            b_v = b_v * safe_exp(b_g_last - b_g)[:, None]
+            b_v = b_v * tl.where(m_t, exp(b_g_last - b_g), 0)[:, None]
             b_g_last = exp(b_g_last)
             b_h1 = b_h1 * b_g_last
             if K > 64:
@@ -304,12 +309,14 @@ def chunk_cp_compute_M_total_kernel(
 
         last_idx = min((i_t + 1) * BT, T) - 1
         if USE_G:
+            # Same mask reasoning as compute_br_kernel.
+            m_t = (i_t * BT + tl.arange(0, BT)) < T
             b_g_last = tl.load(g + bos * H + last_idx * H + i_h)
             p_g = tl.make_block_ptr(
                 g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,)
             )
             b_g = tl.load(p_g, boundary_check=(0,))
-            b_wdh = b_wdh * safe_exp(b_g_last - b_g)[:, None]
+            b_wdh = b_wdh * tl.where(m_t, exp(b_g_last - b_g), 0)[:, None]
             b_g_last_exp = exp(b_g_last)
             b_dh1 = b_dh1 * b_g_last_exp
             if K > 64:
